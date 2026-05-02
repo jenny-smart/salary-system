@@ -53,12 +53,17 @@ def get_or_create_folder(drive, parent_id: str, name: str) -> str:
         "mimeType": FOLDER_MIME,
         "parents": [parent_id],
     }
-    created = drive.files().create(
-        body=meta,
-        fields="id",
-        supportsAllDrives=True
-    ).execute()
-    return created["id"]
+    try:
+        created = drive.files().create(
+            body=meta,
+            fields="id",
+            supportsAllDrives=True
+        ).execute()
+        return created["id"]
+    except Exception as e:
+        status = getattr(e, 'resp', {}).get('status', 'unknown')
+        content = getattr(e, 'content', b'').decode('utf-8') if hasattr(e, 'content') else str(e)
+        raise Exception(f"建立資料夾失敗 HTTP {status}: {content}")
 
 
 # ═══════════════════════════════════════
