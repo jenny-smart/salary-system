@@ -282,7 +282,7 @@ def process_template(
 
     # ── 5. F/G 欄拆解 ──
     log("🔵 F/G 欄服務項目拆解中...")
-    expanded_new, expand_count, warnings = _expand_fg_rows(df_new)
+    expanded_new, expand_count, warnings, category_counts = _expand_fg_rows(df_new)
 
     if warnings:
         for w in warnings:
@@ -297,6 +297,36 @@ def process_template(
     if final_data:
         sheet.update("A2", final_data, value_input_option="USER_ENTERED")
 
+    # ── K欄有值的列加橘色底 ──
+    if mark_count > 0:
+        try:
+            orange_bg = {"backgroundColor": {"red": 1.0, "green": 0.6, "blue": 0.2}}
+            requests = []
+            all_values = sheet.get("K2:K")
+            for i, row_val in enumerate(all_values):
+                if row_val and row_val[0].strip():
+                    # 第 i+2 列（1-based），整列 A:BJ
+                    row_num = i + 2
+                    requests.append({
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": sheet.id,
+                                "startRowIndex": row_num - 1,
+                                "endRowIndex": row_num,
+                                "startColumnIndex": 0,
+                                "endColumnIndex": 62,
+                            },
+                            "cell": {"userEnteredFormat": orange_bg},
+                            "fields": "userEnteredFormat.backgroundColor"
+                        }
+                    })
+            if requests:
+                ss_rec = sheet.spreadsheet
+                ss_rec.batch_update({"requests": requests})
+                log(f"🔵 橘色標記：{len(requests)} 列")
+        except Exception as e:
+            log(f"⚠️ 橘色標記失敗：{e}")
+
     log(f"✅ 範本加工完成：排序 {sort_count} 筆，異常 {mark_count} 筆，拆解新增 {expand_count} 列")
 
     return {
@@ -304,6 +334,7 @@ def process_template(
         "mark_count": mark_count,
         "expand_count": expand_count,
         "warnings": warnings,
+        "category_counts": category_counts,
     }
 
 
@@ -348,17 +379,20 @@ def _parse_service_items(text: str) -> list[dict]:
     return items
 
 
-def _expand_fg_rows(df: pd.DataFrame) -> tuple[list, int, list]:
+def _expand_fg_rows(df: pd.DataFrame) -> tuple[list, int, list, dict]:
     """
     F/G 欄拆解：
-    - F欄有 N 個服務項目 → 共 N 列（主單 + 子單）
-    - 原本有子單的，補足到 N 列
-    - G欄 = X 後的數字，沒有數字記錄 warning
-    回傳：(輸出資料, 新增列數, warnings)
+    - F欄所有單都拆解（不管單列或多列）
+    - 把 F欄的「服務名稱 X N」拆成：F欄=服務名稱，G欄=N
+    - F欄有多個服務項目時，拆成多列（主單+子單）
+    - 記錄各類別拆解後的列數（供 ⑤ 分類搬運使用）
+    回傳：(輸出資料, 新增列數, warnings, category_counts)
+    category_counts = {"家電": 5, "水洗": 2, ...}
     """
     output = []
     expand_count = 0
     warnings = []
+    category_counts = {}  # 各類別拆解後的列數
 
     for idx, row in df.iterrows():
         e_text = str(row[4])
@@ -373,37 +407,50 @@ def _expand_fg_rows(df: pd.DataFrame) -> tuple[list, int, list]:
 
         items = _parse_service_items(f_text)
 
-        if len(items) <= 1:
-            # 單一項目，直接放
-            if items and not items[0]["has_qty"]:
-                warnings.append(f"訂單 {order_id}：F欄無數量（X後無數字），請確認")
+        if not items:
             output.append(row.tolist())
             continue
 
-        # 多個服務項目，需要拆解
-        target_count = len(items)
+        # 判斷所屬類別
+        category = None
+        for cat in EXPANDABLE_TYPES:
+            if cat in e_text:
+                category = cat
+                break
 
-        # 找出已存在的子單（訂單編號含 -N 的）
-        # 這裡簡化：主單固定是第一列，後續是新增的子單
-        for i, item in enumerate(items):
+        if len(items) == 1:
+            # 單一項目：F欄去掉 X N，G欄填數量
+            item = items[0]
             new_row = row.tolist().copy()
-            new_row[5] = item["name"]  # F欄：服務項目名稱
-            new_row[6] = item["qty"]   # G欄：數量
-
-            if i == 0:
-                # 主單：保留原訂單編號
-                pass
-            else:
-                # 子單：訂單編號加 -i
-                new_row[1] = f"{order_id}-{i}"
-                expand_count += 1
-
+            new_row[5] = item["name"]
+            new_row[6] = item["qty"]
             if not item["has_qty"]:
-                warnings.append(f"訂單 {order_id} 項目「{item['name']}」：無數量（X後無數字），請確認")
-
+                warnings.append(f"訂單 {order_id}：F欄無數量（X後無數字），請確認")
             output.append(new_row)
+            if category:
+                category_counts[category] = category_counts.get(category, 0) + 1
+        else:
+            # 多個服務項目：拆成多列
+            for i, item in enumerate(items):
+                new_row = row.tolist().copy()
+                new_row[5] = item["name"]
+                new_row[6] = item["qty"]
 
-    return output, expand_count, warnings
+                if i == 0:
+                    pass  # 主單保留原訂單編號
+                else:
+                    new_row[1] = f"{order_id}-{i}"
+                    expand_count += 1
+
+                if not item["has_qty"]:
+                    warnings.append(f"訂單 {order_id} 項目「{item['name']}」：無數量（X後無數字），請確認")
+
+                output.append(new_row)
+
+            if category:
+                category_counts[category] = category_counts.get(category, 0) + len(items)
+
+    return output, expand_count, warnings, category_counts
 
 
 # ═══════════════════════════════════════
@@ -424,14 +471,16 @@ CLEANING_KEYWORDS = ["清潔", "1專業清潔"]
 
 def copy_classified_data(
     root_folder_id: str, period: str, region_name: str,
-    template_start_row: int = None, log_fn=None
+    template_start_row: int = None,
+    category_counts: dict = None,
+    log_fn=None
 ) -> dict:
     """
     分類搬運：只分類 template_start_row 起的新資料
+    category_counts：④ 加工後各類別拆解後的列數（若有則用此數量做 double check）
     1. 先分其他承攬（水洗/收納/家電/座椅/地毯）
     2. 再分清潔承攬
     3. 無法分類的資料跳出警告視窗
-    4. 記錄清潔搬運筆數（供後續薪資表使用）
     """
     def log(msg):
         if log_fn:
@@ -488,6 +537,16 @@ def copy_classified_data(
         warning_msg = f"以下 {len(unique_unclassified)} 種類別無法分類，請確認：\n" + "\n".join(unique_unclassified[:10])
         st.warning(warning_msg)
         log(f"⚠️ 無法分類：{len(unclassified)} 筆")
+
+    # Double check：與 ④ 加工記錄的各類別列數比對
+    if category_counts:
+        cat_map = {"水洗": "水洗", "家電": "家電", "收納": "收納", "座椅": "座椅", "地毯": "地毯"}
+        for cat, expected in category_counts.items():
+            actual = len(other_buckets.get(cat, []))
+            if actual != expected:
+                log(f"⚠️ Double check [{cat}]：④加工={expected} 列，⑤分類={actual} 列，請確認")
+            else:
+                log(f"🔵 Double check [{cat}]：{actual} 列 ✅")
 
     first_half = is_first_half(period)
     ss_clean = open_spreadsheet(cleaning_id)
