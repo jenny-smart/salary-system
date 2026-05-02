@@ -132,12 +132,15 @@ def trash_files_by_name(drive, folder_id: str, name: str):
 
 def copy_file_to_folder(drive, source_file_id: str, dest_folder_id: str, new_name: str) -> str:
     trash_files_by_name(drive, dest_folder_id, new_name)
-    copied = drive.files().copy(
-        fileId=source_file_id,
-        body={"name": new_name, "parents": [dest_folder_id]},
-        supportsAllDrives=True
-    ).execute()
-    return copied["id"]
+    try:
+        copied = drive.files().copy(
+            fileId=source_file_id,
+            body={"name": new_name, "parents": [dest_folder_id]},
+            supportsAllDrives=True
+        ).execute()
+        return copied["id"]
+    except Exception as e:
+        raise Exception(f"HttpError detail: {str(e)} / repr: {repr(e)}")
 
 
 # ═══════════════════════════════════════
