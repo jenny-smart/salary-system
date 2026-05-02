@@ -3,21 +3,8 @@
 # 期別檔案（金流對帳/清潔承攬/其他承攬/元大帳戶）由程式依命名規則自動找到
 # 檔名規則：{期別}{類型}-{地區名稱}，例如：202504-2金流對帳-台北
 
-regions:
-  - name: 台北
-    root_folder_id: ""     # Drive 根目錄資料夾 ID
-    allowance_id: ""       # 請款試算表 ID（當年度固定）
-    salary_id: ""          # 薪資試算表 ID（當年度固定）
-    roster_id: ""          # 名冊試算表 ID（當年度固定）
+regions: []
 
-# 新增地區範例：
-#  - name: 台中
-#    root_folder_id: ""
-#    allowance_id: ""
-#    salary_id: ""
-#    roster_id: ""
-
-# 排程設定（由介面管理，請勿手動修改）
 schedule:
   enabled: false
   days: [10, 25]
