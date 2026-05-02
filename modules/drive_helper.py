@@ -6,20 +6,28 @@ import io
 import zipfile
 import streamlit as st
 from googleapiclient.http import MediaIoBaseUpload
-from modules.auth import get_drive_service
+from modules.auth import get_drive_service, get_credentials
 from modules.period_utils import get_file_name, PERIOD_FILE_LABELS
 
 GOOGLE_SHEET_MIME = "application/vnd.google-apps.spreadsheet"
 FOLDER_MIME = "application/vnd.google-apps.folder"
 
-# list() 用這兩個參數才能找到非 Service Account 擁有但已分享的檔案
 DRIVE_PARAMS = {
     "includeItemsFromAllDrives": True,
     "supportsAllDrives": True,
 }
 
-# 複製後把擁有者轉移給這個帳號，避免 Service Account 空間不足
+# 複製後把擁有者轉移給這個帳號
 OWNER_EMAIL = "jenny@lemonclean.com.tw"
+
+
+def _http_error_detail(e) -> str:
+    """從 HttpError 取得詳細訊息"""
+    status = getattr(e, 'resp', {}).get('status', 'unknown')
+    content = getattr(e, 'content', b'')
+    if isinstance(content, bytes):
+        content = content.decode('utf-8')
+    return f"HTTP {status}: {content}"
 
 
 # ═══════════════════════════════════════
@@ -27,43 +35,29 @@ OWNER_EMAIL = "jenny@lemonclean.com.tw"
 # ═══════════════════════════════════════
 
 def get_folder_by_name(drive, parent_id: str, name: str) -> dict | None:
-    """在父資料夾下找指定名稱的資料夾，找不到回傳 None"""
     q = (
         f"name='{name}' and "
         f"'{parent_id}' in parents and "
         f"mimeType='{FOLDER_MIME}' and "
         f"trashed=false"
     )
-    res = drive.files().list(
-        q=q,
-        fields="files(id, name)",
-        **DRIVE_PARAMS
-    ).execute()
+    res = drive.files().list(q=q, fields="files(id, name)", **DRIVE_PARAMS).execute()
     files = res.get("files", [])
     return files[0] if files else None
 
 
 def get_or_create_folder(drive, parent_id: str, name: str) -> str:
-    """取得或建立子資料夾，回傳資料夾 ID"""
     folder = get_folder_by_name(drive, parent_id, name)
     if folder:
         return folder["id"]
-    meta = {
-        "name": name,
-        "mimeType": FOLDER_MIME,
-        "parents": [parent_id],
-    }
+    meta = {"name": name, "mimeType": FOLDER_MIME, "parents": [parent_id]}
     try:
         created = drive.files().create(
-            body=meta,
-            fields="id",
-            supportsAllDrives=True
+            body=meta, fields="id", supportsAllDrives=True
         ).execute()
         return created["id"]
     except Exception as e:
-        status = getattr(e, 'resp', {}).get('status', 'unknown')
-        content = getattr(e, 'content', b'').decode('utf-8') if hasattr(e, 'content') else str(e)
-        raise Exception(f"建立資料夾失敗 HTTP {status}: {content}")
+        raise Exception(f"建立資料夾失敗：{_http_error_detail(e)}")
 
 
 # ═══════════════════════════════════════
@@ -71,30 +65,24 @@ def get_or_create_folder(drive, parent_id: str, name: str) -> str:
 # ═══════════════════════════════════════
 
 def find_file_in_folder(drive, folder_id: str, file_name: str) -> dict | None:
-    """在指定資料夾中找檔案，回傳 {id, name, mimeType} 或 None"""
     q = (
         f"name='{file_name}' and "
         f"'{folder_id}' in parents and "
         f"trashed=false"
     )
     res = drive.files().list(
-        q=q,
-        fields="files(id, name, mimeType)",
-        **DRIVE_PARAMS
+        q=q, fields="files(id, name, mimeType)", **DRIVE_PARAMS
     ).execute()
     files = res.get("files", [])
     return files[0] if files else None
 
 
 def find_file_by_keyword(drive, folder_id: str, keyword: str, mime_type: str = None) -> dict | None:
-    """在資料夾中找包含關鍵字的檔案"""
     q = f"'{folder_id}' in parents and trashed=false"
     if mime_type:
         q += f" and mimeType='{mime_type}'"
     res = drive.files().list(
-        q=q,
-        fields="files(id, name, mimeType)",
-        **DRIVE_PARAMS
+        q=q, fields="files(id, name, mimeType)", **DRIVE_PARAMS
     ).execute()
     for f in res.get("files", []):
         if keyword in f["name"]:
@@ -103,13 +91,8 @@ def find_file_by_keyword(drive, folder_id: str, keyword: str, mime_type: str = N
 
 
 def list_folder_names(drive, parent_id: str) -> list[str]:
-    """列出資料夾下所有子資料夾名稱（診斷用）"""
     q = f"'{parent_id}' in parents and mimeType='{FOLDER_MIME}' and trashed=false"
-    res = drive.files().list(
-        q=q,
-        fields="files(id, name)",
-        **DRIVE_PARAMS
-    ).execute()
+    res = drive.files().list(q=q, fields="files(id, name)", **DRIVE_PARAMS).execute()
     return [f["name"] for f in res.get("files", [])]
 
 
@@ -118,30 +101,23 @@ def list_folder_names(drive, parent_id: str) -> list[str]:
 # ═══════════════════════════════════════
 
 def trash_files_by_name(drive, folder_id: str, name: str):
-    """刪除資料夾中所有同名檔案"""
     q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
-    res = drive.files().list(
-        q=q,
-        fields="files(id)",
-        **DRIVE_PARAMS
-    ).execute()
+    res = drive.files().list(q=q, fields="files(id)", **DRIVE_PARAMS).execute()
     for f in res.get("files", []):
         drive.files().update(
-            fileId=f["id"],
-            body={"trashed": True},
-            supportsAllDrives=True
+            fileId=f["id"], body={"trashed": True}, supportsAllDrives=True
         ).execute()
 
 
 # ═══════════════════════════════════════
-# 複製檔案（複製後轉移擁有者）
+# 複製檔案（複製後轉移擁有者，解決空間問題）
 # ═══════════════════════════════════════
 
 def copy_file_to_folder(drive, source_file_id: str, dest_folder_id: str, new_name: str) -> str:
     """
-    複製檔案到目標資料夾，蓋掉同名舊檔
-    複製後把擁有者轉移給 OWNER_EMAIL，避免 Service Account 空間不足
-    回傳新檔 ID
+    複製 Google Sheet 到目標資料夾
+    複製後立刻轉移擁有者給 OWNER_EMAIL
+    這樣空間算在 OWNER_EMAIL 的帳號，不是 Service Account
     """
     trash_files_by_name(drive, dest_folder_id, new_name)
 
@@ -153,13 +129,11 @@ def copy_file_to_folder(drive, source_file_id: str, dest_folder_id: str, new_nam
             supportsAllDrives=True
         ).execute()
     except Exception as e:
-        status = getattr(e, 'resp', {}).get('status', 'unknown')
-        content = getattr(e, 'content', b'').decode('utf-8') if hasattr(e, 'content') else str(e)
-        raise Exception(f"HTTP {status}: {content}")
+        raise Exception(f"複製失敗：{_http_error_detail(e)}")
 
     new_file_id = copied["id"]
 
-    # 把擁有者轉移給公司帳號，這樣空間算在公司帳號不算在 Service Account
+    # 立刻轉移擁有者（必須成功，否則 Service Account 空間會被佔滿）
     try:
         drive.permissions().create(
             fileId=new_file_id,
@@ -169,11 +143,18 @@ def copy_file_to_folder(drive, source_file_id: str, dest_folder_id: str, new_nam
                 "emailAddress": OWNER_EMAIL,
             },
             transferOwnership=True,
-            supportsAllDrives=True
+            supportsAllDrives=True,
+            sendNotificationEmail=False,
         ).execute()
-    except Exception:
-        # 轉移擁有者失敗不影響主流程，繼續執行
-        pass
+    except Exception as e:
+        # 轉移失敗：刪掉複製的檔案避免佔用空間，然後報錯
+        try:
+            drive.files().delete(
+                fileId=new_file_id, supportsAllDrives=True
+            ).execute()
+        except Exception:
+            pass
+        raise Exception(f"複製成功但轉移擁有者失敗，已刪除複製檔案：{_http_error_detail(e)}")
 
     return new_file_id
 
@@ -183,7 +164,6 @@ def copy_file_to_folder(drive, source_file_id: str, dest_folder_id: str, new_nam
 # ═══════════════════════════════════════
 
 def convert_to_google_sheet(drive, folder_id: str, source_file_id: str, new_name: str) -> str:
-    """將 Excel/CSV 轉換為 Google Sheet，存在同一資料夾，同名蓋舊檔"""
     # 刪除同名舊 Google Sheet
     q = (
         f"name='{new_name}' and "
@@ -191,30 +171,18 @@ def convert_to_google_sheet(drive, folder_id: str, source_file_id: str, new_name
         f"mimeType='{GOOGLE_SHEET_MIME}' and "
         f"trashed=false"
     )
-    existing = drive.files().list(
-        q=q,
-        fields="files(id)",
-        **DRIVE_PARAMS
-    ).execute()
+    existing = drive.files().list(q=q, fields="files(id)", **DRIVE_PARAMS).execute()
     for f in existing.get("files", []):
         drive.files().update(
-            fileId=f["id"],
-            body={"trashed": True},
-            supportsAllDrives=True
+            fileId=f["id"], body={"trashed": True}, supportsAllDrives=True
         ).execute()
 
-    # 下載原始內容
     content = drive.files().get_media(fileId=source_file_id).execute()
-
-    # 取得 mimeType
     file_meta = drive.files().get(
-        fileId=source_file_id,
-        fields="mimeType",
-        supportsAllDrives=True
+        fileId=source_file_id, fields="mimeType", supportsAllDrives=True
     ).execute()
     src_mime = file_meta.get("mimeType", "application/octet-stream")
 
-    # 上傳並轉換
     media = MediaIoBaseUpload(io.BytesIO(content), mimetype=src_mime)
     converted = drive.files().create(
         body={
@@ -235,12 +203,8 @@ def convert_to_google_sheet(drive, folder_id: str, source_file_id: str, new_name
 # ═══════════════════════════════════════
 
 def create_period_folder_and_files(
-    root_folder_id: str,
-    period: str,
-    region_name: str,
-    log_fn=None
+    root_folder_id: str, period: str, region_name: str, log_fn=None
 ) -> dict:
-    """建立期別資料夾並複製上一期四類檔案"""
     from modules.period_utils import get_previous_period
 
     def log(msg):
@@ -280,7 +244,7 @@ def create_period_folder_and_files(
         old_name = get_file_name(previous_period, label, region_name)
         new_name = get_file_name(period, label, region_name)
 
-        # 檢查目標資料夾是否已有此檔案
+        # 已存在就跳過
         existing_file = find_file_in_folder(drive, period_folder_id, new_name)
         if existing_file:
             log(f"📄 {label} 已存在：{new_name}")
@@ -300,7 +264,7 @@ def create_period_folder_and_files(
             results[label] = new_id
             log(f"✅ 完成：{new_name}")
         except Exception as e:
-            log(f"⚠️ 複製失敗 [{label}]：{e}")
+            log(f"⚠️ {e}")
             results[label] = None
 
     return results
@@ -311,12 +275,8 @@ def create_period_folder_and_files(
 # ═══════════════════════════════════════
 
 def convert_period_order_file(
-    root_folder_id: str,
-    period: str,
-    region_name: str,
-    log_fn=None
+    root_folder_id: str, period: str, region_name: str, log_fn=None
 ) -> str:
-    """轉換 {期別}訂單-{地區}.xlsx → Google Sheet"""
     def log(msg):
         if log_fn:
             log_fn(msg)
@@ -337,7 +297,7 @@ def convert_period_order_file(
     log(f"🔍 尋找訂單檔案：{xlsx_name}")
     src = find_file_in_folder(drive, folder_id, xlsx_name)
     if not src:
-        raise Exception(f"找不到訂單檔案：{xlsx_name}，請確認檔案已上傳到 {period} 資料夾")
+        raise Exception(f"找不到訂單檔案：{xlsx_name}")
 
     log(f"🔄 轉檔中：{xlsx_name}")
     sheet_name = f"{period}訂單-{region_name}"
@@ -361,12 +321,8 @@ PAYMENT_FILE_CONFIGS = [
 
 
 def convert_payment_files(
-    root_folder_id: str,
-    period: str,
-    region_name: str,
-    log_fn=None
+    root_folder_id: str, period: str, region_name: str, log_fn=None
 ) -> dict:
-    """轉換下半月金流相關檔案"""
     def log(msg):
         if log_fn:
             log_fn(msg)
@@ -409,10 +365,8 @@ def convert_payment_files(
 
 def _unzip_and_convert(
     drive, folder_id: str, zip_file_id: str,
-    period: str, keyword: str, region_name: str,
-    log_fn
+    period: str, keyword: str, region_name: str, log_fn
 ) -> list:
-    """ZIP 解壓縮後轉 Google Sheet"""
     request = drive.files().get_media(fileId=zip_file_id)
     zip_bytes = io.BytesIO(request.execute())
     uploaded_ids = []
@@ -429,9 +383,7 @@ def _unzip_and_convert(
             out_name_with_ext = out_base + ext
             content = zf.read(inner_name)
             trash_files_by_name(drive, folder_id, out_name_with_ext)
-            media = MediaIoBaseUpload(
-                io.BytesIO(content), mimetype="application/octet-stream"
-            )
+            media = MediaIoBaseUpload(io.BytesIO(content), mimetype="application/octet-stream")
             uploaded = drive.files().create(
                 body={"name": out_name_with_ext, "parents": [folder_id]},
                 media_body=media,
