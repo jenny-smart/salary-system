@@ -1,0 +1,25 @@
+# Lemon Clean 系統設定
+# 新增地區只需要在 regions 底下加一個區塊
+
+regions:
+  taipei:
+    name: "台北"
+    payment_reconciliation_id: ""     # 金流對帳試算表 ID
+    cleaning_contract_id: ""          # 清潔承攬試算表 ID
+    other_contract_id: ""             # 其他承攬試算表 ID
+    root_folder_id: ""                # Drive 根目錄資料夾 ID
+
+  taichung:
+    name: "台中"
+    payment_reconciliation_id: ""
+    cleaning_contract_id: ""
+    other_contract_id: ""
+    root_folder_id: ""
+
+# 新增地區範例（複製上面的區塊）：
+# kaohsiung:
+#   name: "高雄"
+#   payment_reconciliation_id: ""
+#   cleaning_contract_id: ""
+#   other_contract_id: ""
+#   root_folder_id: ""
