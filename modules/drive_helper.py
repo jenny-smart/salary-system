@@ -12,12 +12,20 @@ from modules.period_utils import get_file_name, PERIOD_FILE_LABELS
 GOOGLE_SHEET_MIME = "application/vnd.google-apps.spreadsheet"
 FOLDER_MIME = "application/vnd.google-apps.folder"
 
+# 所有 Drive API list/get/copy 都需要這兩個參數
+# 才能存取非 Service Account 擁有但已分享的檔案
+DRIVE_PARAMS = {
+    "includeItemsFromAllDrives": True,
+    "supportsAllDrives": True,
+}
+
 
 # ═══════════════════════════════════════
 # 資料夾操作
 # ═══════════════════════════════════════
 
 def get_folder_by_name(drive, parent_id: str, name: str) -> dict | None:
+    """在父資料夾下找指定名稱的資料夾，找不到回傳 None"""
     q = (
         f"name='{name}' and "
         f"'{parent_id}' in parents and "
@@ -27,11 +35,11 @@ def get_folder_by_name(drive, parent_id: str, name: str) -> dict | None:
     res = drive.files().list(
         q=q,
         fields="files(id, name)",
-        includeItemsFromAllDrives=True,
-        supportsAllDrives=True
+        **DRIVE_PARAMS
     ).execute()
     files = res.get("files", [])
     return files[0] if files else None
+
 
 def get_or_create_folder(drive, parent_id: str, name: str) -> str:
     """取得或建立子資料夾，回傳資料夾 ID"""
@@ -43,7 +51,11 @@ def get_or_create_folder(drive, parent_id: str, name: str) -> str:
         "mimeType": FOLDER_MIME,
         "parents": [parent_id],
     }
-    created = drive.files().create(body=meta, fields="id").execute()
+    created = drive.files().create(
+        body=meta,
+        fields="id",
+        **DRIVE_PARAMS
+    ).execute()
     return created["id"]
 
 
@@ -58,7 +70,11 @@ def find_file_in_folder(drive, folder_id: str, file_name: str) -> dict | None:
         f"'{folder_id}' in parents and "
         f"trashed=false"
     )
-    res = drive.files().list(q=q, fields="files(id, name, mimeType)").execute()
+    res = drive.files().list(
+        q=q,
+        fields="files(id, name, mimeType)",
+        **DRIVE_PARAMS
+    ).execute()
     files = res.get("files", [])
     return files[0] if files else None
 
@@ -68,11 +84,26 @@ def find_file_by_keyword(drive, folder_id: str, keyword: str, mime_type: str = N
     q = f"'{folder_id}' in parents and trashed=false"
     if mime_type:
         q += f" and mimeType='{mime_type}'"
-    res = drive.files().list(q=q, fields="files(id, name, mimeType)").execute()
+    res = drive.files().list(
+        q=q,
+        fields="files(id, name, mimeType)",
+        **DRIVE_PARAMS
+    ).execute()
     for f in res.get("files", []):
         if keyword in f["name"]:
             return f
     return None
+
+
+def list_folder_names(drive, parent_id: str) -> list[str]:
+    """列出資料夾下所有子資料夾名稱（診斷用）"""
+    q = f"'{parent_id}' in parents and mimeType='{FOLDER_MIME}' and trashed=false"
+    res = drive.files().list(
+        q=q,
+        fields="files(id, name)",
+        **DRIVE_PARAMS
+    ).execute()
+    return [f["name"] for f in res.get("files", [])]
 
 
 # ═══════════════════════════════════════
@@ -82,9 +113,17 @@ def find_file_by_keyword(drive, folder_id: str, keyword: str, mime_type: str = N
 def trash_files_by_name(drive, folder_id: str, name: str):
     """刪除資料夾中所有同名檔案"""
     q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
-    res = drive.files().list(q=q, fields="files(id)").execute()
+    res = drive.files().list(
+        q=q,
+        fields="files(id)",
+        **DRIVE_PARAMS
+    ).execute()
     for f in res.get("files", []):
-        drive.files().update(fileId=f["id"], body={"trashed": True}).execute()
+        drive.files().update(
+            fileId=f["id"],
+            body={"trashed": True},
+            **DRIVE_PARAMS
+        ).execute()
 
 
 # ═══════════════════════════════════════
@@ -92,15 +131,14 @@ def trash_files_by_name(drive, folder_id: str, name: str):
 # ═══════════════════════════════════════
 
 def copy_file_to_folder(drive, source_file_id: str, dest_folder_id: str, new_name: str) -> str:
+    """複製檔案到目標資料夾，蓋掉同名舊檔，回傳新檔 ID"""
     trash_files_by_name(drive, dest_folder_id, new_name)
-    try:
-        copied = drive.files().copy(
-            fileId=source_file_id,
-            body={"name": new_name, "parents": [dest_folder_id]}
-        ).execute()
-        return copied["id"]
-    except Exception as e:
-        raise Exception(f"複製失敗 [{new_name}] 來源ID:{source_file_id} 錯誤:{e}")
+    copied = drive.files().copy(
+        fileId=source_file_id,
+        body={"name": new_name, "parents": [dest_folder_id]},
+        **DRIVE_PARAMS
+    ).execute()
+    return copied["id"]
 
 
 # ═══════════════════════════════════════
@@ -108,11 +146,7 @@ def copy_file_to_folder(drive, source_file_id: str, dest_folder_id: str, new_nam
 # ═══════════════════════════════════════
 
 def convert_to_google_sheet(drive, folder_id: str, source_file_id: str, new_name: str) -> str:
-    """
-    將 Excel/CSV 轉換為 Google Sheet
-    存在同一資料夾，同名蓋舊檔
-    回傳新 Google Sheet ID
-    """
+    """將 Excel/CSV 轉換為 Google Sheet，存在同一資料夾，同名蓋舊檔"""
     # 刪除同名舊 Google Sheet
     q = (
         f"name='{new_name}' and "
@@ -120,15 +154,27 @@ def convert_to_google_sheet(drive, folder_id: str, source_file_id: str, new_name
         f"mimeType='{GOOGLE_SHEET_MIME}' and "
         f"trashed=false"
     )
-    existing = drive.files().list(q=q, fields="files(id)").execute()
+    existing = drive.files().list(
+        q=q,
+        fields="files(id)",
+        **DRIVE_PARAMS
+    ).execute()
     for f in existing.get("files", []):
-        drive.files().update(fileId=f["id"], body={"trashed": True}).execute()
+        drive.files().update(
+            fileId=f["id"],
+            body={"trashed": True},
+            **DRIVE_PARAMS
+        ).execute()
 
     # 下載原始內容
     content = drive.files().get_media(fileId=source_file_id).execute()
 
     # 取得 mimeType
-    file_meta = drive.files().get(fileId=source_file_id, fields="mimeType").execute()
+    file_meta = drive.files().get(
+        fileId=source_file_id,
+        fields="mimeType",
+        **DRIVE_PARAMS
+    ).execute()
     src_mime = file_meta.get("mimeType", "application/octet-stream")
 
     # 上傳並轉換
@@ -140,7 +186,8 @@ def convert_to_google_sheet(drive, folder_id: str, source_file_id: str, new_name
             "parents": [folder_id],
         },
         media_body=media,
-        fields="id"
+        fields="id",
+        **DRIVE_PARAMS
     ).execute()
 
     return converted["id"]
@@ -156,10 +203,7 @@ def create_period_folder_and_files(
     region_name: str,
     log_fn=None
 ) -> dict:
-    """
-    建立期別資料夾並複製上一期四類檔案
-    log_fn：呼叫端的 log 函數（選用）
-    """
+    """建立期別資料夾並複製上一期四類檔案"""
     from modules.period_utils import get_previous_period
 
     def log(msg):
@@ -173,38 +217,48 @@ def create_period_folder_and_files(
     results = {}
 
     # 建立期別資料夾
+    log(f"🔍 建立期別資料夾：{period}")
     period_folder_id = get_or_create_folder(drive, root_folder_id, period)
     results["period_folder_id"] = period_folder_id
-    log(f"📁 期別資料夾：{period}")
+    log(f"✅ 期別資料夾已建立：{period}")
 
     # 找上一期資料夾
+    log(f"🔍 尋找上一期資料夾：{previous_period}")
     prev_folder = get_folder_by_name(drive, root_folder_id, previous_period)
     if not prev_folder:
-        raise Exception(f"找不到上一期資料夾：{previous_period}")
+        # 列出根目錄下所有資料夾幫助診斷
+        found = list_folder_names(drive, root_folder_id)
+        raise Exception(f"找不到上一期資料夾：{previous_period}，根目錄下找到：{found}")
 
     prev_folder_id = prev_folder["id"]
-    log(f"📋 複製來源：{previous_period}")
+    log(f"✅ 找到上一期：{previous_period}")
 
     # 複製四類檔案
     for label in PERIOD_FILE_LABELS:
         old_name = get_file_name(previous_period, label, region_name)
         new_name = get_file_name(period, label, region_name)
 
+        log(f"🔍 尋找：{old_name}")
         src = find_file_in_folder(drive, prev_folder_id, old_name)
         if not src:
-            log(f"⚠️ 找不到上期 {label}：{old_name}")
+            log(f"⚠️ 找不到：{old_name}")
             results[label] = None
             continue
 
-        new_id = copy_file_to_folder(drive, src["id"], period_folder_id, new_name)
-        results[label] = new_id
-        log(f"✅ {label}：{new_name}")
+        log(f"📋 複製：{old_name} → {new_name}")
+        try:
+            new_id = copy_file_to_folder(drive, src["id"], period_folder_id, new_name)
+            results[label] = new_id
+            log(f"✅ 完成：{new_name}")
+        except Exception as e:
+            log(f"⚠️ 複製失敗 [{label}]：{e}")
+            results[label] = None
 
     return results
 
 
 # ═══════════════════════════════════════
-# ② 期別訂單轉檔（只轉 xlsx → Google Sheet）
+# ② 期別訂單轉檔
 # ═══════════════════════════════════════
 
 def convert_period_order_file(
@@ -213,11 +267,7 @@ def convert_period_order_file(
     region_name: str,
     log_fn=None
 ) -> str:
-    """
-    在期別資料夾中找 {期別}訂單-{地區}.xlsx
-    轉成 Google Sheet，存在同一資料夾，同名蓋舊檔
-    回傳新 Google Sheet ID
-    """
+    """轉換 {期別}訂單-{地區}.xlsx → Google Sheet"""
     def log(msg):
         if log_fn:
             log_fn(msg)
@@ -226,35 +276,32 @@ def convert_period_order_file(
 
     drive = get_drive_service()
 
-    # 找期別資料夾
+    log(f"🔍 尋找期別資料夾：{period}")
     period_folder = get_folder_by_name(drive, root_folder_id, period)
     if not period_folder:
         raise Exception(f"找不到期別資料夾：{period}")
 
     folder_id = period_folder["id"]
+    log(f"✅ 找到期別資料夾：{period}")
 
-    # 找訂單 xlsx 檔案（檔名：{期別}訂單-{地區}.xlsx）
     xlsx_name = f"{period}訂單-{region_name}.xlsx"
+    log(f"🔍 尋找訂單檔案：{xlsx_name}")
     src = find_file_in_folder(drive, folder_id, xlsx_name)
     if not src:
         raise Exception(f"找不到訂單檔案：{xlsx_name}")
 
-    log(f"🔄 轉檔：{xlsx_name}")
-
-    # 轉換後的 Google Sheet 名稱（去掉 .xlsx）
+    log(f"🔄 轉檔中：{xlsx_name}")
     sheet_name = f"{period}訂單-{region_name}"
     new_id = convert_to_google_sheet(drive, folder_id, src["id"], sheet_name)
-
     log(f"✅ 轉檔完成：{sheet_name}")
     return new_id
 
 
 # ═══════════════════════════════════════
-# ② 金流對帳轉檔（下半月：已退款/預收/發票/藍新）
+# ② 金流對帳轉檔（下半月）
 # ═══════════════════════════════════════
 
 PAYMENT_FILE_CONFIGS = [
-    # (關鍵字, 副檔名, 是否ZIP)
     ("已退款全部加收", "xlsx", False),
     ("已退款全部退款", "xlsx", False),
     ("預收",           "xlsx", False),
@@ -270,16 +317,7 @@ def convert_payment_files(
     region_name: str,
     log_fn=None
 ) -> dict:
-    """
-    轉換下半月金流相關檔案：
-    - 已退款全部加收-地區.xlsx → Google Sheet
-    - 已退款全部退款-地區.xlsx → Google Sheet
-    - 預收-地區.xlsx → Google Sheet
-    - 發票-地區.zip → 解壓縮 → Google Sheet
-    - 藍新收款-地區.csv → Google Sheet
-    - 藍新退款-地區.csv → Google Sheet
-    存在同一資料夾，同名蓋舊檔
-    """
+    """轉換下半月金流相關檔案"""
     def log(msg):
         if log_fn:
             log_fn(msg)
@@ -288,6 +326,7 @@ def convert_payment_files(
 
     drive = get_drive_service()
 
+    log(f"🔍 尋找期別資料夾：{period}")
     period_folder = get_folder_by_name(drive, root_folder_id, period)
     if not period_folder:
         raise Exception(f"找不到期別資料夾：{period}")
@@ -297,6 +336,7 @@ def convert_payment_files(
 
     for keyword, ext, is_zip in PAYMENT_FILE_CONFIGS:
         file_name = f"{period}{keyword}-{region_name}.{ext}"
+        log(f"🔍 尋找：{file_name}")
         src = find_file_in_folder(drive, folder_id, file_name)
 
         if not src:
@@ -305,13 +345,11 @@ def convert_payment_files(
             continue
 
         if is_zip:
-            # ZIP：解壓縮後轉 Google Sheet
             log(f"📦 解壓縮：{file_name}")
             ids = _unzip_and_convert(drive, folder_id, src["id"], period, keyword, region_name, log)
             results[keyword] = ids
         else:
-            # 直接轉 Google Sheet
-            sheet_name = file_name.rsplit(".", 1)[0]  # 去副檔名
+            sheet_name = file_name.rsplit(".", 1)[0]
             log(f"🔄 轉檔：{file_name}")
             new_id = convert_to_google_sheet(drive, folder_id, src["id"], sheet_name)
             results[keyword] = new_id
@@ -325,7 +363,7 @@ def _unzip_and_convert(
     period: str, keyword: str, region_name: str,
     log_fn
 ) -> list:
-    """ZIP 解壓縮後轉 Google Sheet，回傳 ID 清單"""
+    """ZIP 解壓縮後轉 Google Sheet"""
     request = drive.files().get_media(fileId=zip_file_id)
     zip_bytes = io.BytesIO(request.execute())
     uploaded_ids = []
@@ -334,16 +372,12 @@ def _unzip_and_convert(
         names = zf.namelist()
         for i, inner_name in enumerate(names):
             ext = "." + inner_name.rsplit(".", 1)[-1] if "." in inner_name else ""
-
-            # 命名規則：單檔用原名，多檔加 -1, -2
             if len(names) == 1:
                 out_base = f"{period}{keyword}-{region_name}"
             else:
                 out_base = f"{period}{keyword}-{region_name}-{i + 1}"
 
             out_name_with_ext = out_base + ext
-
-            # 上傳原始檔
             content = zf.read(inner_name)
             trash_files_by_name(drive, folder_id, out_name_with_ext)
             media = MediaIoBaseUpload(
@@ -352,10 +386,10 @@ def _unzip_and_convert(
             uploaded = drive.files().create(
                 body={"name": out_name_with_ext, "parents": [folder_id]},
                 media_body=media,
-                fields="id"
+                fields="id",
+                **DRIVE_PARAMS
             ).execute()
 
-            # 轉成 Google Sheet
             new_id = convert_to_google_sheet(drive, folder_id, uploaded["id"], out_base)
             uploaded_ids.append(new_id)
             log_fn(f"✅ 解壓縮並轉檔：{out_base}")
