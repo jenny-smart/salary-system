@@ -408,6 +408,18 @@ if st.session_state.adding_region:
                 config["regions"] = regions
                 save_config(config)
                 add_log(f"新增地區：{new_name}", "success")
+
+                # 初始化主控試算表工作表
+                try:
+                    from modules.master_sheet import init_region_sheet
+                    is_new = init_region_sheet(new_name)
+                    if is_new:
+                        add_log(f"主控試算表：已建立【{new_name}】工作表", "success")
+                    else:
+                        add_log(f"主控試算表：【{new_name}】工作表已存在", "info")
+                except Exception as e:
+                    add_log(f"主控試算表初始化失敗：{e}", "warning")
+
                 st.session_state.adding_region = False
                 st.rerun()
 
