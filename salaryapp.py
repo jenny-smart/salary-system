@@ -191,16 +191,7 @@ with c3:
 
 with c4:
     st.markdown('<div class="field-label">&nbsp;</div>', unsafe_allow_html=True)
-    if st.button("▶ 執行", use_container_width=True):
-        st.session_state.pending_run = True
-        st.session_state.run_params = {
-            "period": period,
-            "system": system,
-            "selected_function": selected_function,
-            "selected_name": selected_name,
-            "selected_region": selected_region,
-        }
-        st.rerun()
+    run_clicked = st.button("▶ 執行", use_container_width=True)
 
 st.markdown('</div>', unsafe_allow_html=True)
 
@@ -222,15 +213,12 @@ with col_clear:
 # ═══════════════════════════════════════
 # 執行邏輯
 # ═══════════════════════════════════════
-if st.session_state.pending_run:
-    st.session_state.pending_run = False
-
-    p = st.session_state.run_params
-    _period = p.get("period", "")
-    _system = p.get("system", "")
-    _func = p.get("selected_function", "")
-    _name = p.get("selected_name")
-    _region = p.get("selected_region", {})
+if run_clicked:
+    _period = period
+    _system = system
+    _func = selected_function
+    _name = selected_name
+    _region = selected_region
 
     if not _period:
         add_log("請先輸入期別", "error")
@@ -309,8 +297,6 @@ if st.session_state.pending_run:
                 import traceback
                 add_log(f"執行失敗：{e}", "error")
                 add_log(traceback.format_exc(), "error")
-
-    st.rerun()
 
 
 # ═══════════════════════════════════════
