@@ -1,25 +1,27 @@
 # Lemon Clean 系統設定
-# 新增地區只需要在 regions 底下加一個區塊
+# 每個地區只需設定一次，當年度不需更動
+# 期別檔案（金流對帳/清潔承攬/其他承攬/元大帳戶）由程式依命名規則自動找到
+# 檔名規則：{期別}{類型}-{地區名稱}，例如：202504-2金流對帳-台北
 
 regions:
-  taipei:
-    name: "台北"
-    payment_reconciliation_id: ""     # 金流對帳試算表 ID
-    cleaning_contract_id: ""          # 清潔承攬試算表 ID
-    other_contract_id: ""             # 其他承攬試算表 ID
-    root_folder_id: ""                # Drive 根目錄資料夾 ID
+  - name: 台北
+    root_folder_id: ""     # Drive 根目錄資料夾 ID
+    allowance_id: ""       # 請款試算表 ID（當年度固定）
+    salary_id: ""          # 薪資試算表 ID（當年度固定）
+    roster_id: ""          # 名冊試算表 ID（當年度固定）
 
-  taichung:
-    name: "台中"
-    payment_reconciliation_id: ""
-    cleaning_contract_id: ""
-    other_contract_id: ""
-    root_folder_id: ""
+# 新增地區範例：
+#  - name: 台中
+#    root_folder_id: ""
+#    allowance_id: ""
+#    salary_id: ""
+#    roster_id: ""
 
-# 新增地區範例（複製上面的區塊）：
-# kaohsiung:
-#   name: "高雄"
-#   payment_reconciliation_id: ""
-#   cleaning_contract_id: ""
-#   other_contract_id: ""
-#   root_folder_id: ""
+# 排程設定（由介面管理，請勿手動修改）
+schedule:
+  enabled: false
+  days: [10, 25]
+  time: "09:00"
+  timezone: "Asia/Taipei"
+  task: "建立期別資料夾與檔案"
+  all_regions: true
