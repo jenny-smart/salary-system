@@ -64,10 +64,8 @@ def paste_data(sheet, start_row: int, data: list[list]) -> int:
         return 0
 
     end_row = start_row + len(data) - 1
-    col_count = len(data[0])
-    end_col = col_num_to_letter(col_count)
-    range_notation = f"A{start_row}:{end_col}{end_row}"
-    sheet.update(range_notation, data, value_input_option="USER_ENTERED")
+    range_notation = f"A{start_row}:A{end_row}"
+    sheet.update(f"A{start_row}", data, value_input_option="USER_ENTERED")
     return len(data)
 
 
