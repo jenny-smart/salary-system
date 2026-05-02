@@ -290,7 +290,9 @@ def create_period_folder_and_files(
             results[label] = new_id
             log(f"✅ 完成：{new_name}")
         except Exception as e:
-            log(f"⚠️ 複製失敗 [{label}]：{e}")
+            import traceback
+            err_detail = traceback.format_exc()
+            log(f"⚠️ 複製失敗 [{label}]：{type(e).__name__} | {repr(e)} | {err_detail}")
             results[label] = None
 
     return results
