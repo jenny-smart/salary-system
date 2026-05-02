@@ -293,13 +293,21 @@ def convert_period_order_file(
     folder_id = period_folder["id"]
     log(f"✅ 找到期別資料夾：{period}")
 
-    xlsx_name = f"{period}訂單-{region_name}.xlsx"
-    log(f"🔍 尋找訂單檔案：{xlsx_name}")
-    src = find_file_in_folder(drive, folder_id, xlsx_name)
-    if not src:
-        raise Exception(f"找不到訂單檔案：{xlsx_name}")
+    # 支援 .xlsx 和 .xls 兩種格式
+    src = None
+    found_name = None
+    for ext in [".xlsx", ".xls"]:
+        candidate = f"{period}訂單-{region_name}{ext}"
+        log(f"🔍 尋找訂單檔案：{candidate}")
+        src = find_file_in_folder(drive, folder_id, candidate)
+        if src:
+            found_name = candidate
+            break
 
-    log(f"🔄 轉檔中：{xlsx_name}")
+    if not src:
+        raise Exception(f"找不到訂單檔案：{period}訂單-{region_name}.xlsx 或 .xls，請確認檔案已上傳到 {period} 資料夾")
+
+    log(f"🔄 轉檔中：{found_name}")
     sheet_name = f"{period}訂單-{region_name}"
     new_id = convert_to_google_sheet(drive, folder_id, src["id"], sheet_name)
     log(f"✅ 轉檔完成：{sheet_name}")
