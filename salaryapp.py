@@ -297,7 +297,8 @@ if run:
                     add_log(f"{system} {selected_function} 開發中", "warning")
 
             except Exception as e:
-                add_log(f"執行失敗：{e}", "error")
+                import traceback
+                add_log(f"執行失敗：{e}\n{traceback.format_exc()}", "error")
 
 
 # ═══════════════════════════════════════
