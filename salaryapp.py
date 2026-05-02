@@ -233,34 +233,54 @@ if run_clicked:
             add_log(f"執行【{_name}】{half} {_func}，期別：{_period}")
 
             try:
+                from modules.master_sheet import record_execution, record_batch
+
                 if _system == "💰 金流對帳":
 
                     if "① 建立期別" in _func:
                         from modules.payment_reconciliation import create_period
                         result = create_period(root_id, _period, _name, add_log)
-                        add_log(f"建立完成，共複製 {result.get('copied', 0)} 個檔案", "success")
+                        copied = result.get('copied', 0)
+                        add_log(f"建立完成，共複製 {copied} 個檔案", "success")
+                        # 打卡：從 GAS 回傳的 logs 裡找 ID（目前 GAS 沒回傳 ID，記完成時間）
+                        record_batch(_name, _period, [
+                            {"task_key": "金流-手動期別資料夾",   "count": None},
+                            {"task_key": "金流-手動期別金流對帳", "count": None},
+                            {"task_key": "金流-手動期別清潔承攬", "count": None},
+                            {"task_key": "金流-手動期別其他承攬", "count": None},
+                            {"task_key": "金流-手動期別元大帳戶", "count": None},
+                        ])
 
                     elif "② 期別訂單轉檔" in _func:
                         from modules.payment_reconciliation import convert_order_file
                         result = convert_order_file(root_id, _period, _name, add_log)
                         add_log("期別訂單轉檔完成", "success")
+                        record_execution(_name, _period, "金流-期別訂單轉檔", None)
 
                     elif "③ 訂單搬運" in _func:
                         from modules.payment_reconciliation import copy_orders_to_template
                         count = copy_orders_to_template(root_id, _period, _name, add_log)
                         add_log(f"搬運完成：{count} 筆", "success")
+                        record_execution(_name, _period, "金流-複製期別訂單", count)
 
                     elif "④ 範本加工" in _func:
                         from modules.payment_reconciliation import process_template
                         result = process_template(root_id, _period, _name, add_log)
+                        sort_count = result['sort_count']
+                        mark_count = result['mark_count']
+                        expand_count = result['expand_count']
                         add_log(
-                            f"加工完成：排序 {result['sort_count']} 筆，"
-                            f"異常 {result['mark_count']} 筆，"
-                            f"拆解新增 {result['expand_count']} 列",
+                            f"加工完成：排序 {sort_count} 筆，"
+                            f"異常 {mark_count} 筆，"
+                            f"拆解新增 {expand_count} 列",
                             "success"
                         )
                         for w in result.get("warnings", []):
                             add_log(w, "warning")
+                        record_batch(_name, _period, [
+                            {"task_key": "金流-加工-排序",           "count": sort_count},
+                            {"task_key": "金流-加工-K欄標註異常標橘底", "count": mark_count},
+                        ])
 
                     elif "⑤ 分類搬運" in _func:
                         from modules.payment_reconciliation import copy_classified_data
@@ -269,11 +289,33 @@ if run_clicked:
                         for k, v in counts.items():
                             if v > 0:
                                 add_log(f"　{k}：{v} 筆")
+                        # 打卡各類別
+                        task_map = {
+                            "清潔": "金流-複製清潔訂單",
+                            "水洗": "金流-複製水洗訂單",
+                            "家電": "金流-複製家電訂單",
+                            "收納": "金流-複製收納訂單",
+                            "座椅": "金流-複製座椅訂單",
+                            "地毯": "金流-複製地毯訂單",
+                        }
+                        batch = []
+                        for label, task_key in task_map.items():
+                            v = counts.get(label, 0)
+                            batch.append({"task_key": task_key, "count": v})
+                        record_batch(_name, _period, batch)
 
                     elif "⑥ 金流對帳轉檔" in _func:
                         from modules.payment_reconciliation import convert_payment_file
                         result = convert_payment_file(root_id, _period, _name, add_log)
                         add_log("金流對帳轉檔完成", "success")
+                        record_batch(_name, _period, [
+                            {"task_key": "金流-期別發票轉檔",         "count": None},
+                            {"task_key": "金流-期別已退款全部加收轉檔", "count": None},
+                            {"task_key": "金流-期別已退款全部退款轉檔", "count": None},
+                            {"task_key": "金流-期別預收轉檔",          "count": None},
+                            {"task_key": "金流-期別藍新收款轉檔",      "count": None},
+                            {"task_key": "金流-期別藍新退款轉檔",      "count": None},
+                        ])
 
                     elif "⑦ 搬運退款" in _func:
                         from modules.payment_reconciliation import move_refund_and_prepaid
@@ -281,6 +323,11 @@ if run_clicked:
                         add_log("退款＋預收搬運完成", "success")
                         for k, v in counts.items():
                             add_log(f"　{k}：{v} 筆")
+                        record_batch(_name, _period, [
+                            {"task_key": "金流-複製已退款全部加收", "count": counts.get("已退款全部加收")},
+                            {"task_key": "金流-複製已退款全部退款", "count": counts.get("已退款全部退款")},
+                            {"task_key": "金流-複製預收",           "count": counts.get("預收")},
+                        ])
 
                     elif "⑧ 搬運發票" in _func:
                         from modules.payment_reconciliation import move_invoice_and_bluenew
@@ -289,6 +336,11 @@ if run_clicked:
                         for k, v in counts.items():
                             if v > 0:
                                 add_log(f"　{k}：{v} 筆")
+                        record_batch(_name, _period, [
+                            {"task_key": "金流-複製發票",     "count": counts.get("發票")},
+                            {"task_key": "金流-複製藍新收款", "count": counts.get("藍新收款")},
+                            {"task_key": "金流-複製藍新退款", "count": counts.get("藍新退款")},
+                        ])
 
                 else:
                     add_log(f"{_system} {_func} 開發中", "warning")
