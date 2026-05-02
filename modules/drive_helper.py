@@ -131,12 +131,11 @@ def trash_files_by_name(drive, folder_id: str, name: str):
 # ═══════════════════════════════════════
 
 def copy_file_to_folder(drive, source_file_id: str, dest_folder_id: str, new_name: str) -> str:
-    """複製檔案到目標資料夾，蓋掉同名舊檔，回傳新檔 ID"""
     trash_files_by_name(drive, dest_folder_id, new_name)
     copied = drive.files().copy(
         fileId=source_file_id,
         body={"name": new_name, "parents": [dest_folder_id]},
-        **DRIVE_PARAMS
+        supportsAllDrives=True
     ).execute()
     return copied["id"]
 
