@@ -6,6 +6,7 @@ import streamlit as st
 import yaml
 from datetime import datetime
 from modules.period_utils import get_auto_period, is_first_half
+from modules.auth import is_logged_in, show_login_button, get_oauth_credentials, logout
 
 st.set_page_config(
     page_title="Lemon Clean 薪資系統",
@@ -127,9 +128,26 @@ def _render_log(placeholder):
 
 
 # ═══════════════════════════════════════
+# 登入檢查
+# ═══════════════════════════════════════
+# 嘗試取得 OAuth 憑證（處理從授權頁面回來的情況）
+get_oauth_credentials()
+
+if not is_logged_in():
+    show_login_button()
+    st.stop()
+
+# ═══════════════════════════════════════
 # 主標題
 # ═══════════════════════════════════════
 st.markdown('<div class="app-title">🍋 Lemon Clean 薪資系統</div>', unsafe_allow_html=True)
+
+# 登出按鈕
+col_logout, _ = st.columns([1, 4])
+with col_logout:
+    if st.button("登出", key="logout_btn"):
+        logout()
+        st.rerun()
 
 
 # ═══════════════════════════════════════
