@@ -140,7 +140,9 @@ def copy_file_to_folder(drive, source_file_id: str, dest_folder_id: str, new_nam
         ).execute()
         return copied["id"]
     except Exception as e:
-        raise Exception(f"HttpError detail: {str(e)} / repr: {repr(e)}")
+        import traceback
+        tb = traceback.format_exc()
+        raise Exception(f"複製失敗詳情：{type(e).__name__}: {e.args} \n{tb}")
 
 
 # ═══════════════════════════════════════
