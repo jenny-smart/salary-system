@@ -65,9 +65,22 @@ def paste_data(sheet, start_row: int, data: list[list]) -> int:
 
     end_row = start_row + len(data) - 1
     col_count = len(data[0])
-    range_notation = f"A{start_row}:{chr(64 + col_count)}{end_row}"
+    end_col = col_num_to_letter(col_count)
+    range_notation = f"A{start_row}:{end_col}{end_row}"
     sheet.update(range_notation, data, value_input_option="USER_ENTERED")
     return len(data)
+
+
+def col_num_to_letter(n: int) -> str:
+    """
+    欄位數字轉字母，支援超過 26 欄
+    1→A, 26→Z, 27→AA, 28→AB, ...
+    """
+    result = ""
+    while n > 0:
+        n, remainder = divmod(n - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
 
 
 # ═══════════════════════════════════════
