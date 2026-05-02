@@ -72,35 +72,30 @@ def _find_sheet_by_keyword(folder_id: str, keyword: str) -> str | None:
 # ① 建立期別資料夾與檔案（透過 GAS Web App）
 # ═══════════════════════════════════════
 
-GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxe5u28GjYc_MejSTLdiivIikuTwQkwlgGjPrWMzzhqqv3G5M58mXOK-B-AUpnDs3P0/exec"
+GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyEHGGY38JnD1d21vJeVSAsOFIK1b12AEthaiM8onr8hEWJzkbbItNGhZYYfj3jNBiP/exec"
 
 
-def create_period(root_folder_id: str, period: str, region_name: str, log_fn=None) -> dict:
-    """
-    呼叫 GAS Web App 建立期別資料夾與檔案
-    GAS 用 jenny@lemonclean.com.tw 執行，複製的檔案空間算在該帳號
-    """
+def _call_gas(action: str, root_folder_id: str, period: str, region_name: str, log_fn=None) -> dict:
+    """共用的 GAS 呼叫函數"""
     import requests
 
     def log(msg):
         if log_fn:
             log_fn(msg)
 
-    log(f"🔄 呼叫 GAS 建立期別：{period}")
-
     params = {
+        "action": action,
         "period": period,
         "region": region_name,
         "rootFolderId": root_folder_id,
     }
 
     try:
-        response = requests.get(GAS_WEB_APP_URL, params=params, timeout=120)
+        response = requests.get(GAS_WEB_APP_URL, params=params, timeout=180)
         result = response.json()
     except Exception as e:
         raise Exception(f"呼叫 GAS 失敗：{e}")
 
-    # 顯示 GAS 回傳的每一條 log
     for entry in result.get("logs", []):
         log(entry)
 
@@ -111,22 +106,36 @@ def create_period(root_folder_id: str, period: str, region_name: str, log_fn=Non
 
 
 # ═══════════════════════════════════════
-# ② 期別訂單轉檔
+# ① 建立期別資料夾與檔案（GAS）
 # ═══════════════════════════════════════
 
-def convert_order_file(root_folder_id: str, period: str, region_name: str, log_fn=None) -> str:
-    """
-    轉換 {期別}訂單-{地區}.xlsx → Google Sheet
-    存在同一資料夾，同名蓋舊檔
-    """
-    return convert_period_order_file(root_folder_id, period, region_name, log_fn)
+def create_period(root_folder_id: str, period: str, region_name: str, log_fn=None) -> dict:
+    """呼叫 GAS 建立期別資料夾與檔案"""
+    if log_fn:
+        log_fn(f"🔄 呼叫 GAS 建立期別：{period}")
+    return _call_gas("createPeriod", root_folder_id, period, region_name, log_fn)
 
 
 # ═══════════════════════════════════════
-# ② 金流對帳轉檔（下半月）
+# ② 期別訂單轉檔（GAS）
+# ═══════════════════════════════════════
+
+def convert_order_file(root_folder_id: str, period: str, region_name: str, log_fn=None) -> dict:
+    """呼叫 GAS 轉換期別訂單 xls/xlsx → Google Sheet"""
+    if log_fn:
+        log_fn(f"🔄 呼叫 GAS 轉檔：{period}訂單-{region_name}")
+    return _call_gas("convertOrder", root_folder_id, period, region_name, log_fn)
+
+
+# ═══════════════════════════════════════
+# ⑥ 金流對帳轉檔（GAS）
 # ═══════════════════════════════════════
 
 def convert_payment_file(root_folder_id: str, period: str, region_name: str, log_fn=None) -> dict:
+    """呼叫 GAS 轉換金流對帳相關檔案（zip/csv/xlsx/xls → Google Sheet）"""
+    if log_fn:
+        log_fn(f"🔄 呼叫 GAS 金流對帳轉檔：{period}")
+    return _call_gas("convertPayment", root_folder_id, period, region_name, log_fn)
     """
     轉換下半月金流檔案：
     已退款全部加收/退款.xlsx、預收.xlsx、發票.zip、藍新收款/退款.csv
