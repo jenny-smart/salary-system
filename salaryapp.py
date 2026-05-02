@@ -6,7 +6,6 @@ import streamlit as st
 import yaml
 from datetime import datetime
 from modules.period_utils import get_auto_period, is_first_half
-from modules.auth import is_logged_in, show_login_button, get_oauth_credentials, logout
 
 st.set_page_config(
     page_title="Lemon Clean 薪資系統",
@@ -49,9 +48,7 @@ st.markdown("""
     margin-bottom: 10px; color: #b0d1dd; font-size: 0.8rem;
     padding-bottom: 8px; border-bottom: 1px solid #2c5a6a;
   }
-  .log-scroll {
-    max-height: 300px; overflow-y: auto;
-  }
+  .log-scroll { max-height: 300px; overflow-y: auto; }
   .log-entry {
     padding: 4px 0; border-bottom: 1px solid #1c4452;
     font-size: 0.75rem; color: #cde3ec; line-height: 1.4;
@@ -87,7 +84,6 @@ def save_config(cfg):
 config = load_config()
 regions = config.get("regions", [])
 
-# Session state 初始化
 if "logs" not in st.session_state:
     st.session_state.logs = ["[--:--:--] 系統已就緒，請選擇作業..."]
 if "editing_region" not in st.session_state:
@@ -128,26 +124,9 @@ def _render_log(placeholder):
 
 
 # ═══════════════════════════════════════
-# 登入檢查
-# ═══════════════════════════════════════
-# 嘗試取得 OAuth 憑證（處理從授權頁面回來的情況）
-get_oauth_credentials()
-
-if not is_logged_in():
-    show_login_button()
-    st.stop()
-
-# ═══════════════════════════════════════
 # 主標題
 # ═══════════════════════════════════════
 st.markdown('<div class="app-title">🍋 Lemon Clean 薪資系統</div>', unsafe_allow_html=True)
-
-# 登出按鈕
-col_logout, _ = st.columns([1, 4])
-with col_logout:
-    if st.button("登出", key="logout_btn"):
-        logout()
-        st.rerun()
 
 
 # ═══════════════════════════════════════
@@ -239,7 +218,7 @@ with col_clear:
 
 
 # ═══════════════════════════════════════
-# 執行邏輯（用 session_state 避免按兩次問題）
+# 執行邏輯
 # ═══════════════════════════════════════
 if st.session_state.pending_run:
     st.session_state.pending_run = False
@@ -503,3 +482,54 @@ for i, region in enumerate(regions):
                 st.rerun()
 
 st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ═══════════════════════════════════════
+# 系統維護（清理 Service Account 空間）
+# ═══════════════════════════════════════
+with st.expander("🔧 系統維護"):
+    st.caption("Service Account Drive 空間滿時，點此清理佔用的檔案")
+
+    if "sa_files_list" not in st.session_state:
+        st.session_state.sa_files_list = []
+
+    if st.button("🔍 列出 Service Account 擁有的檔案", use_container_width=True):
+        with st.spinner("查詢中..."):
+            try:
+                from modules.auth import get_drive_service
+                drive = get_drive_service()
+                res = drive.files().list(
+                    q="'me' in owners and trashed=false",
+                    fields="files(id, name, mimeType)",
+                    pageSize=100,
+                    includeItemsFromAllDrives=True,
+                    supportsAllDrives=True
+                ).execute()
+                files = res.get("files", [])
+                st.session_state.sa_files_list = files
+                if files:
+                    st.warning(f"找到 {len(files)} 個 Service Account 擁有的檔案：")
+                    for f in files:
+                        st.text(f"- {f['name']}")
+                else:
+                    st.success("Service Account 沒有擁有任何檔案，空間正常")
+            except Exception as e:
+                st.error(f"查詢失敗：{e}")
+
+    if st.session_state.sa_files_list:
+        if st.button("🗑️ 刪除以上所有檔案（清理空間）", type="primary", use_container_width=True):
+            with st.spinner("清理中..."):
+                try:
+                    from modules.auth import get_drive_service
+                    drive = get_drive_service()
+                    for f in st.session_state.sa_files_list:
+                        drive.files().delete(
+                            fileId=f["id"],
+                            supportsAllDrives=True
+                        ).execute()
+                        add_log(f"已刪除：{f['name']}", "warning")
+                    st.session_state.sa_files_list = []
+                    add_log("Service Account 空間清理完成，可以重新執行建立期別", "success")
+                    st.success("✅ 清理完成！")
+                except Exception as e:
+                    st.error(f"清理失敗：{e}")
