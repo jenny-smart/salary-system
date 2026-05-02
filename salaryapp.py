@@ -200,6 +200,7 @@ with c4:
             "selected_name": selected_name,
             "selected_region": selected_region,
         }
+        st.rerun()
 
 st.markdown('</div>', unsafe_allow_html=True)
 
