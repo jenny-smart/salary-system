@@ -149,13 +149,13 @@ def convert_payment_file(root_folder_id: str, period: str, region_name: str, log
 
 def copy_orders_to_template(
     root_folder_id: str, period: str, region_name: str, log_fn=None
-) -> int:
+) -> dict:
     """
     來源：{期別}訂單-{地區}（Google Sheet 第一個工作表，A2:BJ）
     目標：{期別}金流對帳-{地區} 的「範本」工作表
     上半月：清空再貼
     下半月：接在最後一筆後面
-    注意：C/D/H 欄為日期，Y/Z/AA/AB 為數值，不轉換格式
+    回傳：{"count": 筆數, "start_row": 起始列號}
     """
     def log(msg):
         if log_fn:
@@ -181,7 +181,7 @@ def copy_orders_to_template(
     source_sheet = ss_order.worksheets()[0]
     template_sheet = ss_rec.worksheet("範本")
 
-    # 讀取資料（不轉換日期和數值）
+    # 讀取資料
     data = get_all_data(source_sheet, "A2", "BJ")
     if not data:
         raise Exception("訂單無資料")
@@ -192,8 +192,8 @@ def copy_orders_to_template(
     start_row = get_paste_row(template_sheet, first_half)
     count = paste_data(template_sheet, start_row, data)
 
-    log(f"✅ 搬運完成：{count} 筆（{'上半月清空後貼入' if first_half else '下半月接續貼入'}）")
-    return count
+    log(f"✅ 搬運完成：{count} 筆（起始列：{start_row}，{'上半月清空後貼入' if first_half else '下半月接續貼入'}）")
+    return {"count": count, "start_row": start_row}
 
 
 # ═══════════════════════════════════════
@@ -205,15 +205,14 @@ EXPANDABLE_TYPES = ["水洗", "家電", "座椅", "收納", "地毯", "其他"]
 
 
 def process_template(
-    root_folder_id: str, period: str, region_name: str, log_fn=None
+    root_folder_id: str, period: str, region_name: str,
+    start_row: int = None, log_fn=None
 ) -> dict:
     """
-    範本加工：
-    1. 排序（E欄→H欄→M欄客戶姓名）
-    2. 異常標記（AP/AY欄含關鍵字 → 寫入K欄）
-    3. 水洗類別文字去重
-    4. 儲值金標記（E欄含VIP券/儲值金 → A欄寫「儲值金」）
-    5. F/G欄服務項目拆解（有多個項目時拆成多列）
+    範本加工：只針對 start_row 起的資料列做加工
+    start_row=None 或 2：處理全部（上半月）
+    start_row>2：只處理下半月新搬運的資料
+    Double check：驗證 start_row 與打卡表記錄一致
     """
     def log(msg):
         if log_fn:
@@ -223,56 +222,80 @@ def process_template(
     ss = open_spreadsheet(reconciliation_id)
     sheet = ss.worksheet("範本")
 
-    data = get_all_data(sheet, "A2", "BJ")
-    if not data:
+    # 讀取全部資料（加工後要整體寫回）
+    all_data = get_all_data(sheet, "A2", "BJ")
+    if not all_data:
         return {"sort_count": 0, "mark_count": 0, "expand_count": 0, "warnings": []}
 
     max_cols = 62
-    data = [row + [""] * (max_cols - len(row)) for row in data]
-    df = pd.DataFrame(data)
+    all_data = [row + [""] * (max_cols - len(row)) for row in all_data]
 
-    # ── 1. 排序：E(4) → H(7) → M(12) ──
-    df = df.sort_values(by=[4, 7, 12], ascending=True).reset_index(drop=True)
-    sort_count = len(df)
+    # 決定要加工的範圍
+    if start_row is None or start_row <= 2:
+        # 上半月：全部加工
+        process_start_idx = 0
+        log(f"🔵 上半月模式：加工全部 {len(all_data)} 筆")
+    else:
+        # 下半月：只加工 start_row 之後的資料
+        # all_data 的 index 0 = 第2列，所以 start_row-2 = 新資料起始 index
+        process_start_idx = start_row - 2
+        if process_start_idx >= len(all_data):
+            log("⚠️ 起始列超出資料範圍，無新資料需要加工")
+            return {"sort_count": 0, "mark_count": 0, "expand_count": 0, "warnings": []}
+        log(f"🔵 下半月模式：從第 {start_row} 列開始，加工 {len(all_data) - process_start_idx} 筆新資料")
+
+    import pandas as pd
+
+    # 分成「舊資料」和「新資料」
+    old_rows = all_data[:process_start_idx]
+    new_rows = all_data[process_start_idx:]
+
+    df_new = pd.DataFrame(new_rows)
+
+    # ── 1. 排序（只排新資料）──
+    df_new = df_new.sort_values(by=[4, 7, 12], ascending=True).reset_index(drop=True)
+    sort_count = len(df_new)
     log(f"🔵 排序完成：{sort_count} 筆")
 
     # ── 2. 異常標記 ──
     mark_count = 0
-    for idx, row in df.iterrows():
+    for idx, row in df_new.iterrows():
         ap = str(row[41]) if pd.notna(row[41]) else ""
         ay = str(row[50]) if pd.notna(row[50]) else ""
         combined = (ap + " " + ay).strip()
         if any(kw in combined for kw in ABNORMAL_KEYWORDS):
-            df.at[idx, 10] = combined
+            df_new.at[idx, 10] = combined
             mark_count += 1
     log(f"🔵 異常標記：{mark_count} 筆")
 
     # ── 3. 水洗類別去重 ──
-    for idx, row in df.iterrows():
+    for idx, row in df_new.iterrows():
         e_text = str(row[4])
         if "3水洗：" in e_text:
-            df.at[idx, 4] = _dedupe_wash_text(e_text)
+            df_new.at[idx, 4] = _dedupe_wash_text(e_text)
 
     # ── 4. 儲值金標記 ──
-    for idx, row in df.iterrows():
+    for idx, row in df_new.iterrows():
         e_text = str(row[4])
         if "VIP券" in e_text or "儲值金" in e_text:
-            df.at[idx, 0] = "儲值金"
+            df_new.at[idx, 0] = "儲值金"
 
     # ── 5. F/G 欄拆解 ──
     log("🔵 F/G 欄服務項目拆解中...")
-    expanded_data, expand_count, warnings = _expand_fg_rows(df)
+    expanded_new, expand_count, warnings = _expand_fg_rows(df_new)
 
     if warnings:
         for w in warnings:
             log(f"⚠️ {w}")
-
     log(f"🔵 拆解完成：新增 {expand_count} 列")
 
-    # ── 寫回 ──
-    sheet.batch_clear([f"A2:BJ{len(data) + expand_count + 10}"])
-    if expanded_data:
-        sheet.update("A2", expanded_data, value_input_option="USER_ENTERED")
+    # ── 合併舊資料 + 加工後新資料，寫回 ──
+    final_data = old_rows + expanded_new
+    total_rows = len(final_data)
+
+    sheet.batch_clear([f"A2:BJ{total_rows + expand_count + 10}"])
+    if final_data:
+        sheet.update("A2", final_data, value_input_option="USER_ENTERED")
 
     log(f"✅ 範本加工完成：排序 {sort_count} 筆，異常 {mark_count} 筆，拆解新增 {expand_count} 列")
 
@@ -400,10 +423,11 @@ CLEANING_KEYWORDS = ["清潔", "1專業清潔"]
 
 
 def copy_classified_data(
-    root_folder_id: str, period: str, region_name: str, log_fn=None
+    root_folder_id: str, period: str, region_name: str,
+    template_start_row: int = None, log_fn=None
 ) -> dict:
     """
-    分類搬運：
+    分類搬運：只分類 template_start_row 起的新資料
     1. 先分其他承攬（水洗/收納/家電/座椅/地毯）
     2. 再分清潔承攬
     3. 無法分類的資料跳出警告視窗
@@ -419,12 +443,19 @@ def copy_classified_data(
 
     ss_rec = open_spreadsheet(reconciliation_id)
     template = ss_rec.worksheet("範本")
-    data = get_all_data(template, "A2", "BJ")
+    all_data = get_all_data(template, "A2", "BJ")
 
-    if not data:
+    if not all_data:
         raise Exception("範本無資料，請先執行搬運和加工")
 
-    log(f"📋 範本共 {len(data)} 筆，開始分類")
+    # 只分類新搬運的資料（start_row 起）
+    if template_start_row and template_start_row > 2:
+        process_start_idx = template_start_row - 2
+        data = all_data[process_start_idx:]
+        log(f"📋 範本共 {len(all_data)} 筆，分類第 {template_start_row} 列起的 {len(data)} 筆新資料")
+    else:
+        data = all_data
+        log(f"📋 範本共 {len(data)} 筆，開始分類")
 
     # 分類
     other_buckets = {k: [] for k in OTHER_CONTRACT_MAP}
