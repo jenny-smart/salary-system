@@ -133,7 +133,7 @@ def _build_header_rows() -> tuple[list, list]:
             for half in [1, 2]:
                 period = f"{year}{str(month).zfill(2)}-{half}"
                 row1.extend([period, ""])
-                row2.extend(["筆數", "完成時間"])
+                row2.extend(["ID/筆數", "完成時間"])
     return row1, row2
 
 
