@@ -250,8 +250,7 @@ if st.session_state.pending_run:
                     if "① 建立期別" in _func:
                         from modules.payment_reconciliation import create_period
                         result = create_period(root_id, _period, _name, add_log)
-                        ok = len([v for v in result.values() if v and v != result.get("period_folder_id")])
-                        add_log(f"建立完成，共複製 {ok} 個檔案", "success")
+                        add_log(f"建立完成，共複製 {result.get('copied', 0)} 個檔案", "success")
 
                     elif "期別訂單轉檔" in _func:
                         from modules.payment_reconciliation import convert_order_file
