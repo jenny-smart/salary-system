@@ -242,20 +242,23 @@ if run_clicked:
                         result = create_period(root_id, _period, _name, add_log)
                         copied = result.get('copied', 0)
                         add_log(f"建立完成，共複製 {copied} 個檔案", "success")
-                        # 打卡：從 GAS 回傳的 logs 裡找 ID（目前 GAS 沒回傳 ID，記完成時間）
+                        # 打卡：記錄資料夾ID和各檔案ID
+                        file_ids = result.get("fileIds", {})
+                        folder_id_val = result.get("folderId", None)
                         record_batch(_name, _period, [
-                            {"task_key": "金流-手動期別資料夾",   "count": None},
-                            {"task_key": "金流-手動期別金流對帳", "count": None},
-                            {"task_key": "金流-手動期別清潔承攬", "count": None},
-                            {"task_key": "金流-手動期別其他承攬", "count": None},
-                            {"task_key": "金流-手動期別元大帳戶", "count": None},
+                            {"task_key": "金流-手動期別資料夾",   "count": folder_id_val},
+                            {"task_key": "金流-手動期別金流對帳", "count": file_ids.get("金流對帳")},
+                            {"task_key": "金流-手動期別清潔承攬", "count": file_ids.get("清潔承攬")},
+                            {"task_key": "金流-手動期別其他承攬", "count": file_ids.get("其他承攬")},
+                            {"task_key": "金流-手動期別元大帳戶", "count": file_ids.get("元大帳戶")},
                         ])
 
                     elif "② 期別訂單轉檔" in _func:
                         from modules.payment_reconciliation import convert_order_file
                         result = convert_order_file(root_id, _period, _name, add_log)
                         add_log("期別訂單轉檔完成", "success")
-                        record_execution(_name, _period, "金流-期別訂單轉檔", None)
+                        # 打卡：記錄轉檔後的 Google Sheet ID
+                        record_execution(_name, _period, "金流-期別訂單轉檔", result.get("fileId"))
 
                     elif "③ 訂單搬運" in _func:
                         from modules.payment_reconciliation import copy_orders_to_template
