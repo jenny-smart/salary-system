@@ -3,8 +3,12 @@
 # 期別檔案（金流對帳/清潔承攬/其他承攬/元大帳戶）由程式依命名規則自動找到
 # 檔名規則：{期別}{類型}-{地區名稱}，例如：202504-2金流對帳-台北
 
+# 主控試算表（LemonSalarySystem）
+master_sheet_id: "1GdW3FSZ0s3TGeYiNx3JtYvED_RRfJjiFYwLFeYHZ1hA"
+
 regions: []
 
+# 排程設定（由介面管理，請勿手動修改）
 schedule:
   enabled: false
   days: [10, 25]
