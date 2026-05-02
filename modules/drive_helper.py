@@ -34,7 +34,7 @@ def get_folder_by_name(drive, parent_id: str, name: str) -> dict | None:
         f"mimeType='{FOLDER_MIME}' and "
         f"trashed=false"
     )
-    res = drive.files().list(
+    res = ).list(
         q=q,
         fields="files(id, name)",
         **DRIVE_PARAMS
@@ -53,7 +53,7 @@ def get_or_create_folder(drive, parent_id: str, name: str) -> str:
         "mimeType": FOLDER_MIME,
         "parents": [parent_id],
     }
-    created = drive.files().create(
+    created = ).create(
         body=meta,
         fields="id",
         supportsAllDrives=True
@@ -72,7 +72,7 @@ def find_file_in_folder(drive, folder_id: str, file_name: str) -> dict | None:
         f"'{folder_id}' in parents and "
         f"trashed=false"
     )
-    res = drive.files().list(
+    res = ).list(
         q=q,
         fields="files(id, name, mimeType)",
         **DRIVE_PARAMS
@@ -86,7 +86,7 @@ def find_file_by_keyword(drive, folder_id: str, keyword: str, mime_type: str = N
     q = f"'{folder_id}' in parents and trashed=false"
     if mime_type:
         q += f" and mimeType='{mime_type}'"
-    res = drive.files().list(
+    res = ).list(
         q=q,
         fields="files(id, name, mimeType)",
         **DRIVE_PARAMS
@@ -100,7 +100,7 @@ def find_file_by_keyword(drive, folder_id: str, keyword: str, mime_type: str = N
 def list_folder_names(drive, parent_id: str) -> list[str]:
     """列出資料夾下所有子資料夾名稱（診斷用）"""
     q = f"'{parent_id}' in parents and mimeType='{FOLDER_MIME}' and trashed=false"
-    res = drive.files().list(
+    res = ).list(
         q=q,
         fields="files(id, name)",
         **DRIVE_PARAMS
@@ -115,13 +115,13 @@ def list_folder_names(drive, parent_id: str) -> list[str]:
 def trash_files_by_name(drive, folder_id: str, name: str):
     """刪除資料夾中所有同名檔案"""
     q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
-    res = drive.files().list(
+    res = ).list(
         q=q,
         fields="files(id)",
         **DRIVE_PARAMS
     ).execute()
     for f in res.get("files", []):
-        drive.files().update(
+        ).update(
             fileId=f["id"],
             body={"trashed": True},
             supportsAllDrives=True
@@ -141,11 +141,16 @@ def copy_file_to_folder(drive, source_file_id: str, dest_folder_id: str, new_nam
     trash_files_by_name(drive, dest_folder_id, new_name)
 
     # 複製檔案
-    copied = drive.files().copy(
-        fileId=source_file_id,
-        body={"name": new_name, "parents": [dest_folder_id]},
-        supportsAllDrives=True
-    ).execute()
+    try:
+        copied = drive.files().copy(
+            fileId=source_file_id,
+            body={"name": new_name, "parents": [dest_folder_id]},
+            supportsAllDrives=True
+        ).execute()
+    except Exception as e:
+        status = getattr(e, 'resp', {}).get('status', 'unknown')
+        content = getattr(e, 'content', b'').decode('utf-8') if hasattr(e, 'content') else str(e)
+        raise Exception(f"HTTP {status}: {content}")
 
     new_file_id = copied["id"]
 
@@ -181,7 +186,7 @@ def convert_to_google_sheet(drive, folder_id: str, source_file_id: str, new_name
         f"mimeType='{GOOGLE_SHEET_MIME}' and "
         f"trashed=false"
     )
-    existing = drive.files().list(
+    existing = ).list(
         q=q,
         fields="files(id)",
         **DRIVE_PARAMS
