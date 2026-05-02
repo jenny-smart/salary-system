@@ -18,17 +18,20 @@ FOLDER_MIME = "application/vnd.google-apps.folder"
 # ═══════════════════════════════════════
 
 def get_folder_by_name(drive, parent_id: str, name: str) -> dict | None:
-    """在父資料夾下找指定名稱的資料夾，找不到回傳 None"""
     q = (
         f"name='{name}' and "
         f"'{parent_id}' in parents and "
         f"mimeType='{FOLDER_MIME}' and "
         f"trashed=false"
     )
-    res = drive.files().list(q=q, fields="files(id, name)").execute()
+    res = drive.files().list(
+        q=q,
+        fields="files(id, name)",
+        includeItemsFromAllDrives=True,
+        supportsAllDrives=True
+    ).execute()
     files = res.get("files", [])
     return files[0] if files else None
-
 
 def get_or_create_folder(drive, parent_id: str, name: str) -> str:
     """取得或建立子資料夾，回傳資料夾 ID"""
