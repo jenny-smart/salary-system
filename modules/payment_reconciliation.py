@@ -69,11 +69,45 @@ def _find_sheet_by_keyword(folder_id: str, keyword: str) -> str | None:
 
 
 # ═══════════════════════════════════════
-# ① 建立期別資料夾與檔案
+# ① 建立期別資料夾與檔案（透過 GAS Web App）
 # ═══════════════════════════════════════
 
+GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxe5u28GjYc_MejSTLdiivIikuTwQkwlgGjPrWMzzhqqv3G5M58mXOK-B-AUpnDs3P0/exec"
+
+
 def create_period(root_folder_id: str, period: str, region_name: str, log_fn=None) -> dict:
-    return create_period_folder_and_files(root_folder_id, period, region_name, log_fn)
+    """
+    呼叫 GAS Web App 建立期別資料夾與檔案
+    GAS 用 jenny@lemonclean.com.tw 執行，複製的檔案空間算在該帳號
+    """
+    import requests
+
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    log(f"🔄 呼叫 GAS 建立期別：{period}")
+
+    params = {
+        "period": period,
+        "region": region_name,
+        "rootFolderId": root_folder_id,
+    }
+
+    try:
+        response = requests.get(GAS_WEB_APP_URL, params=params, timeout=120)
+        result = response.json()
+    except Exception as e:
+        raise Exception(f"呼叫 GAS 失敗：{e}")
+
+    # 顯示 GAS 回傳的每一條 log
+    for entry in result.get("logs", []):
+        log(entry)
+
+    if not result.get("success"):
+        raise Exception(f"GAS 執行失敗：{result.get('message', '未知錯誤')}")
+
+    return result
 
 
 # ═══════════════════════════════════════
