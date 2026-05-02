@@ -97,7 +97,8 @@ if "run_params" not in st.session_state:
 
 
 def add_log(message: str, level: str = "info"):
-    now = datetime.now().strftime("%H:%M:%S")
+    import pytz
+    now = datetime.now(pytz.timezone("Asia/Taipei")).strftime("%H:%M:%S")
     icons = {"info": "🔵", "success": "✅", "error": "❌", "warning": "⚠️"}
     icon = icons.get(level, "🔵")
     st.session_state.logs.append(f"[{now}] {icon} {message}")
