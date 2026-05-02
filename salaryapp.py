@@ -262,13 +262,38 @@ if run_clicked:
 
                     elif "③ 訂單搬運" in _func:
                         from modules.payment_reconciliation import copy_orders_to_template
-                        count = copy_orders_to_template(root_id, _period, _name, add_log)
-                        add_log(f"搬運完成：{count} 筆", "success")
-                        record_execution(_name, _period, "金流-複製期別訂單", count)
+                        result = copy_orders_to_template(root_id, _period, _name, add_log)
+                        count = result["count"]
+                        start_row = result["start_row"]
+                        add_log(f"搬運完成：{count} 筆，起始列：{start_row}", "success")
+                        # 存到 session_state 供 ④ 加工用
+                        key = f"start_row_{_period}_{_name}"
+                        st.session_state[key] = start_row
+                        # 打卡
+                        record_batch(_name, _period, [
+                            {"task_key": "金流-訂單起始列",   "count": start_row},
+                            {"task_key": "金流-複製期別訂單", "count": count},
+                        ])
 
                     elif "④ 範本加工" in _func:
                         from modules.payment_reconciliation import process_template
-                        result = process_template(root_id, _period, _name, add_log)
+                        # 從 session_state 讀起始列
+                        key = f"start_row_{_period}_{_name}"
+                        start_row = st.session_state.get(key)
+                        # Double check：和打卡表比對
+                        try:
+                            from modules.master_sheet import get_recorded_value
+                            recorded_start = get_recorded_value(_name, _period, "金流-訂單起始列")
+                            if recorded_start and start_row and int(recorded_start) != int(start_row):
+                                add_log(f"⚠️ Double check 不一致：session={start_row}，打卡表={recorded_start}，使用打卡表的值", "warning")
+                                start_row = int(recorded_start)
+                            elif recorded_start and not start_row:
+                                start_row = int(recorded_start)
+                                add_log(f"🔵 從打卡表讀取起始列：{start_row}")
+                        except Exception:
+                            pass
+
+                        result = process_template(root_id, _period, _name, start_row, add_log)
                         sort_count = result['sort_count']
                         mark_count = result['mark_count']
                         expand_count = result['expand_count']
@@ -287,12 +312,33 @@ if run_clicked:
 
                     elif "⑤ 分類搬運" in _func:
                         from modules.payment_reconciliation import copy_classified_data
-                        counts = copy_classified_data(root_id, _period, _name, add_log)
+                        from modules.master_sheet import get_recorded_value
+                        # Double check：確認起始列和筆數與 ③ 一致
+                        key = f"start_row_{_period}_{_name}"
+                        start_row = st.session_state.get(key)
+                        try:
+                            recorded_start = get_recorded_value(_name, _period, "金流-訂單起始列")
+                            recorded_count = get_recorded_value(_name, _period, "金流-複製期別訂單")
+                            if recorded_start:
+                                recorded_start = int(recorded_start)
+                            if recorded_count:
+                                recorded_count = int(recorded_count)
+                            if start_row and recorded_start and start_row != recorded_start:
+                                add_log(f"⚠️ Double check：起始列不一致 session={start_row}，打卡表={recorded_start}，使用打卡表", "warning")
+                                start_row = recorded_start
+                            elif not start_row and recorded_start:
+                                start_row = recorded_start
+                                add_log(f"🔵 從打卡表讀取起始列：{start_row}")
+                            if start_row and recorded_count:
+                                add_log(f"🔵 Double check：起始列={start_row}，③筆數={recorded_count} ✅")
+                        except Exception as e:
+                            add_log(f"⚠️ Double check 失敗：{e}", "warning")
+
+                        counts = copy_classified_data(root_id, _period, _name, start_row, add_log)
                         add_log("分類搬運完成", "success")
                         for k, v in counts.items():
                             if v > 0:
                                 add_log(f"　{k}：{v} 筆")
-                        # 打卡各類別
                         task_map = {
                             "清潔": "金流-複製清潔訂單",
                             "水洗": "金流-複製水洗訂單",
