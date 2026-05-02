@@ -246,11 +246,11 @@ if run_clicked:
                         file_ids = result.get("fileIds", {})
                         folder_id_val = result.get("folderId", None)
                         record_batch(_name, _period, [
-                            {"task_key": "金流-手動期別資料夾",   "count": folder_id_val},
-                            {"task_key": "金流-手動期別金流對帳", "count": file_ids.get("金流對帳")},
-                            {"task_key": "金流-手動期別清潔承攬", "count": file_ids.get("清潔承攬")},
-                            {"task_key": "金流-手動期別其他承攬", "count": file_ids.get("其他承攬")},
-                            {"task_key": "金流-手動期別元大帳戶", "count": file_ids.get("元大帳戶")},
+                            {"task_key": "手動期別資料夾",   "count": folder_id_val},
+                            {"task_key": "手動期別金流對帳", "count": file_ids.get("金流對帳")},
+                            {"task_key": "手動期別清潔承攬", "count": file_ids.get("清潔承攬")},
+                            {"task_key": "手動期別其他承攬", "count": file_ids.get("其他承攬")},
+                            {"task_key": "手動期別元大帳戶", "count": file_ids.get("元大帳戶")},
                         ])
 
                     elif "② 期別訂單轉檔" in _func:
@@ -258,7 +258,7 @@ if run_clicked:
                         result = convert_order_file(root_id, _period, _name, add_log)
                         add_log("期別訂單轉檔完成", "success")
                         # 打卡：記錄轉檔後的 Google Sheet ID
-                        record_execution(_name, _period, "金流-期別訂單轉檔", result.get("fileId"))
+                        record_execution(_name, _period, "期別訂單轉檔", result.get("fileId"))
 
                     elif "③ 訂單搬運" in _func:
                         from modules.payment_reconciliation import copy_orders_to_template
@@ -271,8 +271,8 @@ if run_clicked:
                         st.session_state[key] = start_row
                         # 打卡
                         record_batch(_name, _period, [
-                            {"task_key": "金流-訂單起始列",   "count": start_row},
-                            {"task_key": "金流-複製期別訂單", "count": count},
+                            {"task_key": "訂單起始列",   "count": start_row},
+                            {"task_key": "複製期別訂單", "count": count},
                         ])
 
                     elif "④ 範本加工" in _func:
@@ -283,7 +283,7 @@ if run_clicked:
                         # Double check：和打卡表比對
                         try:
                             from modules.master_sheet import get_recorded_value
-                            recorded_start = get_recorded_value(_name, _period, "金流-訂單起始列")
+                            recorded_start = get_recorded_value(_name, _period, "訂單起始列")
                             if recorded_start and start_row and int(recorded_start) != int(start_row):
                                 add_log(f"⚠️ Double check 不一致：session={start_row}，打卡表={recorded_start}，使用打卡表的值", "warning")
                                 start_row = int(recorded_start)
@@ -297,17 +297,23 @@ if run_clicked:
                         sort_count = result['sort_count']
                         mark_count = result['mark_count']
                         expand_count = result['expand_count']
+                        category_counts = result.get('category_counts', {})
                         add_log(
                             f"加工完成：排序 {sort_count} 筆，"
                             f"異常 {mark_count} 筆，"
                             f"拆解新增 {expand_count} 列",
                             "success"
                         )
+                        if category_counts:
+                            for cat, cnt in category_counts.items():
+                                add_log(f"　{cat}：拆解後 {cnt} 列")
                         for w in result.get("warnings", []):
                             add_log(w, "warning")
+                        # 存 category_counts 供 ⑤ 分類搬運使用
+                        st.session_state[f"category_counts_{_period}_{_name}"] = category_counts
                         record_batch(_name, _period, [
-                            {"task_key": "金流-加工-排序",           "count": sort_count},
-                            {"task_key": "金流-加工-K欄標註異常標橘底", "count": mark_count},
+                            {"task_key": "加工-排序",           "count": sort_count},
+                            {"task_key": "加工-K欄標註異常標橘底", "count": mark_count},
                         ])
 
                     elif "⑤ 分類搬運" in _func:
@@ -316,9 +322,11 @@ if run_clicked:
                         # Double check：確認起始列和筆數與 ③ 一致
                         key = f"start_row_{_period}_{_name}"
                         start_row = st.session_state.get(key)
+                        # 取得 ④ 加工記錄的各類別拆解後列數
+                        category_counts = st.session_state.get(f"category_counts_{_period}_{_name}", {})
                         try:
-                            recorded_start = get_recorded_value(_name, _period, "金流-訂單起始列")
-                            recorded_count = get_recorded_value(_name, _period, "金流-複製期別訂單")
+                            recorded_start = get_recorded_value(_name, _period, "訂單起始列")
+                            recorded_count = get_recorded_value(_name, _period, "複製期別訂單")
                             if recorded_start:
                                 recorded_start = int(recorded_start)
                             if recorded_count:
@@ -334,18 +342,18 @@ if run_clicked:
                         except Exception as e:
                             add_log(f"⚠️ Double check 失敗：{e}", "warning")
 
-                        counts = copy_classified_data(root_id, _period, _name, start_row, add_log)
+                        counts = copy_classified_data(root_id, _period, _name, start_row, category_counts, add_log)
                         add_log("分類搬運完成", "success")
                         for k, v in counts.items():
                             if v > 0:
                                 add_log(f"　{k}：{v} 筆")
                         task_map = {
-                            "清潔": "金流-複製清潔訂單",
-                            "水洗": "金流-複製水洗訂單",
-                            "家電": "金流-複製家電訂單",
-                            "收納": "金流-複製收納訂單",
-                            "座椅": "金流-複製座椅訂單",
-                            "地毯": "金流-複製地毯訂單",
+                            "清潔": "複製清潔訂單",
+                            "水洗": "複製水洗訂單",
+                            "家電": "複製家電訂單",
+                            "收納": "複製收納訂單",
+                            "座椅": "複製座椅訂單",
+                            "地毯": "複製地毯訂單",
                         }
                         batch = []
                         for label, task_key in task_map.items():
@@ -359,12 +367,12 @@ if run_clicked:
                         add_log("金流對帳轉檔完成", "success")
                         file_ids = result.get("fileIds", {})
                         record_batch(_name, _period, [
-                            {"task_key": "金流-期別發票轉檔",         "count": file_ids.get("發票")},
-                            {"task_key": "金流-期別已退款全部加收轉檔", "count": file_ids.get("已退款全部加收")},
-                            {"task_key": "金流-期別已退款全部退款轉檔", "count": file_ids.get("已退款全部退款")},
-                            {"task_key": "金流-期別預收轉檔",          "count": file_ids.get("預收")},
-                            {"task_key": "金流-期別藍新收款轉檔",      "count": file_ids.get("藍新收款")},
-                            {"task_key": "金流-期別藍新退款轉檔",      "count": file_ids.get("藍新退款")},
+                            {"task_key": "期別發票轉檔",         "count": file_ids.get("發票")},
+                            {"task_key": "期別已退款全部加收轉檔", "count": file_ids.get("已退款全部加收")},
+                            {"task_key": "期別已退款全部退款轉檔", "count": file_ids.get("已退款全部退款")},
+                            {"task_key": "期別預收轉檔",          "count": file_ids.get("預收")},
+                            {"task_key": "期別藍新收款轉檔",      "count": file_ids.get("藍新收款")},
+                            {"task_key": "期別藍新退款轉檔",      "count": file_ids.get("藍新退款")},
                         ])
 
                     elif "⑦ 搬運退款" in _func:
@@ -374,9 +382,9 @@ if run_clicked:
                         for k, v in counts.items():
                             add_log(f"　{k}：{v} 筆")
                         record_batch(_name, _period, [
-                            {"task_key": "金流-複製已退款全部加收", "count": counts.get("已退款全部加收")},
-                            {"task_key": "金流-複製已退款全部退款", "count": counts.get("已退款全部退款")},
-                            {"task_key": "金流-複製預收",           "count": counts.get("預收")},
+                            {"task_key": "複製已退款全部加收", "count": counts.get("已退款全部加收")},
+                            {"task_key": "複製已退款全部退款", "count": counts.get("已退款全部退款")},
+                            {"task_key": "複製預收",           "count": counts.get("預收")},
                         ])
 
                     elif "⑧ 搬運發票" in _func:
@@ -387,9 +395,9 @@ if run_clicked:
                             if v > 0:
                                 add_log(f"　{k}：{v} 筆")
                         record_batch(_name, _period, [
-                            {"task_key": "金流-複製發票",     "count": counts.get("發票")},
-                            {"task_key": "金流-複製藍新收款", "count": counts.get("藍新收款")},
-                            {"task_key": "金流-複製藍新退款", "count": counts.get("藍新退款")},
+                            {"task_key": "複製發票",     "count": counts.get("發票")},
+                            {"task_key": "複製藍新收款", "count": counts.get("藍新收款")},
+                            {"task_key": "複製藍新退款", "count": counts.get("藍新退款")},
                         ])
 
                 else:
