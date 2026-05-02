@@ -151,13 +151,13 @@ with c2:
 function_map = {
     "💰 金流對帳": [
         "① 建立期別資料夾與檔案",
-        "② 期別訂單轉檔（xlsx → Google Sheet）",
-        "② 金流對帳轉檔（已退款/預收/發票/藍新）",
+        "② 期別訂單轉檔（xls/xlsx → Google Sheet）",
         "③ 訂單搬運到範本",
         "④ 範本加工",
         "⑤ 分類搬運",
-        "⑥ 搬運退款＋預收",
-        "⑦ 搬運發票＋藍新",
+        "⑥ 金流對帳轉檔（zip/csv/xlsx → Google Sheet）",
+        "⑦ 搬運退款＋預收",
+        "⑧ 搬運發票＋藍新",
     ],
     "🧹 清潔承攬": [
         "薪資表整理", "00調薪", "01專員請款", "02儲值金",
@@ -252,16 +252,10 @@ if st.session_state.pending_run:
                         result = create_period(root_id, _period, _name, add_log)
                         add_log(f"建立完成，共複製 {result.get('copied', 0)} 個檔案", "success")
 
-                    elif "期別訂單轉檔" in _func:
+                    elif "② 期別訂單轉檔" in _func:
                         from modules.payment_reconciliation import convert_order_file
-                        convert_order_file(root_id, _period, _name, add_log)
+                        result = convert_order_file(root_id, _period, _name, add_log)
                         add_log("期別訂單轉檔完成", "success")
-
-                    elif "金流對帳轉檔" in _func:
-                        from modules.payment_reconciliation import convert_payment_file
-                        result = convert_payment_file(root_id, _period, _name, add_log)
-                        ok = len([v for v in result.values() if v])
-                        add_log(f"金流對帳轉檔完成，共 {ok} 個檔案", "success")
 
                     elif "③ 訂單搬運" in _func:
                         from modules.payment_reconciliation import copy_orders_to_template
@@ -288,14 +282,19 @@ if st.session_state.pending_run:
                             if v > 0:
                                 add_log(f"　{k}：{v} 筆")
 
-                    elif "⑥ 搬運退款" in _func:
+                    elif "⑥ 金流對帳轉檔" in _func:
+                        from modules.payment_reconciliation import convert_payment_file
+                        result = convert_payment_file(root_id, _period, _name, add_log)
+                        add_log("金流對帳轉檔完成", "success")
+
+                    elif "⑦ 搬運退款" in _func:
                         from modules.payment_reconciliation import move_refund_and_prepaid
                         counts = move_refund_and_prepaid(root_id, _period, _name, add_log)
                         add_log("退款＋預收搬運完成", "success")
                         for k, v in counts.items():
                             add_log(f"　{k}：{v} 筆")
 
-                    elif "⑦ 搬運發票" in _func:
+                    elif "⑧ 搬運發票" in _func:
                         from modules.payment_reconciliation import move_invoice_and_bluenew
                         counts = move_invoice_and_bluenew(root_id, _period, _name, add_log)
                         add_log("發票＋藍新搬運完成", "success")
