@@ -78,13 +78,15 @@ def save_config(cfg):
     st.cache_data.clear()
 
 config = load_config()
-regions = config.get("regions", {})
+
+# regions 統一用 list 格式
+regions = config.get("regions", [])
 
 # Session state
 if "logs" not in st.session_state:
     st.session_state.logs = ["[--:--:--] 系統已就緒，請選擇作業..."]
 if "editing_region" not in st.session_state:
-    st.session_state.editing_region = None
+    st.session_state.editing_region = None  # 存放正在編輯的 name
 if "adding_region" not in st.session_state:
     st.session_state.adding_region = False
 
@@ -111,8 +113,7 @@ st.markdown('<div class="card"><div class="card-title">⚙️ 執行設定</div>
 c1, c2 = st.columns(2)
 with c1:
     st.markdown('<div class="field-label">📆 執行期別</div>', unsafe_allow_html=True)
-    auto_period = get_auto_period()
-    period = st.text_input("期別", value=auto_period, label_visibility="collapsed", key="period")
+    period = st.text_input("期別", value=get_auto_period(), label_visibility="collapsed", key="period")
 
 with c2:
     st.markdown('<div class="field-label">🗂️ 執行系統</div>', unsafe_allow_html=True)
@@ -150,17 +151,15 @@ selected_function = st.selectbox(
 
 c3, c4 = st.columns([2, 1])
 with c3:
-    st.markdown('<div class="field-label">🗺️ 執行區域</div>', unsafe_allow_html=True)
-    region_names = {v["name"]: k for k, v in regions.items()}
+    st.markdown('<div class="field-label">🗺️ 執行地區</div>', unsafe_allow_html=True)
+    region_names = [r["name"] for r in regions]
     if region_names:
         selected_name = st.selectbox(
-            "區域", list(region_names.keys()),
-            label_visibility="collapsed", key="region"
+            "地區", region_names, label_visibility="collapsed", key="region"
         )
-        selected_key = region_names[selected_name]
-        selected_region = regions[selected_key]
+        selected_region = next((r for r in regions if r["name"] == selected_name), {})
     else:
-        st.caption("尚未設定任何區域")
+        st.caption("尚未設定任何地區")
         selected_name = None
         selected_region = {}
 
@@ -178,7 +177,7 @@ if run:
     if not period:
         add_log("請先輸入期別", "error")
     elif not selected_name:
-        add_log("請先新增區域設定", "error")
+        add_log("請先新增地區設定", "error")
     else:
         root_id = selected_region.get("root_folder_id", "")
         if not root_id:
@@ -189,20 +188,18 @@ if run:
 
             with st.spinner("執行中..."):
                 try:
-                    # ── 金流對帳 ──
                     if system == "💰 金流對帳":
 
                         if "① 建立期別" in selected_function:
                             from modules.payment_reconciliation import create_period
                             result = create_period(root_id, period, selected_name)
-                            add_log(f"建立完成，共 {len([v for v in result.values() if v])} 個檔案", "success")
+                            ok = len([v for v in result.values() if v and v != result.get("period_folder_id")])
+                            add_log(f"建立完成，共 {ok} 個檔案", "success")
 
                         elif "② 期別訂單轉檔" in selected_function:
                             from modules.payment_reconciliation import convert_period_orders
                             result = convert_period_orders(root_id, period, selected_name)
                             add_log(f"轉檔完成，共 {len(result)} 個檔案", "success")
-                            for name in result:
-                                add_log(f"　{name}")
 
                         elif "③ 訂單搬運" in selected_function:
                             from modules.payment_reconciliation import copy_orders_to_template
@@ -242,7 +239,6 @@ if run:
                                 if v > 0:
                                     add_log(f"　{k}：{v} 筆")
 
-                    # ── 清潔承攬 / 其他承攬（後續加入）──
                     else:
                         add_log(f"{system} {selected_function} 開發中", "warning")
 
@@ -280,16 +276,15 @@ with sc1:
         label_visibility="collapsed", key="sched_days"
     )
 with sc2:
-    st.markdown('<div class="field-label">🕘 執行時間（台北時區）</div>', unsafe_allow_html=True)
+    st.markdown('<div class="field-label">🕘 執行時間（台北時區 HH:MM）</div>', unsafe_allow_html=True)
     sched_time = st.text_input(
         "時間", value=schedule.get("time", "09:00"),
-        label_visibility="collapsed", key="sched_time",
-        placeholder="09:00"
+        label_visibility="collapsed", key="sched_time"
     )
 
 sc3, sc4 = st.columns(2)
 with sc3:
-    sched_all = st.checkbox("套用全部區域", value=schedule.get("all_regions", True))
+    sched_all = st.checkbox("套用全部地區", value=schedule.get("all_regions", True))
 with sc4:
     sched_enabled = st.checkbox("啟用排程", value=schedule.get("enabled", False))
 
@@ -316,26 +311,32 @@ st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════
-# 區域設定
+# 地區設定
 # ═══════════════════════════════════════
-st.markdown('<div class="card"><div class="card-title">⚙️ 區域設定</div>', unsafe_allow_html=True)
+st.markdown('<div class="card"><div class="card-title">⚙️ 地區設定</div>', unsafe_allow_html=True)
+
+REGION_FIELDS = [
+    ("root_folder_id", "根目錄 ID"),
+    ("allowance_id",   "請款 ID"),
+    ("salary_id",      "薪資 ID"),
+    ("roster_id",      "名冊 ID"),
+]
 
 col_hdr, col_add = st.columns([3, 1])
 with col_add:
-    if st.button("➕ 新增區域", use_container_width=True):
+    if st.button("➕ 新增地區", use_container_width=True):
         st.session_state.adding_region = True
         st.session_state.editing_region = None
 
-# 新增區域表單
+# ── 新增表單 ──
 if st.session_state.adding_region:
     with st.form("add_region_form"):
-        st.markdown("**新增區域**")
-        fc1, fc2 = st.columns(2)
-        with fc1:
-            new_key = st.text_input("區域代碼（英文）", placeholder="taipei")
-            new_name = st.text_input("區域名稱", placeholder="台北")
-        with fc2:
-            new_root = st.text_input("根目錄 ID（Drive 資料夾）")
+        st.markdown("**新增地區**")
+        new_name = st.text_input("地區名稱", placeholder="台北")
+        new_root = st.text_input("根目錄 ID")
+        new_allowance = st.text_input("請款 ID")
+        new_salary = st.text_input("薪資 ID")
+        new_roster = st.text_input("名冊 ID")
 
         s1, s2 = st.columns(2)
         with s1:
@@ -344,15 +345,19 @@ if st.session_state.adding_region:
             cancelled = st.form_submit_button("✕ 取消", use_container_width=True)
 
         if submitted:
-            if not new_key or not new_name or not new_root:
-                st.error("區域代碼、名稱、根目錄 ID 為必填")
+            if not new_name or not new_root:
+                st.error("地區名稱和根目錄 ID 為必填")
             else:
-                config["regions"][new_key] = {
+                regions.append({
                     "name": new_name,
                     "root_folder_id": new_root,
-                }
+                    "allowance_id": new_allowance,
+                    "salary_id": new_salary,
+                    "roster_id": new_roster,
+                })
+                config["regions"] = regions
                 save_config(config)
-                add_log(f"新增區域：{new_name}", "success")
+                add_log(f"新增地區：{new_name}", "success")
                 st.session_state.adding_region = False
                 st.rerun()
 
@@ -360,17 +365,21 @@ if st.session_state.adding_region:
             st.session_state.adding_region = False
             st.rerun()
 
-# 現有區域列表
-for key, region in list(regions.items()):
-    name = region.get("name", key)
-    root = region.get("root_folder_id", "")
-    badge = '<span class="badge-ok">已設定</span>' if root else '<span class="badge-err">未設定根目錄</span>'
+# ── 現有地區列表 ──
+for i, region in enumerate(regions):
+    name = region.get("name", f"地區{i+1}")
+    all_set = all(region.get(f) for f, _ in REGION_FIELDS)
+    badge = '<span class="badge-ok">已設定</span>' if all_set else '<span class="badge-err">未完整</span>'
 
-    if st.session_state.editing_region == key:
-        with st.form(f"edit_{key}"):
+    if st.session_state.editing_region == name:
+        with st.form(f"edit_{name}_{i}"):
             st.markdown(f"**編輯：{name}**")
-            e_name = st.text_input("區域名稱", value=name)
-            e_root = st.text_input("根目錄 ID", value=root)
+            e_name = st.text_input("地區名稱", value=name)
+            e_root = st.text_input("根目錄 ID", value=region.get("root_folder_id", ""))
+            e_allowance = st.text_input("請款 ID", value=region.get("allowance_id", ""))
+            e_salary = st.text_input("薪資 ID", value=region.get("salary_id", ""))
+            e_roster = st.text_input("名冊 ID", value=region.get("roster_id", ""))
+
             es1, es2 = st.columns(2)
             with es1:
                 save_edit = st.form_submit_button("💾 儲存", use_container_width=True)
@@ -378,36 +387,52 @@ for key, region in list(regions.items()):
                 cancel_edit = st.form_submit_button("✕ 取消", use_container_width=True)
 
             if save_edit:
-                config["regions"][key] = {"name": e_name, "root_folder_id": e_root}
+                regions[i] = {
+                    "name": e_name,
+                    "root_folder_id": e_root,
+                    "allowance_id": e_allowance,
+                    "salary_id": e_salary,
+                    "roster_id": e_roster,
+                }
+                config["regions"] = regions
                 save_config(config)
-                add_log(f"更新區域：{e_name}", "success")
+                add_log(f"更新地區：{e_name}", "success")
                 st.session_state.editing_region = None
                 st.rerun()
+
             if cancel_edit:
                 st.session_state.editing_region = None
                 st.rerun()
+
     else:
-        short_root = root[:25] + "..." if len(root) > 25 else root
+        detail_html = ""
+        for field, label in REGION_FIELDS:
+            val = region.get(field, "")
+            status = "✅" if val else "❌ 未設定"
+            short = val[:22] + "..." if len(val) > 22 else val
+            detail_html += f'<div class="detail-row"><strong>{label}</strong>：{status} {short}</div>'
+
         st.markdown(f"""
         <div class="region-card">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
             <strong style="color:#0a4b6e;">🏷️ {name}</strong>{badge}
           </div>
-          <div class="detail-row">根目錄：{"✅ " + short_root if root else "❌ 未設定"}</div>
+          {detail_html}
         </div>
         """, unsafe_allow_html=True)
 
         rc1, rc2, rc3 = st.columns([3, 1, 1])
         with rc2:
-            if st.button("📝 編輯", key=f"edit_btn_{key}", use_container_width=True):
-                st.session_state.editing_region = key
+            if st.button("📝 編輯", key=f"edit_{i}", use_container_width=True):
+                st.session_state.editing_region = name
                 st.session_state.adding_region = False
                 st.rerun()
         with rc3:
-            if st.button("🗑️ 刪除", key=f"del_btn_{key}", use_container_width=True):
-                del config["regions"][key]
+            if st.button("🗑️ 刪除", key=f"del_{i}", use_container_width=True):
+                regions.pop(i)
+                config["regions"] = regions
                 save_config(config)
-                add_log(f"刪除區域：{name}", "warning")
+                add_log(f"刪除地區：{name}", "warning")
                 st.rerun()
 
 st.markdown('</div>', unsafe_allow_html=True)
