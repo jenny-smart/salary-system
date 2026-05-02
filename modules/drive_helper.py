@@ -177,23 +177,30 @@ def convert_to_google_sheet(drive, folder_id: str, source_file_id: str, new_name
             fileId=f["id"], body={"trashed": True}, supportsAllDrives=True
         ).execute()
 
-    content = drive.files().get_media(fileId=source_file_id).execute()
+    try:
+        content = drive.files().get_media(fileId=source_file_id).execute()
+    except Exception as e:
+        raise Exception(f"下載原始檔案失敗：{_http_error_detail(e)}")
+
     file_meta = drive.files().get(
         fileId=source_file_id, fields="mimeType", supportsAllDrives=True
     ).execute()
     src_mime = file_meta.get("mimeType", "application/octet-stream")
 
     media = MediaIoBaseUpload(io.BytesIO(content), mimetype=src_mime)
-    converted = drive.files().create(
-        body={
-            "name": new_name,
-            "mimeType": GOOGLE_SHEET_MIME,
-            "parents": [folder_id],
-        },
-        media_body=media,
-        fields="id",
-        supportsAllDrives=True
-    ).execute()
+    try:
+        converted = drive.files().create(
+            body={
+                "name": new_name,
+                "mimeType": GOOGLE_SHEET_MIME,
+                "parents": [folder_id],
+            },
+            media_body=media,
+            fields="id",
+            supportsAllDrives=True
+        ).execute()
+    except Exception as e:
+        raise Exception(f"上傳轉換失敗：{_http_error_detail(e)}")
 
     return converted["id"]
 
