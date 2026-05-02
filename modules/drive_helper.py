@@ -12,12 +12,14 @@ from modules.period_utils import get_file_name, PERIOD_FILE_LABELS
 GOOGLE_SHEET_MIME = "application/vnd.google-apps.spreadsheet"
 FOLDER_MIME = "application/vnd.google-apps.folder"
 
-# 所有 Drive API list/get/copy 都需要這兩個參數
-# 才能存取非 Service Account 擁有但已分享的檔案
+# list() 用這兩個參數才能找到非 Service Account 擁有但已分享的檔案
 DRIVE_PARAMS = {
     "includeItemsFromAllDrives": True,
     "supportsAllDrives": True,
 }
+
+# 複製後把擁有者轉移給這個帳號，避免 Service Account 空間不足
+OWNER_EMAIL = "jenny@lemonclean.com.tw"
 
 
 # ═══════════════════════════════════════
@@ -54,7 +56,7 @@ def get_or_create_folder(drive, parent_id: str, name: str) -> str:
     created = drive.files().create(
         body=meta,
         fields="id",
-        **DRIVE_PARAMS
+        supportsAllDrives=True
     ).execute()
     return created["id"]
 
@@ -122,27 +124,48 @@ def trash_files_by_name(drive, folder_id: str, name: str):
         drive.files().update(
             fileId=f["id"],
             body={"trashed": True},
-            **DRIVE_PARAMS
+            supportsAllDrives=True
         ).execute()
 
 
 # ═══════════════════════════════════════
-# 複製檔案
+# 複製檔案（複製後轉移擁有者）
 # ═══════════════════════════════════════
 
 def copy_file_to_folder(drive, source_file_id: str, dest_folder_id: str, new_name: str) -> str:
+    """
+    複製檔案到目標資料夾，蓋掉同名舊檔
+    複製後把擁有者轉移給 OWNER_EMAIL，避免 Service Account 空間不足
+    回傳新檔 ID
+    """
     trash_files_by_name(drive, dest_folder_id, new_name)
+
+    # 複製檔案
+    copied = drive.files().copy(
+        fileId=source_file_id,
+        body={"name": new_name, "parents": [dest_folder_id]},
+        supportsAllDrives=True
+    ).execute()
+
+    new_file_id = copied["id"]
+
+    # 把擁有者轉移給公司帳號，這樣空間算在公司帳號不算在 Service Account
     try:
-        copied = drive.files().copy(
-            fileId=source_file_id,
-            body={"name": new_name, "parents": [dest_folder_id]},
+        drive.permissions().create(
+            fileId=new_file_id,
+            body={
+                "type": "user",
+                "role": "owner",
+                "emailAddress": OWNER_EMAIL,
+            },
+            transferOwnership=True,
             supportsAllDrives=True
         ).execute()
-        return copied["id"]
-    except Exception as e:
-        import traceback
-        tb = traceback.format_exc()
-        raise Exception(f"複製失敗詳情：{type(e).__name__}: {e.args} \n{tb}")
+    except Exception:
+        # 轉移擁有者失敗不影響主流程，繼續執行
+        pass
+
+    return new_file_id
 
 
 # ═══════════════════════════════════════
@@ -167,7 +190,7 @@ def convert_to_google_sheet(drive, folder_id: str, source_file_id: str, new_name
         drive.files().update(
             fileId=f["id"],
             body={"trashed": True},
-            **DRIVE_PARAMS
+            supportsAllDrives=True
         ).execute()
 
     # 下載原始內容
@@ -177,7 +200,7 @@ def convert_to_google_sheet(drive, folder_id: str, source_file_id: str, new_name
     file_meta = drive.files().get(
         fileId=source_file_id,
         fields="mimeType",
-        **DRIVE_PARAMS
+        supportsAllDrives=True
     ).execute()
     src_mime = file_meta.get("mimeType", "application/octet-stream")
 
@@ -191,7 +214,7 @@ def convert_to_google_sheet(drive, folder_id: str, source_file_id: str, new_name
         },
         media_body=media,
         fields="id",
-        **DRIVE_PARAMS
+        supportsAllDrives=True
     ).execute()
 
     return converted["id"]
@@ -220,17 +243,22 @@ def create_period_folder_and_files(
     previous_period = get_previous_period(period)
     results = {}
 
-    # 建立期別資料夾
+    # 建立或確認期別資料夾
     log(f"🔍 建立期別資料夾：{period}")
-    period_folder_id = get_or_create_folder(drive, root_folder_id, period)
+    existing = get_folder_by_name(drive, root_folder_id, period)
+    if existing:
+        period_folder_id = existing["id"]
+        log(f"📁 {period} 已存在，繼續執行")
+    else:
+        period_folder_id = get_or_create_folder(drive, root_folder_id, period)
+        log(f"✅ 期別資料夾已建立：{period}")
+
     results["period_folder_id"] = period_folder_id
-    log(f"✅ 期別資料夾已建立：{period}")
 
     # 找上一期資料夾
     log(f"🔍 尋找上一期資料夾：{previous_period}")
     prev_folder = get_folder_by_name(drive, root_folder_id, previous_period)
     if not prev_folder:
-        # 列出根目錄下所有資料夾幫助診斷
         found = list_folder_names(drive, root_folder_id)
         raise Exception(f"找不到上一期資料夾：{previous_period}，根目錄下找到：{found}")
 
@@ -241,6 +269,13 @@ def create_period_folder_and_files(
     for label in PERIOD_FILE_LABELS:
         old_name = get_file_name(previous_period, label, region_name)
         new_name = get_file_name(period, label, region_name)
+
+        # 檢查目標資料夾是否已有此檔案
+        existing_file = find_file_in_folder(drive, period_folder_id, new_name)
+        if existing_file:
+            log(f"📄 {label} 已存在：{new_name}")
+            results[label] = existing_file["id"]
+            continue
 
         log(f"🔍 尋找：{old_name}")
         src = find_file_in_folder(drive, prev_folder_id, old_name)
@@ -283,7 +318,7 @@ def convert_period_order_file(
     log(f"🔍 尋找期別資料夾：{period}")
     period_folder = get_folder_by_name(drive, root_folder_id, period)
     if not period_folder:
-        raise Exception(f"找不到期別資料夾：{period}")
+        raise Exception(f"找不到期別資料夾：{period}，請先執行「建立期別資料夾」")
 
     folder_id = period_folder["id"]
     log(f"✅ 找到期別資料夾：{period}")
@@ -292,7 +327,7 @@ def convert_period_order_file(
     log(f"🔍 尋找訂單檔案：{xlsx_name}")
     src = find_file_in_folder(drive, folder_id, xlsx_name)
     if not src:
-        raise Exception(f"找不到訂單檔案：{xlsx_name}")
+        raise Exception(f"找不到訂單檔案：{xlsx_name}，請確認檔案已上傳到 {period} 資料夾")
 
     log(f"🔄 轉檔中：{xlsx_name}")
     sheet_name = f"{period}訂單-{region_name}"
@@ -391,7 +426,7 @@ def _unzip_and_convert(
                 body={"name": out_name_with_ext, "parents": [folder_id]},
                 media_body=media,
                 fields="id",
-                **DRIVE_PARAMS
+                supportsAllDrives=True
             ).execute()
 
             new_id = convert_to_google_sheet(drive, folder_id, uploaded["id"], out_base)
