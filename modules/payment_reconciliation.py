@@ -72,7 +72,7 @@ def _find_sheet_by_keyword(folder_id: str, keyword: str) -> str | None:
 # ① 建立期別資料夾與檔案（透過 GAS Web App）
 # ═══════════════════════════════════════
 
-GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyEHGGY38JnD1d21vJeVSAsOFIK1b12AEthaiM8onr8hEWJzkbbItNGhZYYfj3jNBiP/exec"
+GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxD1ek5H5uLT2HgGUZzgoPqy6xDrF03Dqc1LXMeUQpDfACdoLCn4WGhx3p_ufbkxIa4/exec"
 
 
 def _call_gas(action: str, root_folder_id: str, period: str, region_name: str, log_fn=None) -> dict:
