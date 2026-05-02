@@ -78,15 +78,12 @@ def save_config(cfg):
     st.cache_data.clear()
 
 config = load_config()
-
-# regions 統一用 list 格式
 regions = config.get("regions", [])
 
-# Session state
 if "logs" not in st.session_state:
     st.session_state.logs = ["[--:--:--] 系統已就緒，請選擇作業..."]
 if "editing_region" not in st.session_state:
-    st.session_state.editing_region = None  # 存放正在編輯的 name
+    st.session_state.editing_region = None
 if "adding_region" not in st.session_state:
     st.session_state.adding_region = False
 
@@ -95,8 +92,8 @@ def add_log(message: str, level: str = "info"):
     icons = {"info": "🔵", "success": "✅", "error": "❌", "warning": "⚠️"}
     icon = icons.get(level, "🔵")
     st.session_state.logs.append(f"[{now}] {icon} {message}")
-    if len(st.session_state.logs) > 100:
-        st.session_state.logs = st.session_state.logs[-100:]
+    if len(st.session_state.logs) > 200:
+        st.session_state.logs = st.session_state.logs[-200:]
 
 
 # ═══════════════════════════════════════
@@ -126,7 +123,8 @@ with c2:
 function_map = {
     "💰 金流對帳": [
         "① 建立期別資料夾與檔案",
-        "② 期別訂單轉檔",
+        "② 期別訂單轉檔（xlsx → Google Sheet）",
+        "② 金流對帳轉檔（已退款/預收/發票/藍新）",
         "③ 訂單搬運到範本",
         "④ 範本加工",
         "⑤ 分類搬運",
@@ -186,39 +184,58 @@ if run:
             half = "上半月" if is_first_half(period) else "下半月"
             add_log(f"執行【{selected_name}】{half} {selected_function}，期別：{period}")
 
-            with st.spinner("執行中..."):
+            # log_fn：執行中即時寫入日誌
+            def log_fn(msg):
+                add_log(msg)
+
+            with st.status(f"執行中：{selected_function}", expanded=True) as status:
                 try:
                     if system == "💰 金流對帳":
 
                         if "① 建立期別" in selected_function:
                             from modules.payment_reconciliation import create_period
-                            result = create_period(root_id, period, selected_name)
+                            st.write(f"📁 建立期別資料夾：{period}")
+                            result = create_period(root_id, period, selected_name, log_fn)
                             ok = len([v for v in result.values() if v and v != result.get("period_folder_id")])
                             add_log(f"建立完成，共 {ok} 個檔案", "success")
 
-                        elif "② 期別訂單轉檔" in selected_function:
-                            from modules.payment_reconciliation import convert_period_orders
-                            result = convert_period_orders(root_id, period, selected_name)
-                            add_log(f"轉檔完成，共 {len(result)} 個檔案", "success")
+                        elif "期別訂單轉檔" in selected_function:
+                            from modules.payment_reconciliation import convert_order_file
+                            st.write(f"🔄 轉換：{period}訂單-{selected_name}.xlsx")
+                            convert_order_file(root_id, period, selected_name, log_fn)
+                            add_log("期別訂單轉檔完成", "success")
+
+                        elif "金流對帳轉檔" in selected_function:
+                            from modules.payment_reconciliation import convert_payment_file
+                            st.write("🔄 轉換金流對帳相關檔案...")
+                            result = convert_payment_file(root_id, period, selected_name, log_fn)
+                            ok = len([v for v in result.values() if v])
+                            add_log(f"金流對帳轉檔完成，共 {ok} 個檔案", "success")
 
                         elif "③ 訂單搬運" in selected_function:
                             from modules.payment_reconciliation import copy_orders_to_template
-                            count = copy_orders_to_template(root_id, period, selected_name)
+                            st.write("📥 搬運訂單資料到範本...")
+                            count = copy_orders_to_template(root_id, period, selected_name, log_fn)
                             add_log(f"搬運完成：{count} 筆", "success")
 
                         elif "④ 範本加工" in selected_function:
                             from modules.payment_reconciliation import process_template
-                            result = process_template(root_id, period, selected_name)
+                            st.write("🔧 範本加工中...")
+                            result = process_template(root_id, period, selected_name, log_fn)
                             add_log(
                                 f"加工完成：排序 {result['sort_count']} 筆，"
                                 f"異常 {result['mark_count']} 筆，"
-                                f"拆解 {result['expand_count']} 筆",
+                                f"拆解新增 {result['expand_count']} 列",
                                 "success"
                             )
+                            if result.get("warnings"):
+                                for w in result["warnings"]:
+                                    add_log(w, "warning")
 
                         elif "⑤ 分類搬運" in selected_function:
                             from modules.payment_reconciliation import copy_classified_data
-                            counts = copy_classified_data(root_id, period, selected_name)
+                            st.write("📂 分類搬運中...")
+                            counts = copy_classified_data(root_id, period, selected_name, log_fn)
                             add_log("分類搬運完成", "success")
                             for k, v in counts.items():
                                 if v > 0:
@@ -226,14 +243,16 @@ if run:
 
                         elif "⑥ 搬運退款" in selected_function:
                             from modules.payment_reconciliation import move_refund_and_prepaid
-                            counts = move_refund_and_prepaid(root_id, period, selected_name)
+                            st.write("↩️ 搬運退款＋預收...")
+                            counts = move_refund_and_prepaid(root_id, period, selected_name, log_fn)
                             add_log("退款＋預收搬運完成", "success")
                             for k, v in counts.items():
                                 add_log(f"　{k}：{v} 筆")
 
                         elif "⑦ 搬運發票" in selected_function:
                             from modules.payment_reconciliation import move_invoice_and_bluenew
-                            counts = move_invoice_and_bluenew(root_id, period, selected_name)
+                            st.write("🧾 搬運發票＋藍新...")
+                            counts = move_invoice_and_bluenew(root_id, period, selected_name, log_fn)
                             add_log("發票＋藍新搬運完成", "success")
                             for k, v in counts.items():
                                 if v > 0:
@@ -242,8 +261,11 @@ if run:
                     else:
                         add_log(f"{system} {selected_function} 開發中", "warning")
 
+                    status.update(label="✅ 執行完成", state="complete")
+
                 except Exception as e:
                     add_log(f"執行失敗：{e}", "error")
+                    status.update(label="❌ 執行失敗", state="error")
 
             st.rerun()
 
@@ -252,7 +274,7 @@ if run:
 # 執行日誌
 # ═══════════════════════════════════════
 log_html = '<div class="log-section"><div class="log-header"><span>📋 執行日誌</span><span style="background:#1e4757;padding:3px 10px;border-radius:20px;font-size:0.75rem;">即時更新</span></div>'
-for entry in reversed(st.session_state.logs[-15:]):
+for entry in reversed(st.session_state.logs[-20:]):
     log_html += f'<div class="log-entry">{entry}</div>'
 log_html += '</div>'
 st.markdown(log_html, unsafe_allow_html=True)
@@ -328,7 +350,6 @@ with col_add:
         st.session_state.adding_region = True
         st.session_state.editing_region = None
 
-# ── 新增表單 ──
 if st.session_state.adding_region:
     with st.form("add_region_form"):
         st.markdown("**新增地區**")
@@ -365,7 +386,6 @@ if st.session_state.adding_region:
             st.session_state.adding_region = False
             st.rerun()
 
-# ── 現有地區列表 ──
 for i, region in enumerate(regions):
     name = region.get("name", f"地區{i+1}")
     all_set = all(region.get(f) for f, _ in REGION_FIELDS)
@@ -403,7 +423,6 @@ for i, region in enumerate(regions):
             if cancel_edit:
                 st.session_state.editing_region = None
                 st.rerun()
-
     else:
         detail_html = ""
         for field, label in REGION_FIELDS:
