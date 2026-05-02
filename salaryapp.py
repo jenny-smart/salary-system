@@ -310,6 +310,8 @@ if st.session_state.pending_run:
                 add_log(f"執行失敗：{e}", "error")
                 add_log(traceback.format_exc(), "error")
 
+    st.rerun()
+
 
 # ═══════════════════════════════════════
 # 排程設定
