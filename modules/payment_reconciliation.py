@@ -282,7 +282,7 @@ def process_template(
 
     # ── 5. F/G 欄拆解 ──
     log("🔵 F/G 欄服務項目拆解中...")
-    expanded_new, expand_count, warnings, category_counts = _expand_fg_rows(df_new)
+    expanded_new, expand_count, warnings, category_counts, new_row_indices = _expand_fg_rows(df_new)
 
     if warnings:
         for w in warnings:
@@ -297,17 +297,18 @@ def process_template(
     if final_data:
         sheet.update("A2", final_data, value_input_option="USER_ENTERED")
 
+    ss_rec = sheet.spreadsheet
+    format_requests = []
+
     # ── K欄有值的列加橘色底 ──
     if mark_count > 0:
         try:
-            orange_bg = {"backgroundColor": {"red": 1.0, "green": 0.6, "blue": 0.2}}
-            requests = []
-            all_values = sheet.get("K2:K")
-            for i, row_val in enumerate(all_values):
+            orange_bg = {"red": 1.0, "green": 0.6, "blue": 0.2}
+            all_k = sheet.get("K2:K")
+            for i, row_val in enumerate(all_k):
                 if row_val and row_val[0].strip():
-                    # 第 i+2 列（1-based），整列 A:BJ
                     row_num = i + 2
-                    requests.append({
+                    format_requests.append({
                         "repeatCell": {
                             "range": {
                                 "sheetId": sheet.id,
@@ -316,16 +317,45 @@ def process_template(
                                 "startColumnIndex": 0,
                                 "endColumnIndex": 62,
                             },
-                            "cell": {"userEnteredFormat": orange_bg},
+                            "cell": {"userEnteredFormat": {"backgroundColor": orange_bg}},
                             "fields": "userEnteredFormat.backgroundColor"
                         }
                     })
-            if requests:
-                ss_rec = sheet.spreadsheet
-                ss_rec.batch_update({"requests": requests})
-                log(f"🔵 橘色標記：{len(requests)} 列")
         except Exception as e:
             log(f"⚠️ 橘色標記失敗：{e}")
+
+    # ── 拆解新增列加淺綠色底 ──
+    if new_row_indices:
+        try:
+            green_bg = {"red": 0.85, "green": 0.96, "blue": 0.85}
+            for new_idx in new_row_indices:
+                # new_idx 是在 expanded_new 中的 0-based index
+                # 在 final_data 中的 index = len(old_rows) + new_idx
+                # 在工作表中的列號 = DATA_START_ROW (=2) + final_index
+                final_idx = len(old_rows) + new_idx
+                row_num = 2 + final_idx  # 工作表行號（1-based，第2行起）
+                format_requests.append({
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": sheet.id,
+                            "startRowIndex": row_num - 1,
+                            "endRowIndex": row_num,
+                            "startColumnIndex": 0,
+                            "endColumnIndex": 62,
+                        },
+                        "cell": {"userEnteredFormat": {"backgroundColor": green_bg}},
+                        "fields": "userEnteredFormat.backgroundColor"
+                    }
+                })
+        except Exception as e:
+            log(f"⚠️ 淺綠色標記失敗：{e}")
+
+    if format_requests:
+        try:
+            ss_rec.batch_update({"requests": format_requests})
+            log(f"🔵 格式標記完成：橘色 {mark_count} 列，淺綠色 {len(new_row_indices)} 列")
+        except Exception as e:
+            log(f"⚠️ 格式標記失敗：{e}")
 
     log(f"✅ 範本加工完成：排序 {sort_count} 筆，異常 {mark_count} 筆，拆解新增 {expand_count} 列")
 
@@ -379,20 +409,21 @@ def _parse_service_items(text: str) -> list[dict]:
     return items
 
 
-def _expand_fg_rows(df: pd.DataFrame) -> tuple[list, int, list, dict]:
+def _expand_fg_rows(df: pd.DataFrame) -> tuple[list, int, list, dict, list]:
     """
     F/G 欄拆解：
     - F欄所有單都拆解（不管單列或多列）
     - 把 F欄的「服務名稱 X N」拆成：F欄=服務名稱，G欄=N
     - F欄有多個服務項目時，拆成多列（主單+子單）
     - 記錄各類別拆解後的列數（供 ⑤ 分類搬運使用）
-    回傳：(輸出資料, 新增列數, warnings, category_counts)
-    category_counts = {"家電": 5, "水洗": 2, ...}
+    - 記錄新增列的 output index（供加淺綠色底使用）
+    回傳：(輸出資料, 新增列數, warnings, category_counts, new_row_indices)
     """
     output = []
     expand_count = 0
     warnings = []
-    category_counts = {}  # 各類別拆解後的列數
+    category_counts = {}
+    new_row_indices = []  # 新增列在 output 中的 0-based index
 
     for idx, row in df.iterrows():
         e_text = str(row[4])
@@ -441,6 +472,7 @@ def _expand_fg_rows(df: pd.DataFrame) -> tuple[list, int, list, dict]:
                 else:
                     new_row[1] = f"{order_id}-{i}"
                     expand_count += 1
+                    new_row_indices.append(len(output))  # 記錄新增列的 index
 
                 if not item["has_qty"]:
                     warnings.append(f"訂單 {order_id} 項目「{item['name']}」：無數量（X後無數字），請確認")
@@ -450,7 +482,7 @@ def _expand_fg_rows(df: pd.DataFrame) -> tuple[list, int, list, dict]:
             if category:
                 category_counts[category] = category_counts.get(category, 0) + len(items)
 
-    return output, expand_count, warnings, category_counts
+    return output, expand_count, warnings, category_counts, new_row_indices
 
 
 # ═══════════════════════════════════════
@@ -506,12 +538,14 @@ def copy_classified_data(
         data = all_data
         log(f"📋 範本共 {len(data)} 筆，開始分類")
 
-    # 分類
+    # 分類（同時記錄原始 index 供底色搬移）
     other_buckets = {k: [] for k in OTHER_CONTRACT_MAP}
+    other_row_indices = {k: [] for k in OTHER_CONTRACT_MAP}
     cleaning_rows = []
+    cleaning_row_indices = []
     unclassified = []
 
-    for row in data:
+    for orig_idx, row in enumerate(data):
         e_text = str(row[4]) if len(row) > 4 else ""
         classified = False
 
@@ -519,6 +553,7 @@ def copy_classified_data(
         for label in OTHER_CONTRACT_MAP:
             if label in e_text:
                 other_buckets[label].append(row)
+                other_row_indices[label].append(orig_idx)
                 classified = True
                 break
 
@@ -526,6 +561,7 @@ def copy_classified_data(
             # 再判斷清潔
             if any(kw in e_text for kw in CLEANING_KEYWORDS):
                 cleaning_rows.append(row)
+                cleaning_row_indices.append(orig_idx)
                 classified = True
 
         if not classified:
@@ -549,36 +585,100 @@ def copy_classified_data(
                 log(f"🔵 Double check [{cat}]：{actual} 列 ✅")
 
     first_half = is_first_half(period)
+    ss_rec = open_spreadsheet(reconciliation_id)
+    template_sheet = ss_rec.worksheet("範本")
     ss_clean = open_spreadsheet(cleaning_id)
     ss_other = open_spreadsheet(other_id)
     counts = {}
 
-    # 先搬其他承攬
+    # 讀取範本的背景色（整列）
+    def _get_row_bg(sheet, row_num: int) -> dict | None:
+        """讀取指定列的背景色"""
+        try:
+            fmt = sheet.get_format(f"A{row_num}")
+            if fmt and isinstance(fmt, list) and fmt[0]:
+                bg = fmt[0].get("effectiveFormat", {}).get("backgroundColor")
+                # 白色或預設不記錄
+                if bg and bg != {"red": 1, "green": 1, "blue": 1, "alpha": 1}:
+                    return bg
+        except Exception:
+            pass
+        return None
+
+    def _apply_bg_to_rows(target_sheet, start_row: int, row_count: int, bg_colors: list):
+        """把背景色套用到目標工作表的指定列"""
+        if not bg_colors:
+            return
+        requests = []
+        for i, bg in enumerate(bg_colors):
+            if bg is None:
+                continue
+            row_num = start_row + i
+            requests.append({
+                "repeatCell": {
+                    "range": {
+                        "sheetId": target_sheet.id,
+                        "startRowIndex": row_num - 1,
+                        "endRowIndex": row_num,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": 62,
+                    },
+                    "cell": {"userEnteredFormat": {"backgroundColor": bg}},
+                    "fields": "userEnteredFormat.backgroundColor"
+                }
+            })
+        if requests:
+            target_sheet.spreadsheet.batch_update({"requests": requests})
+
+    # 先搬其他承攬（帶底色）
     for label, sheet_name in OTHER_CONTRACT_MAP.items():
         rows = other_buckets[label]
+        row_indices = other_row_indices[label]  # 在 data 中的原始 index
         if not rows:
             counts[label] = 0
             continue
         try:
             target = ss_other.worksheet(sheet_name)
-            start_row = get_paste_row(target, first_half)
-            paste_data(target, start_row, rows)
+            paste_start = get_paste_row(target, first_half)
+            paste_data(target, paste_start, rows)
             counts[label] = len(rows)
             log(f"✅ {label}：{len(rows)} 筆 → {sheet_name}")
+
+            # 搬移底色
+            bg_colors = []
+            for orig_idx in row_indices:
+                # orig_idx 是在 data 中的 0-based index
+                # 在工作表中的列號 = template_start_row + orig_idx（若有 start_row）
+                if template_start_row and template_start_row > 2:
+                    sheet_row = template_start_row + orig_idx
+                else:
+                    sheet_row = 2 + orig_idx
+                bg_colors.append(_get_row_bg(template_sheet, sheet_row))
+            _apply_bg_to_rows(target, paste_start, len(rows), bg_colors)
+
         except Exception as e:
             st.warning(f"⚠️ {sheet_name} 寫入失敗：{e}")
             counts[label] = 0
 
-    # 再搬清潔承攬
+    # 再搬清潔承攬（帶底色）
     if cleaning_rows:
         try:
             clean_sheet = ss_clean.worksheet("清潔營收明細")
-            start_row = get_paste_row(clean_sheet, first_half)
-            paste_data(clean_sheet, start_row, cleaning_rows)
+            paste_start = get_paste_row(clean_sheet, first_half)
+            paste_data(clean_sheet, paste_start, cleaning_rows)
             counts["清潔"] = len(cleaning_rows)
             log(f"✅ 清潔：{len(cleaning_rows)} 筆 → 清潔營收明細")
 
-            # 記錄清潔搬運筆數到 session state（供薪資表使用）
+            # 搬移底色
+            bg_colors = []
+            for orig_idx in cleaning_row_indices:
+                if template_start_row and template_start_row > 2:
+                    sheet_row = template_start_row + orig_idx
+                else:
+                    sheet_row = 2 + orig_idx
+                bg_colors.append(_get_row_bg(template_sheet, sheet_row))
+            _apply_bg_to_rows(clean_sheet, paste_start, len(cleaning_rows), bg_colors)
+
             st.session_state[f"cleaning_count_{period}_{region_name}"] = len(cleaning_rows)
 
         except Exception as e:
