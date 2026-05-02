@@ -152,9 +152,9 @@ function_map = {
     "💰 金流對帳": [
         "① 建立期別資料夾與檔案",
         "② 期別訂單轉檔（xls/xlsx → Google Sheet）",
-        "③ 訂單搬運到範本",
-        "④ 範本加工",
-        "⑤ 分類搬運",
+        "③ 期別訂單搬運",
+        "④ 期別訂單加工",
+        "⑤ 期別訂單分類",
         "⑥ 金流對帳轉檔（zip/csv/xlsx → Google Sheet）",
         "⑦ 搬運退款＋預收",
         "⑧ 搬運發票＋藍新",
@@ -260,7 +260,7 @@ if run_clicked:
                         # 打卡：記錄轉檔後的 Google Sheet ID
                         record_execution(_name, _period, "期別訂單轉檔", result.get("fileId"))
 
-                    elif "③ 訂單搬運" in _func:
+                    elif "③ 期別訂單搬運" in _func:
                         from modules.payment_reconciliation import copy_orders_to_template
                         result = copy_orders_to_template(root_id, _period, _name, add_log)
                         count = result["count"]
@@ -275,7 +275,7 @@ if run_clicked:
                             {"task_key": "複製期別訂單", "count": count},
                         ])
 
-                    elif "④ 範本加工" in _func:
+                    elif "④ 期別訂單加工" in _func:
                         from modules.payment_reconciliation import process_template
                         # 從 session_state 讀起始列
                         key = f"start_row_{_period}_{_name}"
@@ -311,12 +311,24 @@ if run_clicked:
                             add_log(w, "warning")
                         # 存 category_counts 供 ⑤ 分類搬運使用
                         st.session_state[f"category_counts_{_period}_{_name}"] = category_counts
-                        record_batch(_name, _period, [
+                        # 打卡：加工結果
+                        batch = [
                             {"task_key": "加工-排序",           "count": sort_count},
                             {"task_key": "加工-K欄標註異常標橘底", "count": mark_count},
-                        ])
+                        ]
+                        # 各類別加工筆數
+                        cat_task_map = {
+                            "水洗": "加工-水洗加工",
+                            "家電": "加工-家電加工",
+                            "收納": "加工-收納加工",
+                            "座椅": "加工-座椅加工",
+                            "地毯": "加工-地毯加工",
+                        }
+                        for cat, task_key in cat_task_map.items():
+                            batch.append({"task_key": task_key, "count": category_counts.get(cat, 0)})
+                        record_batch(_name, _period, batch)
 
-                    elif "⑤ 分類搬運" in _func:
+                    elif "⑤ 期別訂單分類" in _func:
                         from modules.payment_reconciliation import copy_classified_data
                         from modules.master_sheet import get_recorded_value
                         # Double check：確認起始列和筆數與 ③ 一致
