@@ -6,7 +6,10 @@ ID：1GdW3FSZ0s3TGeYiNx3JtYvED_RRfJjiFYwLFeYHZ1hA
 欄位結構：
   第1行：作業名稱 | 202601-1 | （空） | 202601-2 | （空） | ...
   第2行：（空）   | 筆數     | 完成時間 | 筆數    | 完成時間 | ...
-  第3行起：作業資料
+  第3行起：作業資料（金流對帳）
+  空白行
+  清潔承攬標題
+  清潔承攬作業
 """
 
 import pytz
@@ -18,10 +21,9 @@ TAIPEI_TZ = pytz.timezone("Asia/Taipei")
 
 START_YEAR = 2026
 START_MONTH = 1
-YEARS = 3  # 產生幾年的欄位
+YEARS = 3
 
-# 作業資料從第3行開始
-DATA_START_ROW = 3
+DATA_START_ROW = 3  # 作業資料從第3行開始
 
 
 # ═══════════════════════════════════════
@@ -88,13 +90,13 @@ CLEANING_TASKS = [
     "元大帳戶",
 ]
 
-# 建立 task_key → 行號對照表
+CLEANING_TITLE_ROW = DATA_START_ROW + len(PAYMENT_TASKS) + 1
+CLEANING_DATA_START = CLEANING_TITLE_ROW + 1
+
+# task_key → 行號對照
 TASK_ROW_MAP = {}
 for i, name in enumerate(PAYMENT_TASKS):
     TASK_ROW_MAP[f"金流-{name}"] = DATA_START_ROW + i
-
-CLEANING_TITLE_ROW = DATA_START_ROW + len(PAYMENT_TASKS) + 1  # 空一行
-CLEANING_DATA_START = CLEANING_TITLE_ROW + 1
 for i, name in enumerate(CLEANING_TASKS):
     TASK_ROW_MAP[f"清潔-{name}"] = CLEANING_DATA_START + i
 
@@ -104,13 +106,7 @@ for i, name in enumerate(CLEANING_TASKS):
 # ═══════════════════════════════════════
 
 def period_to_col(period: str) -> int:
-    """
-    期別 → 筆數欄號（1-based）
-    202601-1 → 2（B欄）
-    202601-2 → 4（D欄）
-    202602-1 → 6（F欄）
-    完成時間欄 = 筆數欄 + 1
-    """
+    """期別 → 筆數欄號（B=2 起）"""
     year = int(period[:4])
     month = int(period[4:6])
     half = int(period[7])
@@ -119,7 +115,7 @@ def period_to_col(period: str) -> int:
 
 
 def col_to_letter(n: int) -> str:
-    """欄號轉字母（1→A, 27→AA...）"""
+    """欄號轉字母"""
     result = ""
     while n > 0:
         n, r = divmod(n - 1, 26)
@@ -127,57 +123,58 @@ def col_to_letter(n: int) -> str:
     return result
 
 
-# ═══════════════════════════════════════
-# 初始化地區工作表
-# ═══════════════════════════════════════
-
-def init_region_sheet(region_name: str) -> bool:
-    """
-    建立地區工作表，填入雙標題行和作業名稱
-    已存在則清空重建
-    回傳 True=新建，False=已存在（重建）
-    """
-    ss = open_spreadsheet(MASTER_SHEET_ID)
-
-    # 檢查是否已存在
-    is_new = True
-    try:
-        sheet = ss.worksheet(region_name)
-        sheet.clear()
-        is_new = False
-    except Exception:
-        sheet = ss.add_worksheet(title=region_name, rows=200, cols=400)
-
-    # ── 第1行：期別標題 ──
+def _build_header_rows() -> tuple[list, list]:
+    """產生第1行（期別）和第2行（筆數/完成時間）"""
     row1 = ["作業名稱"]
+    row2 = [""]
     for y in range(YEARS):
         year = START_YEAR + y
         for month in range(1, 13):
             for half in [1, 2]:
                 period = f"{year}{str(month).zfill(2)}-{half}"
-                row1.append(period)
-                row1.append("")  # 完成時間欄（合併用，留空）
+                row1.extend([period, ""])
+                row2.extend(["筆數", "完成時間"])
+    return row1, row2
 
-    # ── 第2行：筆數/完成時間子標題 ──
-    row2 = [""]
-    for y in range(YEARS):
-        for month in range(1, 13):
-            for half in [1, 2]:
-                row2.append("筆數")
-                row2.append("完成時間")
 
-    sheet.update("A1", [row1, row2])
+# ═══════════════════════════════════════
+# 初始化 / 更新地區工作表
+# ═══════════════════════════════════════
 
-    # ── 金流對帳作業（第3行起）──
-    payment_rows = [[name] for name in PAYMENT_TASKS]
-    sheet.update(f"A{DATA_START_ROW}", payment_rows)
+def init_region_sheet(region_name: str) -> bool:
+    """
+    建立或更新地區工作表
+    - 工作表不存在：全新建立
+    - 工作表已存在：
+        只更新標題行（第1、2行）和 A 欄作業名稱
+        已有的筆數和完成時間資料完全保留
+    回傳 True=新建，False=更新
+    """
+    ss = open_spreadsheet(MASTER_SHEET_ID)
 
-    # ── 清潔承攬標題 ──
+    is_new = False
+    try:
+        sheet = ss.worksheet(region_name)
+    except Exception:
+        sheet = ss.add_worksheet(title=region_name, rows=200, cols=400)
+        is_new = True
+
+    row1, row2 = _build_header_rows()
+
+    # 更新標題行（不影響資料欄）
+    sheet.update("A1", [row1])
+    sheet.update("A2", [row2])
+
+    # 更新 A 欄作業名稱（只寫 A 欄，不動 B 欄以後的資料）
+    payment_a = [[name] for name in PAYMENT_TASKS]
+    sheet.update(f"A{DATA_START_ROW}", payment_a)
+
+    # 清潔承攬標題
     sheet.update(f"A{CLEANING_TITLE_ROW}", [["清潔承攬"]])
 
-    # ── 清潔承攬作業 ──
-    cleaning_rows = [[name] for name in CLEANING_TASKS]
-    sheet.update(f"A{CLEANING_DATA_START}", cleaning_rows)
+    # 清潔承攬 A 欄
+    cleaning_a = [[name] for name in CLEANING_TASKS]
+    sheet.update(f"A{CLEANING_DATA_START}", cleaning_a)
 
     return is_new
 
@@ -222,7 +219,6 @@ def record_batch(region_name: str, period: str, records: list) -> None:
     """
     批次打卡
     records = [{"task_key": "金流-期別訂單轉檔", "count": 427}, ...]
-    count 可省略（只記時間）
     """
     ss = open_spreadsheet(MASTER_SHEET_ID)
     sheet = ss.worksheet(region_name)
