@@ -311,13 +311,14 @@ if run_clicked:
                         from modules.payment_reconciliation import convert_payment_file
                         result = convert_payment_file(root_id, _period, _name, add_log)
                         add_log("金流對帳轉檔完成", "success")
+                        file_ids = result.get("fileIds", {})
                         record_batch(_name, _period, [
-                            {"task_key": "金流-期別發票轉檔",         "count": None},
-                            {"task_key": "金流-期別已退款全部加收轉檔", "count": None},
-                            {"task_key": "金流-期別已退款全部退款轉檔", "count": None},
-                            {"task_key": "金流-期別預收轉檔",          "count": None},
-                            {"task_key": "金流-期別藍新收款轉檔",      "count": None},
-                            {"task_key": "金流-期別藍新退款轉檔",      "count": None},
+                            {"task_key": "金流-期別發票轉檔",         "count": file_ids.get("發票")},
+                            {"task_key": "金流-期別已退款全部加收轉檔", "count": file_ids.get("已退款全部加收")},
+                            {"task_key": "金流-期別已退款全部退款轉檔", "count": file_ids.get("已退款全部退款")},
+                            {"task_key": "金流-期別預收轉檔",          "count": file_ids.get("預收")},
+                            {"task_key": "金流-期別藍新收款轉檔",      "count": file_ids.get("藍新收款")},
+                            {"task_key": "金流-期別藍新退款轉檔",      "count": file_ids.get("藍新退款")},
                         ])
 
                     elif "⑦ 搬運退款" in _func:
