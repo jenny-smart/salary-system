@@ -38,10 +38,11 @@ st.markdown("""
     font-weight: 600 !important; font-size: 0.9rem !important;
   }
   .stButton > button:hover { background: #135b84 !important; }
-  .log-section {
+  .log-box {
     background: #0c2835; color: #d7ecf5; border-radius: 20px;
     padding: 14px 16px; margin-bottom: 14px;
     font-family: 'Courier New', monospace; border: 1px solid #254f60;
+    min-height: 120px;
   }
   .log-header {
     display: flex; justify-content: space-between; align-items: center;
@@ -52,11 +53,14 @@ st.markdown("""
     padding: 4px 0; border-bottom: 1px solid #1c4452;
     font-size: 0.75rem; color: #cde3ec; line-height: 1.4;
   }
+  .log-entry.success { color: #6ee7b7; }
+  .log-entry.error   { color: #fca5a5; }
+  .log-entry.warning { color: #fcd34d; }
   .region-card {
     background: #f8fcff; border-radius: 16px; padding: 12px 14px;
     margin-bottom: 10px; border: 1px solid #d9eaf2;
   }
-  .badge-ok { background: #2a8c5a; color: white; padding: 2px 8px; border-radius: 20px; font-size: 0.65rem; }
+  .badge-ok  { background: #2a8c5a; color: white; padding: 2px 8px; border-radius: 20px; font-size: 0.65rem; }
   .badge-err { background: #dc2626; color: white; padding: 2px 8px; border-radius: 20px; font-size: 0.65rem; }
   .detail-row { font-size: 0.75rem; color: #3e6c87; margin: 3px 0; }
 </style>
@@ -87,13 +91,36 @@ if "editing_region" not in st.session_state:
 if "adding_region" not in st.session_state:
     st.session_state.adding_region = False
 
+
 def add_log(message: str, level: str = "info"):
+    """寫入日誌並即時更新畫面"""
     now = datetime.now().strftime("%H:%M:%S")
     icons = {"info": "🔵", "success": "✅", "error": "❌", "warning": "⚠️"}
     icon = icons.get(level, "🔵")
-    st.session_state.logs.append(f"[{now}] {icon} {message}")
+    entry = f"[{now}] {icon} {message}"
+    st.session_state.logs.append(entry)
     if len(st.session_state.logs) > 200:
         st.session_state.logs = st.session_state.logs[-200:]
+    # 即時更新日誌區塊
+    if "log_placeholder" in st.session_state:
+        _render_log(st.session_state.log_placeholder)
+
+
+def _render_log(placeholder):
+    """渲染日誌內容到 placeholder"""
+    entries = st.session_state.logs[-20:]
+    html = '<div class="log-box"><div class="log-header"><span>📋 執行日誌</span><span style="background:#1e4757;padding:3px 10px;border-radius:20px;font-size:0.75rem;">即時更新</span></div>'
+    for entry in reversed(entries):
+        css = "log-entry"
+        if "✅" in entry:
+            css += " success"
+        elif "❌" in entry:
+            css += " error"
+        elif "⚠️" in entry:
+            css += " warning"
+        html += f'<div class="{css}">{entry}</div>'
+    html += '</div>'
+    placeholder.markdown(html, unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════
@@ -169,6 +196,20 @@ st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════
+# 日誌區塊（固定在執行設定下方）
+# ═══════════════════════════════════════
+log_placeholder = st.empty()
+st.session_state.log_placeholder = log_placeholder
+_render_log(log_placeholder)
+
+col_clear, _ = st.columns([1, 3])
+with col_clear:
+    if st.button("🗑️ 清除日誌"):
+        st.session_state.logs = ["[--:--:--] 日誌已清除"]
+        _render_log(log_placeholder)
+
+
+# ═══════════════════════════════════════
 # 執行邏輯
 # ═══════════════════════════════════════
 if run:
@@ -184,104 +225,79 @@ if run:
             half = "上半月" if is_first_half(period) else "下半月"
             add_log(f"執行【{selected_name}】{half} {selected_function}，期別：{period}")
 
-            # log_fn：執行中即時寫入日誌
-            def log_fn(msg):
-                add_log(msg)
+            try:
+                if system == "💰 金流對帳":
 
-            with st.status(f"執行中：{selected_function}", expanded=True) as status:
-                try:
-                    if system == "💰 金流對帳":
+                    if "① 建立期別" in selected_function:
+                        from modules.payment_reconciliation import create_period
+                        add_log(f"建立期別資料夾：{period}")
+                        result = create_period(root_id, period, selected_name, add_log)
+                        ok = len([v for v in result.values() if v and v != result.get("period_folder_id")])
+                        add_log(f"建立完成，共 {ok} 個檔案", "success")
 
-                        if "① 建立期別" in selected_function:
-                            from modules.payment_reconciliation import create_period
-                            st.write(f"📁 建立期別資料夾：{period}")
-                            result = create_period(root_id, period, selected_name, log_fn)
-                            ok = len([v for v in result.values() if v and v != result.get("period_folder_id")])
-                            add_log(f"建立完成，共 {ok} 個檔案", "success")
+                    elif "期別訂單轉檔" in selected_function:
+                        from modules.payment_reconciliation import convert_order_file
+                        add_log(f"開始轉換：{period}訂單-{selected_name}.xlsx")
+                        convert_order_file(root_id, period, selected_name, add_log)
+                        add_log("期別訂單轉檔完成", "success")
 
-                        elif "期別訂單轉檔" in selected_function:
-                            from modules.payment_reconciliation import convert_order_file
-                            st.write(f"🔄 轉換：{period}訂單-{selected_name}.xlsx")
-                            convert_order_file(root_id, period, selected_name, log_fn)
-                            add_log("期別訂單轉檔完成", "success")
+                    elif "金流對帳轉檔" in selected_function:
+                        from modules.payment_reconciliation import convert_payment_file
+                        add_log("開始轉換金流對帳相關檔案...")
+                        result = convert_payment_file(root_id, period, selected_name, add_log)
+                        ok = len([v for v in result.values() if v])
+                        add_log(f"金流對帳轉檔完成，共 {ok} 個檔案", "success")
 
-                        elif "金流對帳轉檔" in selected_function:
-                            from modules.payment_reconciliation import convert_payment_file
-                            st.write("🔄 轉換金流對帳相關檔案...")
-                            result = convert_payment_file(root_id, period, selected_name, log_fn)
-                            ok = len([v for v in result.values() if v])
-                            add_log(f"金流對帳轉檔完成，共 {ok} 個檔案", "success")
+                    elif "③ 訂單搬運" in selected_function:
+                        from modules.payment_reconciliation import copy_orders_to_template
+                        add_log("開始搬運訂單資料到範本...")
+                        count = copy_orders_to_template(root_id, period, selected_name, add_log)
+                        add_log(f"搬運完成：{count} 筆", "success")
 
-                        elif "③ 訂單搬運" in selected_function:
-                            from modules.payment_reconciliation import copy_orders_to_template
-                            st.write("📥 搬運訂單資料到範本...")
-                            count = copy_orders_to_template(root_id, period, selected_name, log_fn)
-                            add_log(f"搬運完成：{count} 筆", "success")
+                    elif "④ 範本加工" in selected_function:
+                        from modules.payment_reconciliation import process_template
+                        add_log("開始範本加工...")
+                        result = process_template(root_id, period, selected_name, add_log)
+                        add_log(
+                            f"加工完成：排序 {result['sort_count']} 筆，"
+                            f"異常 {result['mark_count']} 筆，"
+                            f"拆解新增 {result['expand_count']} 列",
+                            "success"
+                        )
+                        for w in result.get("warnings", []):
+                            add_log(w, "warning")
 
-                        elif "④ 範本加工" in selected_function:
-                            from modules.payment_reconciliation import process_template
-                            st.write("🔧 範本加工中...")
-                            result = process_template(root_id, period, selected_name, log_fn)
-                            add_log(
-                                f"加工完成：排序 {result['sort_count']} 筆，"
-                                f"異常 {result['mark_count']} 筆，"
-                                f"拆解新增 {result['expand_count']} 列",
-                                "success"
-                            )
-                            if result.get("warnings"):
-                                for w in result["warnings"]:
-                                    add_log(w, "warning")
-
-                        elif "⑤ 分類搬運" in selected_function:
-                            from modules.payment_reconciliation import copy_classified_data
-                            st.write("📂 分類搬運中...")
-                            counts = copy_classified_data(root_id, period, selected_name, log_fn)
-                            add_log("分類搬運完成", "success")
-                            for k, v in counts.items():
-                                if v > 0:
-                                    add_log(f"　{k}：{v} 筆")
-
-                        elif "⑥ 搬運退款" in selected_function:
-                            from modules.payment_reconciliation import move_refund_and_prepaid
-                            st.write("↩️ 搬運退款＋預收...")
-                            counts = move_refund_and_prepaid(root_id, period, selected_name, log_fn)
-                            add_log("退款＋預收搬運完成", "success")
-                            for k, v in counts.items():
+                    elif "⑤ 分類搬運" in selected_function:
+                        from modules.payment_reconciliation import copy_classified_data
+                        add_log("開始分類搬運...")
+                        counts = copy_classified_data(root_id, period, selected_name, add_log)
+                        add_log("分類搬運完成", "success")
+                        for k, v in counts.items():
+                            if v > 0:
                                 add_log(f"　{k}：{v} 筆")
 
-                        elif "⑦ 搬運發票" in selected_function:
-                            from modules.payment_reconciliation import move_invoice_and_bluenew
-                            st.write("🧾 搬運發票＋藍新...")
-                            counts = move_invoice_and_bluenew(root_id, period, selected_name, log_fn)
-                            add_log("發票＋藍新搬運完成", "success")
-                            for k, v in counts.items():
-                                if v > 0:
-                                    add_log(f"　{k}：{v} 筆")
+                    elif "⑥ 搬運退款" in selected_function:
+                        from modules.payment_reconciliation import move_refund_and_prepaid
+                        add_log("開始搬運退款＋預收...")
+                        counts = move_refund_and_prepaid(root_id, period, selected_name, add_log)
+                        add_log("退款＋預收搬運完成", "success")
+                        for k, v in counts.items():
+                            add_log(f"　{k}：{v} 筆")
 
-                    else:
-                        add_log(f"{system} {selected_function} 開發中", "warning")
+                    elif "⑦ 搬運發票" in selected_function:
+                        from modules.payment_reconciliation import move_invoice_and_bluenew
+                        add_log("開始搬運發票＋藍新...")
+                        counts = move_invoice_and_bluenew(root_id, period, selected_name, add_log)
+                        add_log("發票＋藍新搬運完成", "success")
+                        for k, v in counts.items():
+                            if v > 0:
+                                add_log(f"　{k}：{v} 筆")
 
-                    status.update(label="✅ 執行完成", state="complete")
+                else:
+                    add_log(f"{system} {selected_function} 開發中", "warning")
 
-                except Exception as e:
-                    add_log(f"執行失敗：{e}", "error")
-                    status.update(label="❌ 執行失敗", state="error")
-
-            st.rerun()
-
-
-# ═══════════════════════════════════════
-# 執行日誌
-# ═══════════════════════════════════════
-log_html = '<div class="log-section"><div class="log-header"><span>📋 執行日誌</span><span style="background:#1e4757;padding:3px 10px;border-radius:20px;font-size:0.75rem;">即時更新</span></div>'
-for entry in reversed(st.session_state.logs[-20:]):
-    log_html += f'<div class="log-entry">{entry}</div>'
-log_html += '</div>'
-st.markdown(log_html, unsafe_allow_html=True)
-
-if st.button("🗑️ 清除日誌"):
-    st.session_state.logs = ["[--:--:--] 日誌已清除"]
-    st.rerun()
+            except Exception as e:
+                add_log(f"執行失敗：{e}", "error")
 
 
 # ═══════════════════════════════════════
