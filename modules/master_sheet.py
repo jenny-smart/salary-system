@@ -44,6 +44,7 @@ PAYMENT_TASKS = [
     "手動期別其他承攬",
     "手動期別元大帳戶",
     "期別訂單轉檔",
+    "訂單起始列",
     "複製期別訂單",
     "加工-排序",
     "加工-K欄標註異常標橘底",
@@ -213,6 +214,22 @@ def record_execution(
     sheet.batch_update(updates)
 
     return True
+
+
+def get_recorded_value(region_name: str, period: str, task_key: str):
+    """
+    從打卡表讀取某作業的 ID/筆數欄值
+    用於 double check
+    """
+    row = TASK_ROW_MAP.get(task_key)
+    if row is None:
+        return None
+    col = period_to_col(period)
+    count_col = col_to_letter(col)
+    ss = open_spreadsheet(MASTER_SHEET_ID)
+    sheet = ss.worksheet(region_name)
+    val = sheet.acell(f"{count_col}{row}").value
+    return val if val else None
 
 
 def record_batch(region_name: str, period: str, records: list) -> None:
