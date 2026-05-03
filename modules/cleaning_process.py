@@ -282,11 +282,23 @@ def run_preparation(
         gc = get_gspread_client()
         ss = gc.open_by_key(cleaning_file_id)
 
-        ws_exec    = ss.worksheet("執行")
-        ws_salary  = ss.worksheet("薪資表")
-        ws_revenue = ss.worksheet("清潔營收明細")
-        ws_order   = ss.worksheet("清潔訂單")
-        ws_proj    = ss.worksheet("專案訂單")
+        # 先列出所有工作表名稱以利除錯
+        all_sheet_titles = [s.title for s in ss.worksheets()]
+        _log(log, f"    試算表工作表清單：{all_sheet_titles}")
+
+        def _ws(name):
+            try:
+                return ss.worksheet(name)
+            except Exception:
+                raise ValueError(
+                    f"找不到工作表「{name}」，"
+                    f"試算表現有工作表：{all_sheet_titles}"
+                )
+
+        ws_salary  = _ws("薪資表")
+        ws_revenue = _ws("清潔營收明細")
+        ws_order   = _ws("清潔訂單")
+        ws_proj    = _ws("專案訂單")
 
         # 讀取本期搬入清潔訂單筆數
         # 來源：主控試算表「複製清潔訂單」× 該期別欄位
@@ -478,14 +490,19 @@ def _prep_step5_remove_lemon(
     log: List[str],
 ) -> int:
     """
-    AH 欄（col 34）移除「檸檬人」；AH 清空後 J 欄（col 10）連帶清空。
+    清潔訂單工作表 AH 欄（col 34）移除「檸檬人」字樣。
+    移除後若該列 AH 欄變為空白，同時清空同列 J 欄（col 10）。
+    直接對 ws_order 操作，不經過 spreadsheet 層級，避免工作表混淆。
     """
     all_ah = ws_order.col_values(34)  # AH = col 34
-    updates = []
-    count   = 0
+    count  = 0
 
-    for i in range(1, len(all_ah)):  # 跳過標題列 (index 0)
-        ah = str(all_ah[i]) if i < len(all_ah) else ""
+    # 收集需要更新的儲存格（逐格 update_cell，確保一定寫入 ws_order）
+    ah_updates = {}  # row → cleaned value
+    j_clears   = set()
+
+    for i in range(1, len(all_ah)):  # index 0 = 標題列，跳過
+        ah = str(all_ah[i])
         if "檸檬人" not in ah:
             continue
         cleaned = " X ".join(
@@ -493,17 +510,18 @@ def _prep_step5_remove_lemon(
             for s in re.split(r"\s*[Xx×Ｘ]\s*", ah)
             if s.strip() and "檸檬人" not in s
         )
-        row = i + 1  # col_values 從 index 0 = 第 1 列
-        updates.append({"range": f"AH{row}", "values": [[cleaned]]})
+        row = i + 1  # col_values index 從 0 = 第 1 列
+        ah_updates[row] = cleaned
         if not cleaned:
-            updates.append({"range": f"J{row}", "values": [[""]]})
+            j_clears.add(row)
         count += 1
 
-    if updates:
-        ws_order.spreadsheet.values_batch_update({
-            "valueInputOption": "RAW",
-            "data": updates,
-        })
+    # 逐格寫入（gspread update_cell 直接對該工作表操作，不會混淆）
+    for row, val in ah_updates.items():
+        ws_order.update_cell(row, 34, val)   # AH = col 34
+    for row in j_clears:
+        ws_order.update_cell(row, 10, "")    # J  = col 10
+
     return count
 
 
@@ -747,7 +765,11 @@ def _adj_set_formulas_a_to_o(
                 f'=IFERROR(FILTER($AG:$AL,$S:$S=A{r}),"")' ]]},    # AG:AL
         ])
 
-    # 每批 500 個以內
+    # 每批 500 個以內，range 加工作表名稱
+    sheet_name = ws_adjust.title
+    for item in batch:
+        if not item["range"].startswith("'"):
+            item["range"] = f"'{sheet_name}'!{item['range']}"
     for i in range(0, len(batch), 500):
         ws_adjust.spreadsheet.values_batch_update({
             "valueInputOption": "USER_ENTERED",
@@ -806,6 +828,10 @@ def _adj_set_summary_b_to_g(
                 f"=HLOOKUP($A{r},'薪資表'!$1:$2042,2041,FALSE)"
                 f"+HLOOKUP($A{r},'薪資表'!$1:$2042,2042,FALSE)"]]},
         ])
+    sheet_name = ws_summary.title
+    for item in batch:
+        if not item["range"].startswith("'"):
+            item["range"] = f"'{sheet_name}'!{item['range']}"
     for i in range(0, len(batch), 500):
         ws_summary.spreadsheet.values_batch_update({
             "valueInputOption": "USER_ENTERED",
@@ -834,6 +860,10 @@ def _adj_set_summary_h_to_k(
             f'=IFERROR(FILTER('
             f'IMPORTRANGE("{roster_id}","{yyyymm}專員名冊!G2:I"),'
             f'IMPORTRANGE("{roster_id}","{yyyymm}專員名冊!B2:B")=H{r}),"")' ]]})
+    sheet_name = ws_summary.title
+    for item in batch:
+        if not item["range"].startswith("'"):
+            item["range"] = f"'{sheet_name}'!{item['range']}"
     for i in range(0, len(batch), 500):
         ws_summary.spreadsheet.values_batch_update({
             "valueInputOption": "USER_ENTERED",
@@ -960,6 +990,10 @@ def _adj_set_summary_no_or_uv(
         matched += 1
 
     if batch:
+        sheet_name = ws_summary.title
+        for item in batch:
+            if not item["range"].startswith("'"):
+                item["range"] = f"'{sheet_name}'!{item['range']}"
         ws_summary.spreadsheet.values_batch_update({
             "valueInputOption": "RAW",
             "data": batch,
@@ -1056,6 +1090,10 @@ def _copy_salary_formulas(
             })
 
     if batch:
+        sheet_name = ws_salary.title
+        for item in batch:
+            if not item["range"].startswith("'"):
+                item["range"] = f"'{sheet_name}'!{item['range']}"
         for i in range(0, len(batch), 500):
             ws_salary.spreadsheet.values_batch_update({
                 "valueInputOption": "USER_ENTERED",
