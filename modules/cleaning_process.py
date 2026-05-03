@@ -4,10 +4,11 @@ Lemon Clean 清潔承攬 — 前置作業 & 00調薪
 
 依賴：
     modules/auth.py           — get_gspread_client()
+    modules/drive_helper.py   — find_file_in_folder()
     modules/master_sheet.py   — record_execution()
     modules/common_process.py — run_common_process()
 
-清潔承攬試算表（exec 工作表）關鍵儲存格：
+清潔承攬試算表（exec 工作表）關鍵儲存格（供程式讀取，不在此打卡）：
     B1  → 期別 YYYYMM（如 202605）
     C2  → 請款試算表 ID
     C3  → 薪資試算表 ID
@@ -16,9 +17,13 @@ Lemon Clean 清潔承攬 — 前置作業 & 00調薪
     C8  → 上半月搬入清潔訂單筆數
     D8  → 下半月搬入清潔訂單筆數
 
-主控試算表打卡位置（exec 工作表）：
-    前置作業  列11  C11（上半月）/ D11（下半月）
-    00調薪   列12  C12（上半月）/ D12（下半月）
+打卡：統一寫入主控試算表（master_sheet.py → record_execution）
+    前置作業 → task_key = "前置作業"
+    00調薪   → task_key = "00調薪"
+
+找清潔承攬檔案：
+    Drive 路徑：{root_folder_id}/{period}/{period}清潔承攬-{region}
+    呼叫 find_cleaning_file(root_folder_id, period, region) 取得 file_id
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ import gspread
 from gspread.utils import rowcol_to_a1
 
 from modules.auth import get_gspread_client
+from modules.drive_helper import find_file_in_folder
 from modules.master_sheet import record_execution
 from modules.common_process import run_common_process
 
@@ -40,13 +46,52 @@ from modules.common_process import run_common_process
 # 常數
 # ──────────────────────────────────────────────────────────────
 
-EXEC_ROW_PREP = 11    # 前置作業打卡列
-EXEC_ROW_ADJ  = 12    # 00調薪打卡列
-
 SUMMARY_START = 4     # 場次時數薪資總表資料起始列
 SUMMARY_END   = 120   # 場次時數薪資總表資料結束列
 
 TS_FMT = "%Y/%m/%d %H:%M"
+
+
+# ──────────────────────────────────────────────────────────────
+# 找清潔承攬檔案
+# ──────────────────────────────────────────────────────────────
+
+def find_cleaning_file(root_folder_id: str, period: str, region: str) -> str:
+    """
+    從 Drive 找到清潔承攬試算表 ID。
+    路徑：{root_folder_id}/{period}/{period}清潔承攬-{region}
+
+    Args:
+        root_folder_id: config.yaml 中該地區的 root_folder_id
+        period:         期別字串，如 "202605-1"
+        region:         地區名稱，如 "新北"
+
+    Returns:
+        Google Sheets 檔案 ID
+
+    Raises:
+        FileNotFoundError: 找不到期別資料夾或清潔承攬檔案
+    """
+    from modules.auth import get_drive_service
+    drive = get_drive_service()
+
+    # 1. 在根目錄找期別資料夾
+    period_folder = find_file_in_folder(
+        drive, root_folder_id, period, mime="application/vnd.google-apps.folder"
+    )
+    if not period_folder:
+        raise FileNotFoundError(f"找不到期別資料夾：{period}（根目錄 {root_folder_id}）")
+
+    # 2. 在期別資料夾找清潔承攬試算表
+    file_name = f"{period}清潔承攬-{region}"
+    file_id = find_file_in_folder(
+        drive, period_folder["id"], file_name,
+        mime="application/vnd.google-apps.spreadsheet"
+    )
+    if not file_id:
+        raise FileNotFoundError(f"找不到清潔承攬檔案：{file_name}")
+
+    return file_id["id"]
 
 
 # ──────────────────────────────────────────────────────────────
@@ -269,7 +314,7 @@ def run_preparation(
         _log(log, "  步驟6 完成")
 
         # ── 打卡 ─────────────────────────────────────────────
-        ts = _punch_exec(ws_exec, EXEC_ROW_PREP, is_first_half)
+        ts = _now_ts()
         record_execution(region, period, "前置作業", ts)
         _log(log, f"✅ 前置作業 {label} 完成｜{ts}")
         return True
@@ -538,7 +583,7 @@ def run_adjustment(
         ws_adjust.update_cell(1, 5, -1 if is_first_half else -2)  # E1
 
         # ── 打卡 ─────────────────────────────────────────────
-        ts = _punch_exec(ws_exec, EXEC_ROW_ADJ, is_first_half)
+        ts = _now_ts()
         record_execution(region, period, "00調薪", ts)
         _log(log, f"✅ 00調薪 {label} 完成｜{ts}")
         return True
