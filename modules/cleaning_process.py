@@ -4,7 +4,6 @@ Lemon Clean 清潔承攬 — 前置作業 & 00調薪
 
 依賴：
     modules/auth.py           — get_gspread_client()
-    modules/drive_helper.py   — find_file_in_folder()
     modules/master_sheet.py   — record_execution()
     modules/common_process.py — run_common_process()
 
@@ -37,7 +36,6 @@ import gspread
 from gspread.utils import rowcol_to_a1
 
 from modules.auth import get_gspread_client
-from modules.drive_helper import find_file_in_folder
 from modules.master_sheet import record_execution
 from modules.common_process import run_common_process
 
@@ -75,23 +73,40 @@ def find_cleaning_file(root_folder_id: str, period: str, region: str) -> str:
     from modules.auth import get_drive_service
     drive = get_drive_service()
 
+    def _query(parent_id: str, name: str, mime_type: str) -> str | None:
+        """Drive API query，回傳第一筆符合的檔案 ID，找不到回傳 None。"""
+        q = (
+            f"'{parent_id}' in parents"
+            f" and name = '{name}'"
+            f" and mimeType = '{mime_type}'"
+            f" and trashed = false"
+        )
+        resp = drive.files().list(
+            q=q,
+            fields="files(id, name)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+            pageSize=5,
+        ).execute()
+        files = resp.get("files", [])
+        return files[0]["id"] if files else None
+
     # 1. 在根目錄找期別資料夾
-    period_folder = find_file_in_folder(
-        drive, root_folder_id, period, mime="application/vnd.google-apps.folder"
+    period_folder_id = _query(
+        root_folder_id, period, "application/vnd.google-apps.folder"
     )
-    if not period_folder:
+    if not period_folder_id:
         raise FileNotFoundError(f"找不到期別資料夾：{period}（根目錄 {root_folder_id}）")
 
     # 2. 在期別資料夾找清潔承攬試算表
     file_name = f"{period}清潔承攬-{region}"
-    file_id = find_file_in_folder(
-        drive, period_folder["id"], file_name,
-        mime="application/vnd.google-apps.spreadsheet"
+    file_id = _query(
+        period_folder_id, file_name, "application/vnd.google-apps.spreadsheet"
     )
     if not file_id:
         raise FileNotFoundError(f"找不到清潔承攬檔案：{file_name}")
 
-    return file_id["id"]
+    return file_id
 
 
 # ──────────────────────────────────────────────────────────────
