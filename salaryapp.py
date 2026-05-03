@@ -412,6 +412,19 @@ if run_clicked:
                             {"task_key": "複製藍新退款", "count": counts.get("藍新退款")},
                         ])
 
+                elif _system == "🧹 清潔承攬":
+                   cleaning_id = _region.get("cleaning_id", "")  # 清潔承攬試算表 ID
+                   if not cleaning_id:
+                       add_log("尚未設定清潔承攬試算表 ID", "error")
+                   else:
+                       log_lines = []
+                       if _func == "前置作業":
+                           from modules.cleaning_process import run_preparation
+                           ok = run_preparation(cleaning_id, _name, _period, is_first_half(_period), log_lines)
+                       elif _func == "00調薪":
+                           from modules.cleaning_process import run_adjustment
+                           ok = run_adjustment(cleaning_id, _name, _period, is_first_half(_period), log_lines)
+                
                 else:
                     add_log(f"{_system} {_func} 開發中", "warning")
 
@@ -419,7 +432,6 @@ if run_clicked:
                 import traceback
                 add_log(f"執行失敗：{e}", "error")
                 add_log(traceback.format_exc(), "error")
-
 
 # ═══════════════════════════════════════
 # 排程設定
