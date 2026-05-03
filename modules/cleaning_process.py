@@ -288,9 +288,22 @@ def run_preparation(
         ws_order   = ss.worksheet("清潔訂單")
         ws_proj    = ss.worksheet("專案訂單")
 
-        # 讀取本期搬入筆數
-        count_cell  = "C8" if is_first_half else "D8"
-        period_count = int(ws_exec.acell(count_cell).value or 0)
+        # 讀取本期搬入清潔訂單筆數
+        # 來源：主控試算表「複製清潔訂單」× 該期別欄位
+        # （金流對帳 ⑤ 分類搬運完成後打卡的數字）
+        try:
+            from modules.master_sheet import get_recorded_value
+            recorded = get_recorded_value(region, period, "複製清潔訂單")
+            period_count = int(recorded) if recorded else 0
+        except Exception as e:
+            period_count = 0
+            _log(log, f"    ⚠️ 讀取主控試算表「複製清潔訂單」失敗：{e}", )
+        if period_count <= 0:
+            raise ValueError(
+                f"主控試算表「複製清潔訂單」筆數為 0 或未打卡（期別：{period}，地區：{region}），"
+                "請確認金流對帳 ⑤ 分類搬運已完成"
+            )
+        _log(log, f"    從主控試算表讀取清潔訂單筆數：{period_count} 筆")
 
         # ── 步驟1：薪資表特定列處理 ──────────────────────────
         _log(log, "  步驟1：薪資表特定列處理")
@@ -378,7 +391,7 @@ def _prep_step2_read_revenue(
     從清潔營收明細 B 欄最後非空白列往上數 period_count 筆。
     """
     if period_count <= 0:
-        _log(log, "    ⚠️ exec C8/D8 筆數為 0")
+        _log(log, "    ⚠️ period_count 為 0，無法讀取清潔營收明細")
         return [], []
 
     last_row = _last_nonempty_row(ws_revenue, col=2)
