@@ -67,9 +67,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ═══════════════════════════════════════
-# 設定檔讀寫
-# ═══════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# █ 區塊1：設定檔讀寫
+# ═══════════════════════════════════════════════════════════
 CONFIG_PATH = "config.yaml"
 
 def load_config():
@@ -84,6 +84,10 @@ def save_config(cfg):
 config = load_config()
 regions = config.get("regions", [])
 
+
+# ═══════════════════════════════════════════════════════════
+# █ 區塊2：Session State 初始化
+# ═══════════════════════════════════════════════════════════
 if "logs" not in st.session_state:
     st.session_state.logs = ["[--:--:--] 系統已就緒，請選擇作業..."]
 if "editing_region" not in st.session_state:
@@ -96,6 +100,9 @@ if "run_params" not in st.session_state:
     st.session_state.run_params = {}
 
 
+# ═══════════════════════════════════════════════════════════
+# █ 區塊3：日誌工具
+# ═══════════════════════════════════════════════════════════
 def add_log(message: str, level: str = "info"):
     import pytz
     now = datetime.now(pytz.timezone("Asia/Taipei")).strftime("%H:%M:%S")
@@ -110,7 +117,13 @@ def add_log(message: str, level: str = "info"):
 
 def _render_log(placeholder):
     entries = list(st.session_state.logs)
-    html = '<div class="log-box"><div class="log-header"><span>📋 執行日誌</span><span style="background:#1e4757;padding:3px 10px;border-radius:20px;font-size:0.75rem;">即時更新</span></div><div class="log-scroll">'
+    html = (
+        '<div class="log-box">'
+        '<div class="log-header">'
+        '<span>📋 執行日誌</span>'
+        '<span style="background:#1e4757;padding:3px 10px;border-radius:20px;font-size:0.75rem;">即時更新</span>'
+        '</div><div class="log-scroll">'
+    )
     for entry in reversed(entries):
         css = "log-entry"
         if "✅" in entry:
@@ -124,31 +137,10 @@ def _render_log(placeholder):
     placeholder.markdown(html, unsafe_allow_html=True)
 
 
-# ═══════════════════════════════════════
-# 主標題
-# ═══════════════════════════════════════
-st.markdown('<div class="app-title">🍋 Lemon Clean 薪資系統</div>', unsafe_allow_html=True)
-
-
-# ═══════════════════════════════════════
-# 執行設定
-# ═══════════════════════════════════════
-st.markdown('<div class="card"><div class="card-title">⚙️ 執行設定</div>', unsafe_allow_html=True)
-
-c1, c2 = st.columns(2)
-with c1:
-    st.markdown('<div class="field-label">📆 執行期別</div>', unsafe_allow_html=True)
-    period = st.text_input("期別", value=get_auto_period(), label_visibility="collapsed", key="period")
-
-with c2:
-    st.markdown('<div class="field-label">🗂️ 執行系統</div>', unsafe_allow_html=True)
-    system = st.selectbox(
-        "系統",
-        ["💰 金流對帳", "🧹 清潔承攬", "📦 其他承攬"],
-        label_visibility="collapsed", key="system"
-    )
-
-function_map = {
+# ═══════════════════════════════════════════════════════════
+# █ 區塊4：執行功能選單設定
+# ═══════════════════════════════════════════════════════════
+FUNCTION_MAP = {
     "💰 金流對帳": [
         "① 建立期別資料夾與檔案",
         "② 期別訂單轉檔（xls/xlsx → Google Sheet）",
@@ -160,9 +152,18 @@ function_map = {
         "⑧ 搬運發票＋藍新",
     ],
     "🧹 清潔承攬": [
-        "薪資表整理", "00調薪", "01專員請款", "02儲值金",
-        "標注新人實境期別", "03新人實境", "04新人實習",
-        "05組長津貼", "工具包押金", "元大帳戶更新", "結算整理", "產生PDF",
+        "① 前置作業",
+        "② 00調薪",
+        "③ 01專員請款",
+        "④ 02儲值金",
+        "標注新人實境期別",
+        "⑤ 03新人實境",
+        "⑥ 04新人實習",
+        "⑦ 05組長津貼",
+        "⑧ 工具包押金",
+        "元大帳戶更新",
+        "結算整理",
+        "產生PDF",
     ],
     "📦 其他承攬": [
         "水洗前置", "家電前置", "全部前置",
@@ -170,9 +171,37 @@ function_map = {
     ],
 }
 
+
+# ═══════════════════════════════════════════════════════════
+# █ 區塊5：UI — 主標題
+# ═══════════════════════════════════════════════════════════
+st.markdown('<div class="app-title">🍋 Lemon Clean 薪資系統</div>', unsafe_allow_html=True)
+
+
+# ═══════════════════════════════════════════════════════════
+# █ 區塊6：UI — 執行設定卡片
+# ═══════════════════════════════════════════════════════════
+st.markdown('<div class="card"><div class="card-title">⚙️ 執行設定</div>', unsafe_allow_html=True)
+
+c1, c2 = st.columns(2)
+with c1:
+    st.markdown('<div class="field-label">📆 執行期別</div>', unsafe_allow_html=True)
+    period = st.text_input(
+        "期別", value=get_auto_period(),
+        label_visibility="collapsed", key="period"
+    )
+with c2:
+    st.markdown('<div class="field-label">🗂️ 執行系統</div>', unsafe_allow_html=True)
+    system = st.selectbox(
+        "系統",
+        ["💰 金流對帳", "🧹 清潔承攬", "📦 其他承攬"],
+        label_visibility="collapsed", key="system"
+    )
+
 st.markdown('<div class="field-label">🎯 執行功能</div>', unsafe_allow_html=True)
 selected_function = st.selectbox(
-    "功能", function_map[system], label_visibility="collapsed", key="func"
+    "功能", FUNCTION_MAP[system],
+    label_visibility="collapsed", key="func"
 )
 
 c3, c4 = st.columns([2, 1])
@@ -181,7 +210,8 @@ with c3:
     region_names = [r["name"] for r in regions]
     if region_names:
         selected_name = st.selectbox(
-            "地區", region_names, label_visibility="collapsed", key="region"
+            "地區", region_names,
+            label_visibility="collapsed", key="region"
         )
         selected_region = next((r for r in regions if r["name"] == selected_name), {})
     else:
@@ -196,9 +226,9 @@ with c4:
 st.markdown('</div>', unsafe_allow_html=True)
 
 
-# ═══════════════════════════════════════
-# 日誌區塊
-# ═══════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# █ 區塊7：UI — 日誌區塊
+# ═══════════════════════════════════════════════════════════
 log_placeholder = st.empty()
 st.session_state.log_placeholder = log_placeholder
 _render_log(log_placeholder)
@@ -210,15 +240,15 @@ with col_clear:
         _render_log(log_placeholder)
 
 
-# ═══════════════════════════════════════
-# 執行邏輯
-# ═══════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# █ 區塊8：執行邏輯 — 共用前置檢查
+# ═══════════════════════════════════════════════════════════
 if run_clicked:
-    _period = period
-    _system = system
-    _func = selected_function
-    _name = selected_name
-    _region = selected_region
+    _period  = period
+    _system  = system
+    _func    = selected_function
+    _name    = selected_name
+    _region  = selected_region
 
     if not _period:
         add_log("請先輸入期別", "error")
@@ -229,21 +259,24 @@ if run_clicked:
         if not root_id:
             add_log(f"【{_name}】尚未設定根目錄 ID", "error")
         else:
-            half = "上半月" if is_first_half(_period) else "下半月"
+            _is_first_half = is_first_half(_period)
+            half = "上半月" if _is_first_half else "下半月"
             add_log(f"執行【{_name}】{half} {_func}，期別：{_period}")
 
             try:
                 from modules.master_sheet import record_execution, record_batch
 
+                # ───────────────────────────────────────────────
+                # █ 區塊8-A：金流對帳執行邏輯
+                # ───────────────────────────────────────────────
                 if _system == "💰 金流對帳":
 
                     if "① 建立期別" in _func:
                         from modules.payment_reconciliation import create_period
                         result = create_period(root_id, _period, _name, add_log)
-                        copied = result.get('copied', 0)
+                        copied = result.get("copied", 0)
                         add_log(f"建立完成，共複製 {copied} 個檔案", "success")
-                        # 打卡：記錄資料夾ID和各檔案ID
-                        file_ids = result.get("fileIds", {})
+                        file_ids  = result.get("fileIds", {})
                         folder_id_val = result.get("folderId", None)
                         record_batch(_name, _period, [
                             {"task_key": "手動期別資料夾",   "count": folder_id_val},
@@ -257,7 +290,6 @@ if run_clicked:
                         from modules.payment_reconciliation import convert_order_file
                         result = convert_order_file(root_id, _period, _name, add_log)
                         add_log("期別訂單轉檔完成", "success")
-                        # 讀取轉好的 Google Sheet 筆數
                         order_count = None
                         try:
                             from modules.auth import open_spreadsheet
@@ -267,21 +299,18 @@ if run_clicked:
                                 ws = ss_order.worksheets()[0]
                                 all_vals = ws.col_values(1)
                                 order_count = len([v for v in all_vals[1:] if v and v.strip()])
-                                add_log(f"🔵 訂單筆數：{order_count} 筆")
+                                add_log(f"訂單筆數：{order_count} 筆")
                         except Exception as e:
-                            add_log(f"⚠️ 讀取筆數失敗：{e}", "warning")
+                            add_log(f"讀取筆數失敗：{e}", "warning")
                         record_execution(_name, _period, "期別訂單轉檔", order_count)
 
                     elif "③ 期別訂單搬運" in _func:
                         from modules.payment_reconciliation import copy_orders_to_template
                         result = copy_orders_to_template(root_id, _period, _name, add_log)
-                        count = result["count"]
+                        count     = result["count"]
                         start_row = result["start_row"]
                         add_log(f"搬運完成：{count} 筆，起始列：{start_row}", "success")
-                        # 存到 session_state 供 ④ 加工用
-                        key = f"start_row_{_period}_{_name}"
-                        st.session_state[key] = start_row
-                        # 打卡
+                        st.session_state[f"start_row_{_period}_{_name}"] = start_row
                         record_batch(_name, _period, [
                             {"task_key": "訂單起始列",   "count": start_row},
                             {"task_key": "複製期別訂單", "count": count},
@@ -289,128 +318,102 @@ if run_clicked:
 
                     elif "④ 期別訂單加工" in _func:
                         from modules.payment_reconciliation import process_template
-                        # 從 session_state 讀起始列
-                        key = f"start_row_{_period}_{_name}"
+                        key       = f"start_row_{_period}_{_name}"
                         start_row = st.session_state.get(key)
-                        # Double check：和打卡表比對
                         try:
                             from modules.master_sheet import get_recorded_value
                             recorded_start = get_recorded_value(_name, _period, "訂單起始列")
                             if recorded_start and start_row and int(recorded_start) != int(start_row):
-                                add_log(f"⚠️ Double check 不一致：session={start_row}，打卡表={recorded_start}，使用打卡表的值", "warning")
+                                add_log(f"Double check 不一致：session={start_row}，打卡表={recorded_start}，使用打卡表", "warning")
                                 start_row = int(recorded_start)
                             elif recorded_start and not start_row:
                                 start_row = int(recorded_start)
-                                add_log(f"🔵 從打卡表讀取起始列：{start_row}")
+                                add_log(f"從打卡表讀取起始列：{start_row}")
                         except Exception:
                             pass
-
-                        result = process_template(root_id, _period, _name, start_row, add_log)
-                        sort_count = result['sort_count']
-                        mark_count = result['mark_count']
-                        expand_count = result['expand_count']
-                        category_counts = result.get('category_counts', {})
-                        add_log(
-                            f"加工完成：排序 {sort_count} 筆，"
-                            f"異常 {mark_count} 筆，"
-                            f"拆解新增 {expand_count} 列",
-                            "success"
-                        )
-                        if category_counts:
-                            for cat, cnt in category_counts.items():
-                                add_log(f"　{cat}：拆解後 {cnt} 列")
+                        result         = process_template(root_id, _period, _name, start_row, add_log)
+                        sort_count     = result["sort_count"]
+                        mark_count     = result["mark_count"]
+                        expand_count   = result["expand_count"]
+                        category_counts = result.get("category_counts", {})
+                        add_log(f"加工完成：排序 {sort_count} 筆，異常 {mark_count} 筆，拆解新增 {expand_count} 列", "success")
+                        for cat, cnt in category_counts.items():
+                            add_log(f"　{cat}：拆解後 {cnt} 列")
                         for w in result.get("warnings", []):
                             add_log(w, "warning")
-                        # 存 category_counts 供 ⑤ 分類搬運使用
                         st.session_state[f"category_counts_{_period}_{_name}"] = category_counts
-                        # 打卡：加工結果
                         batch = [
-                            {"task_key": "加工-排序",           "count": sort_count},
+                            {"task_key": "加工-排序",            "count": sort_count},
                             {"task_key": "加工-K欄標註異常標橘底", "count": mark_count},
                         ]
-                        # 各類別加工筆數
-                        cat_task_map = {
-                            "水洗": "加工-水洗加工",
-                            "家電": "加工-家電加工",
-                            "收納": "加工-收納加工",
-                            "座椅": "加工-座椅加工",
+                        for cat, task_key in {
+                            "水洗": "加工-水洗加工", "家電": "加工-家電加工",
+                            "收納": "加工-收納加工", "座椅": "加工-座椅加工",
                             "地毯": "加工-地毯加工",
-                        }
-                        for cat, task_key in cat_task_map.items():
+                        }.items():
                             batch.append({"task_key": task_key, "count": category_counts.get(cat, 0)})
                         record_batch(_name, _period, batch)
 
                     elif "⑤ 期別訂單分類" in _func:
                         from modules.payment_reconciliation import copy_classified_data
                         from modules.master_sheet import get_recorded_value
-                        # Double check：確認起始列和筆數與 ③ 一致
-                        key = f"start_row_{_period}_{_name}"
-                        start_row = st.session_state.get(key)
-                        # 取得 ④ 加工記錄的各類別拆解後列數
+                        key             = f"start_row_{_period}_{_name}"
+                        start_row       = st.session_state.get(key)
                         category_counts = st.session_state.get(f"category_counts_{_period}_{_name}", {})
                         try:
                             recorded_start = get_recorded_value(_name, _period, "訂單起始列")
                             recorded_count = get_recorded_value(_name, _period, "複製期別訂單")
                             if recorded_start:
                                 recorded_start = int(recorded_start)
-                            if recorded_count:
-                                recorded_count = int(recorded_count)
                             if start_row and recorded_start and start_row != recorded_start:
-                                add_log(f"⚠️ Double check：起始列不一致 session={start_row}，打卡表={recorded_start}，使用打卡表", "warning")
+                                add_log(f"Double check：起始列不一致 session={start_row}，打卡表={recorded_start}，使用打卡表", "warning")
                                 start_row = recorded_start
                             elif not start_row and recorded_start:
                                 start_row = recorded_start
-                                add_log(f"🔵 從打卡表讀取起始列：{start_row}")
+                                add_log(f"從打卡表讀取起始列：{start_row}")
                             if start_row and recorded_count:
-                                add_log(f"🔵 Double check：起始列={start_row}，③筆數={recorded_count} ✅")
+                                add_log(f"Double check：起始列={start_row}，③筆數={recorded_count} ✅")
                         except Exception as e:
-                            add_log(f"⚠️ Double check 失敗：{e}", "warning")
-
+                            add_log(f"Double check 失敗：{e}", "warning")
                         counts = copy_classified_data(root_id, _period, _name, start_row, category_counts, add_log)
                         add_log("分類搬運完成", "success")
                         for k, v in counts.items():
                             if v > 0:
                                 add_log(f"　{k}：{v} 筆")
-                        task_map = {
-                            "清潔": "複製清潔訂單",
-                            "水洗": "複製水洗訂單",
-                            "家電": "複製家電訂單",
-                            "收納": "複製收納訂單",
-                            "座椅": "複製座椅訂單",
-                            "地毯": "複製地毯訂單",
-                        }
-                        batch = []
-                        for label, task_key in task_map.items():
-                            v = counts.get(label, 0)
-                            batch.append({"task_key": task_key, "count": v})
-                        record_batch(_name, _period, batch)
+                        record_batch(_name, _period, [
+                            {"task_key": "複製清潔訂單", "count": counts.get("清潔", 0)},
+                            {"task_key": "複製水洗訂單", "count": counts.get("水洗", 0)},
+                            {"task_key": "複製家電訂單", "count": counts.get("家電", 0)},
+                            {"task_key": "複製收納訂單", "count": counts.get("收納", 0)},
+                            {"task_key": "複製座椅訂單", "count": counts.get("座椅", 0)},
+                            {"task_key": "複製地毯訂單", "count": counts.get("地毯", 0)},
+                        ])
 
                     elif "⑥ 金流對帳轉檔" in _func:
                         from modules.payment_reconciliation import convert_payment_file
                         from modules.auth import open_spreadsheet
-                        result = convert_payment_file(root_id, _period, _name, add_log)
-                        add_log("金流對帳轉檔完成", "success")
+                        result   = convert_payment_file(root_id, _period, _name, add_log)
                         file_ids = result.get("fileIds", {})
+                        add_log("金流對帳轉檔完成", "success")
 
-                        # 讀取各檔案筆數
                         def _get_sheet_count(fid):
                             if not fid:
                                 return None
                             try:
-                                ss = open_spreadsheet(fid)
-                                ws = ss.worksheets()[0]
+                                ss  = open_spreadsheet(fid)
+                                ws  = ss.worksheets()[0]
                                 vals = ws.col_values(1)
                                 return len([v for v in vals[1:] if v and v.strip()])
                             except Exception:
                                 return None
 
                         record_batch(_name, _period, [
-                            {"task_key": "期別發票轉檔",         "count": _get_sheet_count(file_ids.get("發票"))},
+                            {"task_key": "期別發票轉檔",          "count": _get_sheet_count(file_ids.get("發票"))},
                             {"task_key": "期別已退款全部加收轉檔", "count": _get_sheet_count(file_ids.get("已退款全部加收"))},
                             {"task_key": "期別已退款全部退款轉檔", "count": _get_sheet_count(file_ids.get("已退款全部退款"))},
-                            {"task_key": "期別預收轉檔",          "count": _get_sheet_count(file_ids.get("預收"))},
-                            {"task_key": "期別藍新收款轉檔",      "count": _get_sheet_count(file_ids.get("藍新收款"))},
-                            {"task_key": "期別藍新退款轉檔",      "count": _get_sheet_count(file_ids.get("藍新退款"))},
+                            {"task_key": "期別預收轉檔",           "count": _get_sheet_count(file_ids.get("預收"))},
+                            {"task_key": "期別藍新收款轉檔",       "count": _get_sheet_count(file_ids.get("藍新收款"))},
+                            {"task_key": "期別藍新退款轉檔",       "count": _get_sheet_count(file_ids.get("藍新退款"))},
                         ])
 
                     elif "⑦ 搬運退款" in _func:
@@ -438,8 +441,63 @@ if run_clicked:
                             {"task_key": "複製藍新退款", "count": counts.get("藍新退款")},
                         ])
 
-                else:
-                    add_log(f"{_system} {_func} 開發中", "warning")
+                # ───────────────────────────────────────────────
+                # █ 區塊8-B：清潔承攬執行邏輯
+                # ───────────────────────────────────────────────
+                elif _system == "🧹 清潔承攬":
+                    from modules.cleaning_salary import find_cleaning_file
+
+                    # 找清潔承攬試算表 ID
+                    # Drive 路徑：{root_folder_id}/{period}/{period}清潔承攬-{region}
+                    try:
+                        cleaning_file_id = find_cleaning_file(root_id, _period, _name)
+                        add_log(f"找到清潔承攬檔案：{cleaning_file_id}")
+                    except FileNotFoundError as e:
+                        add_log(str(e), "error")
+                        cleaning_file_id = None
+
+                    if cleaning_file_id:
+
+                        if "① 前置作業" in _func:
+                            from modules.cleaning_salary import run_preparation
+                            log_lines = []
+                            success = run_preparation(
+                                cleaning_file_id=cleaning_file_id,
+                                region=_name,
+                                period=_period,
+                                is_first_half=_is_first_half,
+                                log=log_lines,
+                            )
+                            for line in log_lines:
+                                lvl = "success" if line.startswith("✅") else \
+                                      "error"   if line.startswith("❌") else \
+                                      "warning" if line.startswith("⚠️") else "info"
+                                add_log(line, lvl)
+
+                        elif "② 00調薪" in _func:
+                            from modules.cleaning_salary import run_adjustment
+                            log_lines = []
+                            success = run_adjustment(
+                                cleaning_file_id=cleaning_file_id,
+                                region=_name,
+                                period=_period,
+                                is_first_half=_is_first_half,
+                                log=log_lines,
+                            )
+                            for line in log_lines:
+                                lvl = "success" if line.startswith("✅") else \
+                                      "error"   if line.startswith("❌") else \
+                                      "warning" if line.startswith("⚠️") else "info"
+                                add_log(line, lvl)
+
+                        else:
+                            add_log(f"{_func} 開發中", "warning")
+
+                # ───────────────────────────────────────────────
+                # █ 區塊8-C：其他承攬執行邏輯（待開發）
+                # ───────────────────────────────────────────────
+                elif _system == "📦 其他承攬":
+                    add_log(f"其他承攬 {_func} 開發中", "warning")
 
             except Exception as e:
                 import traceback
@@ -447,13 +505,13 @@ if run_clicked:
                 add_log(traceback.format_exc(), "error")
 
 
-# ═══════════════════════════════════════
-# 排程設定
-# ═══════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# █ 區塊9：UI — 排程設定
+# ═══════════════════════════════════════════════════════════
 st.markdown('<div class="card"><div class="card-title">⏰ 排程設定</div>', unsafe_allow_html=True)
 
-schedule = config.get("schedule", {})
-sc1, sc2 = st.columns(2)
+schedule  = config.get("schedule", {})
+sc1, sc2  = st.columns(2)
 with sc1:
     st.markdown('<div class="field-label">📅 排程日期（每月幾號，逗號分隔）</div>', unsafe_allow_html=True)
     sched_days = st.text_input(
@@ -469,9 +527,9 @@ with sc2:
 
 sc3, sc4 = st.columns(2)
 with sc3:
-    sched_all = st.checkbox("套用全部地區", value=schedule.get("all_regions", True))
+    sched_all     = st.checkbox("套用全部地區", value=schedule.get("all_regions", True))
 with sc4:
-    sched_enabled = st.checkbox("啟用排程", value=schedule.get("enabled", False))
+    sched_enabled = st.checkbox("啟用排程",     value=schedule.get("enabled",     False))
 
 if st.button("💾 儲存排程設定", use_container_width=True):
     try:
@@ -479,11 +537,11 @@ if st.button("💾 儲存排程設定", use_container_width=True):
         if not days:
             raise ValueError("請輸入排程日期")
         config["schedule"] = {
-            "enabled": sched_enabled,
-            "days": days,
-            "time": sched_time,
-            "timezone": "Asia/Taipei",
-            "task": "建立期別資料夾與檔案",
+            "enabled":    sched_enabled,
+            "days":       days,
+            "time":       sched_time,
+            "timezone":   "Asia/Taipei",
+            "task":       "建立期別資料夾與檔案",
             "all_regions": sched_all,
         }
         save_config(config)
@@ -495,9 +553,9 @@ if st.button("💾 儲存排程設定", use_container_width=True):
 st.markdown('</div>', unsafe_allow_html=True)
 
 
-# ═══════════════════════════════════════
-# 地區設定
-# ═══════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# █ 區塊10：UI — 地區設定
+# ═══════════════════════════════════════════════════════════
 st.markdown('<div class="card"><div class="card-title">⚙️ 地區設定</div>', unsafe_allow_html=True)
 
 REGION_FIELDS = [
@@ -516,11 +574,11 @@ with col_add:
 if st.session_state.adding_region:
     with st.form("add_region_form"):
         st.markdown("**新增地區**")
-        new_name = st.text_input("地區名稱", placeholder="台北")
-        new_root = st.text_input("根目錄 ID")
+        new_name      = st.text_input("地區名稱",  placeholder="台北")
+        new_root      = st.text_input("根目錄 ID")
         new_allowance = st.text_input("請款 ID")
-        new_salary = st.text_input("薪資 ID")
-        new_roster = st.text_input("名冊 ID")
+        new_salary    = st.text_input("薪資 ID")
+        new_roster    = st.text_input("名冊 ID")
 
         s1, s2 = st.columns(2)
         with s1:
@@ -533,20 +591,19 @@ if st.session_state.adding_region:
                 st.error("地區名稱和根目錄 ID 為必填")
             else:
                 regions.append({
-                    "name": new_name,
+                    "name":           new_name,
                     "root_folder_id": new_root,
-                    "allowance_id": new_allowance,
-                    "salary_id": new_salary,
-                    "roster_id": new_roster,
+                    "allowance_id":   new_allowance,
+                    "salary_id":      new_salary,
+                    "roster_id":      new_roster,
                 })
                 config["regions"] = regions
                 save_config(config)
 
-                # 初始化主控試算表工作表（在 rerun 前執行）
                 init_msg = ""
                 try:
                     from modules.master_sheet import init_region_sheet
-                    is_new = init_region_sheet(new_name)
+                    is_new   = init_region_sheet(new_name)
                     init_msg = f"主控試算表：【{new_name}】工作表{'已建立' if is_new else '已存在'}"
                 except Exception as e:
                     init_msg = f"主控試算表初始化失敗：{e}"
@@ -561,32 +618,32 @@ if st.session_state.adding_region:
             st.rerun()
 
 for i, region in enumerate(regions):
-    name = region.get("name", f"地區{i+1}")
+    name    = region.get("name", f"地區{i+1}")
     all_set = all(region.get(f) for f, _ in REGION_FIELDS)
-    badge = '<span class="badge-ok">已設定</span>' if all_set else '<span class="badge-err">未完整</span>'
+    badge   = '<span class="badge-ok">已設定</span>' if all_set else '<span class="badge-err">未完整</span>'
 
     if st.session_state.editing_region == name:
         with st.form(f"edit_{name}_{i}"):
             st.markdown(f"**編輯：{name}**")
-            e_name = st.text_input("地區名稱", value=name)
-            e_root = st.text_input("根目錄 ID", value=region.get("root_folder_id", ""))
-            e_allowance = st.text_input("請款 ID", value=region.get("allowance_id", ""))
-            e_salary = st.text_input("薪資 ID", value=region.get("salary_id", ""))
-            e_roster = st.text_input("名冊 ID", value=region.get("roster_id", ""))
+            e_name      = st.text_input("地區名稱", value=name)
+            e_root      = st.text_input("根目錄 ID",  value=region.get("root_folder_id", ""))
+            e_allowance = st.text_input("請款 ID",    value=region.get("allowance_id",   ""))
+            e_salary    = st.text_input("薪資 ID",    value=region.get("salary_id",      ""))
+            e_roster    = st.text_input("名冊 ID",    value=region.get("roster_id",      ""))
 
             es1, es2 = st.columns(2)
             with es1:
-                save_edit = st.form_submit_button("💾 儲存", use_container_width=True)
+                save_edit   = st.form_submit_button("💾 儲存", use_container_width=True)
             with es2:
                 cancel_edit = st.form_submit_button("✕ 取消", use_container_width=True)
 
             if save_edit:
                 regions[i] = {
-                    "name": e_name,
+                    "name":           e_name,
                     "root_folder_id": e_root,
-                    "allowance_id": e_allowance,
-                    "salary_id": e_salary,
-                    "roster_id": e_roster,
+                    "allowance_id":   e_allowance,
+                    "salary_id":      e_salary,
+                    "roster_id":      e_roster,
                 }
                 config["regions"] = regions
                 save_config(config)
@@ -600,9 +657,9 @@ for i, region in enumerate(regions):
     else:
         detail_html = ""
         for field, label in REGION_FIELDS:
-            val = region.get(field, "")
+            val    = region.get(field, "")
             status = "✅" if val else "❌ 未設定"
-            short = val[:22] + "..." if len(val) > 22 else val
+            short  = val[:22] + "..." if len(val) > 22 else val
             detail_html += f'<div class="detail-row"><strong>{label}</strong>：{status} {short}</div>'
 
         st.markdown(f"""
@@ -618,7 +675,7 @@ for i, region in enumerate(regions):
         with rc2:
             if st.button("📝 編輯", key=f"edit_{i}", use_container_width=True):
                 st.session_state.editing_region = name
-                st.session_state.adding_region = False
+                st.session_state.adding_region  = False
                 st.rerun()
         with rc3:
             if st.button("🗑️ 刪除", key=f"del_{i}", use_container_width=True):
@@ -631,9 +688,9 @@ for i, region in enumerate(regions):
 st.markdown('</div>', unsafe_allow_html=True)
 
 
-# ═══════════════════════════════════════
-# 系統維護（清理 Service Account 空間）
-# ═══════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+# █ 區塊11：UI — 系統維護
+# ═══════════════════════════════════════════════════════════
 with st.expander("🔧 系統維護"):
     st.caption("Service Account Drive 空間滿時，點此清理佔用的檔案")
 
@@ -645,12 +702,12 @@ with st.expander("🔧 系統維護"):
             try:
                 from modules.auth import get_drive_service
                 drive = get_drive_service()
-                res = drive.files().list(
+                res   = drive.files().list(
                     q="'me' in owners and trashed=false",
                     fields="files(id, name, mimeType)",
                     pageSize=100,
                     includeItemsFromAllDrives=True,
-                    supportsAllDrives=True
+                    supportsAllDrives=True,
                 ).execute()
                 files = res.get("files", [])
                 st.session_state.sa_files_list = files
@@ -672,7 +729,7 @@ with st.expander("🔧 系統維護"):
                     for f in st.session_state.sa_files_list:
                         drive.files().delete(
                             fileId=f["id"],
-                            supportsAllDrives=True
+                            supportsAllDrives=True,
                         ).execute()
                         add_log(f"已刪除：{f['name']}", "warning")
                     st.session_state.sa_files_list = []
@@ -680,3 +737,16 @@ with st.expander("🔧 系統維護"):
                     st.success("✅ 清理完成！")
                 except Exception as e:
                     st.error(f"清理失敗：{e}")
+
+    st.divider()
+    st.caption("初始化所有地區打卡工作表（更新主控試算表作業名稱）")
+    if st.button("🔄 初始化所有地區打卡表", use_container_width=True):
+        try:
+            from modules.master_sheet import init_region_sheet
+            for r in regions:
+                rname  = r.get("name", "")
+                is_new = init_region_sheet(rname)
+                add_log(f"【{rname}】打卡表{'已建立' if is_new else '已更新'}", "success")
+            st.success("✅ 初始化完成")
+        except Exception as e:
+            st.error(f"初始化失敗：{e}")
