@@ -58,13 +58,19 @@ def get_paste_row(sheet, is_first_half: bool, check_col: int = 2) -> int:
 def paste_data(sheet, start_row: int, data: list[list]) -> int:
     """
     從 start_row 開始貼入資料
+    自動擴展工作表列數（若不夠）
     回傳貼入的筆數
     """
     if not data:
         return 0
 
     end_row = start_row + len(data) - 1
-    range_notation = f"A{start_row}:A{end_row}"
+
+    # 若列數不夠，自動擴展
+    if end_row > sheet.row_count:
+        needed = end_row - sheet.row_count + 100  # 多留 100 列緩衝
+        sheet.add_rows(needed)
+
     sheet.update(f"A{start_row}", data, value_input_option="USER_ENTERED")
     return len(data)
 
