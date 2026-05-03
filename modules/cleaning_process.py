@@ -5,7 +5,6 @@ Lemon Clean 清潔承攬 — 前置作業 & 00調薪
 依賴：
     modules/auth.py           — get_gspread_client()
     modules/master_sheet.py   — record_execution()
-    modules/common_process.py — run_common_process()
 
 清潔承攬試算表（exec 工作表）關鍵儲存格（供程式讀取，不在此打卡）：
     B1  → 期別 YYYYMM（如 202605）
@@ -37,7 +36,6 @@ from gspread.utils import rowcol_to_a1
 
 from modules.auth import get_gspread_client
 from modules.master_sheet import record_execution
-from modules.common_process import run_common_process
 
 
 # ──────────────────────────────────────────────────────────────
@@ -127,11 +125,15 @@ def _col_letter(n: int) -> str:
 
 
 def _last_nonempty_row(ws: gspread.Worksheet, col: int = 2) -> int:
-    """找指定欄（1-based）最後一筆非空白列號，找不到回傳 0。"""
+    """
+    找指定欄（1-based）最後一筆非空白列號，找不到回傳 0。
+    從第 2 列起算（跳過第 1 列標題）。
+    """
     vals = ws.col_values(col)
-    for i in range(len(vals) - 1, -1, -1):
+    # index 0 = 第1列（標題），從最後往前找，跳過 index 0
+    for i in range(len(vals) - 1, 0, -1):
         if str(vals[i]).strip():
-            return i + 1
+            return i + 1  # i 是 0-based index，+1 = 列號
     return 0
 
 
@@ -265,6 +267,12 @@ def run_preparation(
     """
     前置作業主函數。
 
+    步驟1：薪資表特定列處理（只清空/貼值，薪資表有自己的公式，不另外寫入資料）
+    步驟2：讀取清潔營收明細（B欄非空，筆數參照主控表第25列）
+    步驟3：上半月清空清潔訂單/專案訂單；下半月找接續列
+    步驟4：Y欄=1299 → 專案訂單；其餘 → 清潔訂單（J欄保持數值）
+    步驟5：AH欄移除「檸檬人」；AH清空時連帶清空J欄
+
     Args:
         cleaning_file_id: 清潔承攬試算表 ID
         region:           地區名稱（用於主控打卡）
@@ -282,17 +290,16 @@ def run_preparation(
         gc = get_gspread_client()
         ss = gc.open_by_key(cleaning_file_id)
 
-        # 先列出所有工作表名稱以利除錯
+        # 列出工作表供除錯
         all_sheet_titles = [s.title for s in ss.worksheets()]
-        _log(log, f"    試算表工作表清單：{all_sheet_titles}")
+        _log(log, f"    工作表清單：{all_sheet_titles}")
 
         def _ws(name):
             try:
                 return ss.worksheet(name)
             except Exception:
                 raise ValueError(
-                    f"找不到工作表「{name}」，"
-                    f"試算表現有工作表：{all_sheet_titles}"
+                    f"找不到工作表「{name}」，現有：{all_sheet_titles}"
                 )
 
         ws_salary  = _ws("薪資表")
@@ -300,22 +307,21 @@ def run_preparation(
         ws_order   = _ws("清潔訂單")
         ws_proj    = _ws("專案訂單")
 
-        # 讀取本期搬入清潔訂單筆數
-        # 來源：主控試算表「複製清潔訂單」× 該期別欄位
-        # （金流對帳 ⑤ 分類搬運完成後打卡的數字）
+        # 從主控試算表第25列「複製清潔訂單」讀取本期筆數
         try:
             from modules.master_sheet import get_recorded_value
-            recorded = get_recorded_value(region, period, "複製清潔訂單")
-            period_count = int(recorded) if recorded else 0
+            period_count = int(get_recorded_value(region, period, "複製清潔訂單") or 0)
         except Exception as e:
             period_count = 0
-            _log(log, f"    ⚠️ 讀取主控試算表「複製清潔訂單」失敗：{e}", )
+            _log(log, f"    ⚠️ 讀取主控試算表失敗：{e}")
+
         if period_count <= 0:
             raise ValueError(
-                f"主控試算表「複製清潔訂單」筆數為 0 或未打卡（期別：{period}，地區：{region}），"
+                f"主控試算表「複製清潔訂單」筆數為 0 或未打卡"
+                f"（期別：{period}，地區：{region}），"
                 "請確認金流對帳 ⑤ 分類搬運已完成"
             )
-        _log(log, f"    從主控試算表讀取清潔訂單筆數：{period_count} 筆")
+        _log(log, f"    主控表「複製清潔訂單」：{period_count} 筆")
 
         # ── 步驟1：薪資表特定列處理 ──────────────────────────
         _log(log, "  步驟1：薪資表特定列處理")
@@ -323,35 +329,28 @@ def run_preparation(
 
         # ── 步驟2：讀取清潔營收明細 ──────────────────────────
         _log(log, "  步驟2：讀取清潔營收明細")
-        revenue_rows, revenue_bgs = _prep_step2_read_revenue(
-            ws_revenue, period_count, log
-        )
-        if not revenue_rows:
-            raise ValueError(
-                "清潔營收明細中未找到本期資料，請確認金流對帳已完成分類搬入"
-            )
+        values, bgs = _prep_step2_read_revenue(ws_revenue, period_count, log)
+        if not values:
+            raise ValueError("清潔營收明細中未找到本期資料，請確認金流對帳已完成分類搬入")
 
         # ── 步驟3：清空 / 找接續列 ───────────────────────────
         _log(log, "  步驟3：清空或接續訂單工作表")
-        order_start = _prep_step3_prepare_sheets(ws_order, ws_proj, is_first_half, log)
+        order_start, proj_start = _prep_step3_prepare_sheets(
+            ws_order, ws_proj, is_first_half, log
+        )
 
         # ── 步驟4：分流搬入 ──────────────────────────────────
         _log(log, "  步驟4：分流搬入")
         n_count, p_count = _prep_step4_split_paste(
-            ws_order, ws_proj, revenue_rows, revenue_bgs,
-            order_start, is_first_half, log
+            ws_order, ws_proj, values, bgs,
+            order_start, proj_start, log
         )
         _log(log, f"  步驟4 完成：清潔訂單 {n_count} 筆，專案訂單 {p_count} 筆")
 
         # ── 步驟5：移除檸檬人 ────────────────────────────────
-        _log(log, "  步驟5：移除清潔訂單中的檸檬人")
+        _log(log, "  步驟5：移除清潔訂單 AH 欄檸檬人")
         lemon_count = _prep_step5_remove_lemon(ws_order, log)
         _log(log, f"  步驟5 完成：處理 {lemon_count} 筆")
-
-        # ── 步驟6：共用 QRS 流程 ─────────────────────────────
-        _log(log, "  步驟6：執行共用 QRS 流程")
-        run_common_process(cleaning_file_id, "清潔訂單")
-        _log(log, "  步驟6 完成")
 
         # ── 打卡 ─────────────────────────────────────────────
         ts = _now_ts()
@@ -372,8 +371,9 @@ def _prep_step1_salary_rows(
     log: List[str],
 ):
     """
-    上半月：清空 L2039 及 L2043（整列至最後欄）
-    下半月：L2044→L2043、L2038→L2039（貼值）
+    薪資表有自己的公式，這裡只做特定列的清空或貼值，不寫入其他任何資料。
+    上半月：清空 L2041 及 L2045（整列至最後欄）
+    下半月：L2046→L2045、L2040→L2041（貼值，非公式複製）
     """
     last_col    = ws_salary.col_count
     last_letter = _col_letter(last_col)
@@ -382,17 +382,17 @@ def _prep_step1_salary_rows(
         return f"L{row}:{last_letter}{row}"
 
     if is_first_half:
-        ws_salary.batch_clear([_range(2039), _range(2043)])
-        _log(log, "    上半月：已清空 L2039 及 L2043")
+        ws_salary.batch_clear([_range(2041), _range(2045)])
+        _log(log, "    上半月：已清空 L2041 及 L2045")
     else:
-        v2044 = ws_salary.get(_range(2044)) or [[]]
-        ws_salary.update(_range(2043), v2044, value_input_option="RAW")
-        v2038 = ws_salary.get(_range(2038)) or [[]]
-        ws_salary.update(_range(2039), v2038, value_input_option="RAW")
-        _log(log, "    下半月：2044→2043、2038→2039 貼值完成")
+        v2046 = ws_salary.get(_range(2046)) or [[]]
+        ws_salary.update(_range(2045), v2046, value_input_option="RAW")
+        v2040 = ws_salary.get(_range(2040)) or [[]]
+        ws_salary.update(_range(2041), v2040, value_input_option="RAW")
+        _log(log, "    下半月：L2046→L2045、L2040→L2041 貼值完成")
 
 
-# ── 步驟2 ────────────────────────────────────────────────────
+# ── 步驟2：讀取清潔營收明細 ──────────────────────────────────
 
 def _prep_step2_read_revenue(
     ws_revenue: gspread.Worksheet,
@@ -401,11 +401,8 @@ def _prep_step2_read_revenue(
 ) -> Tuple[List[List], List[List]]:
     """
     從清潔營收明細 B 欄最後非空白列往上數 period_count 筆。
+    原樣讀取，不轉換任何型態。
     """
-    if period_count <= 0:
-        _log(log, "    ⚠️ period_count 為 0，無法讀取清潔營收明細")
-        return [], []
-
     last_row = _last_nonempty_row(ws_revenue, col=2)
     if last_row < 2:
         return [], []
@@ -413,34 +410,38 @@ def _prep_step2_read_revenue(
     start_row = max(2, last_row - period_count + 1)
     num_rows  = last_row - start_row + 1
 
-    raw = ws_revenue.get(f"A{start_row}:BJ{last_row}") or []
+    raw    = ws_revenue.get(f"A{start_row}:BJ{last_row}") or []
     values = [_pad_row(r) for r in raw]
-
-    bgs = _get_backgrounds(ws_revenue, start_row, 1, num_rows, 62)
+    bgs    = _get_backgrounds(ws_revenue, start_row, 1, num_rows, 62)
     _log(log, f"    讀取第 {start_row} 列起，共 {num_rows} 筆")
     return values, bgs
 
 
-# ── 步驟3 ────────────────────────────────────────────────────
+# ── 步驟3：清空 / 找接續列 ────────────────────────────────────
 
 def _prep_step3_prepare_sheets(
     ws_order: gspread.Worksheet,
     ws_proj: gspread.Worksheet,
     is_first_half: bool,
     log: List[str],
-) -> int:
+) -> Tuple[int, int]:
+    """
+    上半月：清空清潔訂單 & 專案訂單，回傳起始列 (2, 2)
+    下半月：各自找 B 欄最後非空白列的下一列
+    """
     if is_first_half:
         ws_order.batch_clear(["A2:BJ"])
         ws_proj.batch_clear(["A2:BJ"])
         _log(log, "    上半月：清潔訂單 & 專案訂單已清空")
-        return 2
+        return 2, 2
     else:
-        start = _get_first_empty_by_col_b(ws_order)
-        _log(log, f"    下半月：清潔訂單接續列 = {start}")
-        return start
+        order_start = _get_first_empty_by_col_b(ws_order)
+        proj_start  = _get_first_empty_by_col_b(ws_proj)
+        _log(log, f"    下半月：清潔訂單接續列={order_start}，專案訂單接續列={proj_start}")
+        return order_start, proj_start
 
 
-# ── 步驟4 ────────────────────────────────────────────────────
+# ── 步驟4：分流搬入 ──────────────────────────────────────────
 
 def _prep_step4_split_paste(
     ws_order: gspread.Worksheet,
@@ -448,20 +449,21 @@ def _prep_step4_split_paste(
     values: List[List],
     bgs: List[List],
     order_start: int,
-    is_first_half: bool,
+    proj_start: int,
     log: List[str],
 ) -> Tuple[int, int]:
     """
-    Y 欄（index 24）= "1299" → 專案訂單
-    其餘 → 清潔訂單
+    Y 欄（index 24）= 1299 → 專案訂單；其餘 → 清潔訂單。
+    原樣寫入（RAW），不轉換型態。
     """
     normal_v, normal_bg = [], []
     proj_v,   proj_bg   = [], []
 
     for i, row in enumerate(values):
-        y_val = str(row[24]).strip() if len(row) > 24 else ""
-        bg    = bgs[i] if i < len(bgs) else [""] * 62
-        if y_val == "1299":
+        y_val   = row[24] if len(row) > 24 else ""
+        is_proj = (str(y_val).strip() == "1299")
+        bg      = bgs[i] if i < len(bgs) else [""] * 62
+        if is_proj:
             proj_v.append(row)
             proj_bg.append(bg)
         else:
@@ -476,32 +478,27 @@ def _prep_step4_split_paste(
         _apply_backgrounds(ws, start, 1, b)
 
     _paste(ws_order, order_start, normal_v, normal_bg)
-
-    proj_start = 2 if is_first_half else _get_first_empty_by_col_b(ws_proj)
-    _paste(ws_proj, proj_start, proj_v, proj_bg)
+    _paste(ws_proj,  proj_start,  proj_v,   proj_bg)
 
     return len(normal_v), len(proj_v)
 
 
-# ── 步驟5 ────────────────────────────────────────────────────
+# ── 步驟5：移除檸檬人 ────────────────────────────────────────
 
 def _prep_step5_remove_lemon(
     ws_order: gspread.Worksheet,
     log: List[str],
 ) -> int:
     """
-    清潔訂單工作表 AH 欄（col 34）移除「檸檬人」字樣。
-    移除後若該列 AH 欄變為空白，同時清空同列 J 欄（col 10）。
-    直接對 ws_order 操作，不經過 spreadsheet 層級，避免工作表混淆。
+    清潔訂單 AH 欄（col 34）移除「檸檬人」。
+    AH 清空後，同列 J 欄（col 10）連帶清空。
     """
-    all_ah = ws_order.col_values(34)  # AH = col 34
-    count  = 0
+    all_ah      = ws_order.col_values(34)
+    ah_updates  = {}
+    j_clears    = set()
+    count       = 0
 
-    # 收集需要更新的儲存格（逐格 update_cell，確保一定寫入 ws_order）
-    ah_updates = {}  # row → cleaned value
-    j_clears   = set()
-
-    for i in range(1, len(all_ah)):  # index 0 = 標題列，跳過
+    for i in range(1, len(all_ah)):   # index 0 = 標題列，跳過
         ah = str(all_ah[i])
         if "檸檬人" not in ah:
             continue
@@ -510,17 +507,16 @@ def _prep_step5_remove_lemon(
             for s in re.split(r"\s*[Xx×Ｘ]\s*", ah)
             if s.strip() and "檸檬人" not in s
         )
-        row = i + 1  # col_values index 從 0 = 第 1 列
+        row = i + 1
         ah_updates[row] = cleaned
         if not cleaned:
             j_clears.add(row)
         count += 1
 
-    # 逐格寫入（gspread update_cell 直接對該工作表操作，不會混淆）
     for row, val in ah_updates.items():
-        ws_order.update_cell(row, 34, val)   # AH = col 34
+        ws_order.update_cell(row, 34, val)
     for row in j_clears:
-        ws_order.update_cell(row, 10, "")    # J  = col 10
+        ws_order.update_cell(row, 10, "")
 
     return count
 
