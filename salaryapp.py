@@ -413,9 +413,7 @@ if run_clicked:
                         ])
 
                 elif _system == "🧹 清潔承攬":
-                   cleaning_id = _region.get("cleaning_id", "")  # 清潔承攬試算表 ID
-                   if not cleaning_id:
-                       add_log("尚未設定清潔承攬試算表 ID", "error")
+                
                    else:
                        log_lines = []
                        if _func == "前置作業":
