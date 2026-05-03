@@ -160,7 +160,7 @@ function_map = {
         "⑧ 搬運發票＋藍新",
     ],
     "🧹 清潔承攬": [
-        "前置作業", "00調薪", "01專員請款", "02儲值金",
+        "薪資表整理", "00調薪", "01專員請款", "02儲值金",
         "標注新人實境期別", "03新人實境", "04新人實習",
         "05組長津貼", "工具包押金", "元大帳戶更新", "結算整理", "產生PDF",
     ],
@@ -257,8 +257,20 @@ if run_clicked:
                         from modules.payment_reconciliation import convert_order_file
                         result = convert_order_file(root_id, _period, _name, add_log)
                         add_log("期別訂單轉檔完成", "success")
-                        # 打卡：記錄轉檔後的 Google Sheet ID
-                        record_execution(_name, _period, "期別訂單轉檔", result.get("fileId"))
+                        # 讀取轉好的 Google Sheet 筆數
+                        order_count = None
+                        try:
+                            from modules.auth import open_spreadsheet
+                            file_id = result.get("fileId")
+                            if file_id:
+                                ss_order = open_spreadsheet(file_id)
+                                ws = ss_order.worksheets()[0]
+                                all_vals = ws.col_values(1)
+                                order_count = len([v for v in all_vals[1:] if v and v.strip()])
+                                add_log(f"🔵 訂單筆數：{order_count} 筆")
+                        except Exception as e:
+                            add_log(f"⚠️ 讀取筆數失敗：{e}", "warning")
+                        record_execution(_name, _period, "期別訂單轉檔", order_count)
 
                     elif "③ 期別訂單搬運" in _func:
                         from modules.payment_reconciliation import copy_orders_to_template
@@ -375,16 +387,30 @@ if run_clicked:
 
                     elif "⑥ 金流對帳轉檔" in _func:
                         from modules.payment_reconciliation import convert_payment_file
+                        from modules.auth import open_spreadsheet
                         result = convert_payment_file(root_id, _period, _name, add_log)
                         add_log("金流對帳轉檔完成", "success")
                         file_ids = result.get("fileIds", {})
+
+                        # 讀取各檔案筆數
+                        def _get_sheet_count(fid):
+                            if not fid:
+                                return None
+                            try:
+                                ss = open_spreadsheet(fid)
+                                ws = ss.worksheets()[0]
+                                vals = ws.col_values(1)
+                                return len([v for v in vals[1:] if v and v.strip()])
+                            except Exception:
+                                return None
+
                         record_batch(_name, _period, [
-                            {"task_key": "期別發票轉檔",         "count": file_ids.get("發票")},
-                            {"task_key": "期別已退款全部加收轉檔", "count": file_ids.get("已退款全部加收")},
-                            {"task_key": "期別已退款全部退款轉檔", "count": file_ids.get("已退款全部退款")},
-                            {"task_key": "期別預收轉檔",          "count": file_ids.get("預收")},
-                            {"task_key": "期別藍新收款轉檔",      "count": file_ids.get("藍新收款")},
-                            {"task_key": "期別藍新退款轉檔",      "count": file_ids.get("藍新退款")},
+                            {"task_key": "期別發票轉檔",         "count": _get_sheet_count(file_ids.get("發票"))},
+                            {"task_key": "期別已退款全部加收轉檔", "count": _get_sheet_count(file_ids.get("已退款全部加收"))},
+                            {"task_key": "期別已退款全部退款轉檔", "count": _get_sheet_count(file_ids.get("已退款全部退款"))},
+                            {"task_key": "期別預收轉檔",          "count": _get_sheet_count(file_ids.get("預收"))},
+                            {"task_key": "期別藍新收款轉檔",      "count": _get_sheet_count(file_ids.get("藍新收款"))},
+                            {"task_key": "期別藍新退款轉檔",      "count": _get_sheet_count(file_ids.get("藍新退款"))},
                         ])
 
                     elif "⑦ 搬運退款" in _func:
@@ -412,32 +438,14 @@ if run_clicked:
                             {"task_key": "複製藍新退款", "count": counts.get("藍新退款")},
                         ])
 
-                elif _system == "🧹 清潔承攬":
-                    log_lines = []
-
-                    if _func == "前置作業":
-                        from modules.cleaning_process import run_preparation
-                        ok = run_preparation(root_id, _name, _period, is_first_half(_period), log_lines)
-
-                    elif _func == "00調薪":
-                        from modules.cleaning_process import run_adjustment
-                        ok = run_adjustment(root_id, _name, _period, is_first_half(_period), log_lines)
-
-                    elif _func in ("01專員請款", "02儲值金", "標注新人實境期別",
-                                   "03新人實境", "04新人實習", "05組長津貼",
-                                   "工具包押金", "元大帳戶更新", "結算整理", "產生PDF"):
-                        add_log(f"🧹 清潔承攬 {_func} 開發中", "warning")
-
-                    else:
-                        add_log(f"🧹 清潔承攬 {_func} 開發中", "warning")
-
-                    for line in log_lines:
-                        add_log(line)
+                else:
+                    add_log(f"{_system} {_func} 開發中", "warning")
 
             except Exception as e:
                 import traceback
                 add_log(f"執行失敗：{e}", "error")
                 add_log(traceback.format_exc(), "error")
+
 
 # ═══════════════════════════════════════
 # 排程設定
