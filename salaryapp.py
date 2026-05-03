@@ -445,7 +445,7 @@ if run_clicked:
                 # █ 區塊8-B：清潔承攬執行邏輯
                 # ───────────────────────────────────────────────
                 elif _system == "🧹 清潔承攬":
-                    from modules.cleaning_salary import find_cleaning_file
+                    from modules.cleaning_process import find_cleaning_file
 
                     # 找清潔承攬試算表 ID
                     # Drive 路徑：{root_folder_id}/{period}/{period}清潔承攬-{region}
@@ -459,7 +459,7 @@ if run_clicked:
                     if cleaning_file_id:
 
                         if "① 前置作業" in _func:
-                            from modules.cleaning_salary import run_preparation
+                            from modules.cleaning_process import run_preparation
                             log_lines = []
                             success = run_preparation(
                                 cleaning_file_id=cleaning_file_id,
@@ -475,7 +475,7 @@ if run_clicked:
                                 add_log(line, lvl)
 
                         elif "② 00調薪" in _func:
-                            from modules.cleaning_salary import run_adjustment
+                            from modules.cleaning_process import run_adjustment
                             log_lines = []
                             success = run_adjustment(
                                 cleaning_file_id=cleaning_file_id,
