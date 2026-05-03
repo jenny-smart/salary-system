@@ -413,18 +413,26 @@ if run_clicked:
                         ])
 
                 elif _system == "🧹 清潔承攬":
-                
-                   else:
-                       log_lines = []
-                       if _func == "前置作業":
-                           from modules.cleaning_process import run_preparation
-                           ok = run_preparation(cleaning_id, _name, _period, is_first_half(_period), log_lines)
-                       elif _func == "00調薪":
-                           from modules.cleaning_process import run_adjustment
-                           ok = run_adjustment(cleaning_id, _name, _period, is_first_half(_period), log_lines)
-                
-                else:
-                    add_log(f"{_system} {_func} 開發中", "warning")
+                    log_lines = []
+
+                    if _func == "前置作業":
+                        from modules.cleaning_process import run_preparation
+                        ok = run_preparation(root_id, _name, _period, is_first_half(_period), log_lines)
+
+                    elif _func == "00調薪":
+                        from modules.cleaning_process import run_adjustment
+                        ok = run_adjustment(root_id, _name, _period, is_first_half(_period), log_lines)
+
+                    elif _func in ("01專員請款", "02儲值金", "標注新人實境期別",
+                                   "03新人實境", "04新人實習", "05組長津貼",
+                                   "工具包押金", "元大帳戶更新", "結算整理", "產生PDF"):
+                        add_log(f"🧹 清潔承攬 {_func} 開發中", "warning")
+
+                    else:
+                        add_log(f"🧹 清潔承攬 {_func} 開發中", "warning")
+
+                    for line in log_lines:
+                        add_log(line)
 
             except Exception as e:
                 import traceback
