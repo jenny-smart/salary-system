@@ -307,7 +307,9 @@ def run_preparation(
         ws_order   = _ws("清潔訂單")
         ws_proj    = _ws("專案訂單")
 
-        # 從主控試算表第25列「複製清潔訂單」讀取本期筆數
+        # 從主控試算表第25列「複製清潔訂單」讀取本期主列數
+        # 注意：④加工可能拆解子單，清潔營收明細實際列數 ≥ 主列數
+        # 因此用主列數找起點，再取到B欄最後非空行即可包含所有子單
         try:
             from modules.master_sheet import get_recorded_value
             period_count = int(get_recorded_value(region, period, "複製清潔訂單") or 0)
@@ -321,7 +323,7 @@ def run_preparation(
                 f"（期別：{period}，地區：{region}），"
                 "請確認金流對帳 ⑤ 分類搬運已完成"
             )
-        _log(log, f"    主控表「複製清潔訂單」：{period_count} 筆")
+        _log(log, f"    主控表「複製清潔訂單」主列數：{period_count} 筆")
 
         # ── 步驟1：薪資表特定列處理 ──────────────────────────
         _log(log, "  步驟1：薪資表特定列處理")
@@ -400,8 +402,15 @@ def _prep_step2_read_revenue(
     log: List[str],
 ) -> Tuple[List[List], List[List]]:
     """
-    從清潔營收明細 B 欄最後非空白列往上數 period_count 筆。
-    原樣讀取，不轉換任何型態。
+    從清潔營收明細 B 欄最後非空白列往上數 period_count 列，取得本期資料。
+
+    period_count = 主控表第25列「複製清潔訂單」的數字，代表本期要搬運的總列數。
+    清潔訂單本來就可能有子單（金流對帳加工時已存在），但清潔承攬不會新增子單，
+    因此 period_count 即為實際總列數，直接往上數即可，不需判斷子單後綴。
+
+    讀取時原樣搬入，不干預欄位格式：
+    - C/D/H 日期欄、Y:AB 數值欄由試算表本身格式維持
+    - 其他欄位不額外設定，以免影響試算表原有操作
     """
     last_row = _last_nonempty_row(ws_revenue, col=2)
     if last_row < 2:
