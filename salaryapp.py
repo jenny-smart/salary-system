@@ -152,18 +152,20 @@ FUNCTION_MAP = {
         "⑧ 搬運發票＋藍新",
     ],
     "🧹 清潔承攬": [
-        "① 前置作業",
-        "② 00調薪",
-        "③ 01專員請款",
-        "④ 02儲值獎金",
-        "新人實境期別標註",
-        "⑤ 03新人實境",
-        "⑥ 04新人實習",
-        "⑦ 05組長津貼",
-        "⑧ 工具包押金＋介紹獎金",
-        "元大帳戶",
-        "07季獎金",
+        "前置作業",
+        "00調薪",
+        "01專員請款",
+        "02儲值獎金",
+        "03新人實境",
+        "04新人實習",
+        "05組長津貼",
+        "06季獎金",
         "薪資結算",
+        "一鍵執行",
+        "新人實境實習期別",
+        "工具包押金",
+        "介紹獎金",
+        "元大帳戶",
         "產生PDF",
     ],
     "📦 其他承攬": [
@@ -477,53 +479,61 @@ if run_clicked:
                                 add_log(line, lvl)
                             return success
 
-                        if "① 前置作業" in _func:
+                        if _func == "前置作業":
                             from modules.cleaning_process_1 import run_preparation
                             success = _run(run_preparation)
 
-                        elif "② 00調薪" in _func:
+                        elif _func == "00調薪":
                             from modules.cleaning_process_1 import run_adjustment
                             success = _run(run_adjustment)
 
-                        elif "③ 01專員請款" in _func:
+                        elif _func == "01專員請款":
                             from modules.cleaning_process_2 import run_allowance
                             success = _run(run_allowance)
 
-                        elif "④ 02儲值獎金" in _func:
+                        elif _func == "02儲值獎金":
                             from modules.cleaning_process_2 import run_voucher
                             success = _run(run_voucher)
 
-                        elif "新人實境期別標註" in _func:
-                            from modules.cleaning_process_2 import run_newcomer_label
-                            success = _run(run_newcomer_label)
-
-                        elif "⑤ 03新人實境" in _func:
+                        elif _func == "03新人實境":
                             from modules.cleaning_process_2 import run_newcomer
                             success = _run(run_newcomer)
 
-                        elif "⑥ 04新人實習" in _func:
+                        elif _func == "04新人實習":
                             from modules.cleaning_process_2 import run_intern
                             success = _run(run_intern)
 
-                        elif "⑦ 05組長津貼" in _func:
+                        elif _func == "05組長津貼":
                             from modules.cleaning_process_2 import run_leader
                             success = _run(run_leader)
 
-                        elif "⑧ 工具包押金" in _func:
-                            from modules.cleaning_process_4 import run_tool_deposit
-                            success = _run(run_tool_deposit)
-
-                        elif "元大帳戶" in _func:
-                            from modules.cleaning_process_4 import run_yuanta
-                            success = _run(run_yuanta)
-
-                        elif "07季獎金" in _func:
+                        elif _func == "06季獎金":
                             from modules.cleaning_process_3 import run_season_bonus
                             success = _run(run_season_bonus)
 
-                        elif "薪資結算" in _func:
+                        elif _func == "薪資結算":
                             from modules.cleaning_process_3 import run_settlement
                             success = _run(run_settlement)
+
+                        elif _func == "一鍵執行":
+                            add_log("一鍵執行尚未實作", "warning")
+                            success = False
+
+                        elif _func == "新人實境實習期別":
+                            from modules.cleaning_process_2 import run_newcomer_label
+                            success = _run(run_newcomer_label)
+
+                        elif _func == "工具包押金":
+                            from modules.cleaning_process_4 import run_tool_deposit
+                            success = _run(run_tool_deposit)
+
+                        elif _func == "介紹獎金":
+                            from modules.cleaning_process_4 import run_tool_deposit
+                            success = _run(run_tool_deposit)
+
+                        elif _func == "元大帳戶":
+                            from modules.cleaning_process_4 import run_yuanta
+                            success = _run(run_yuanta)
 
                         else:
                             add_log(f"{_func} 尚未實作", "warning")
