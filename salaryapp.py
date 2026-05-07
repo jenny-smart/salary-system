@@ -196,6 +196,9 @@ with c4:
 
 st.markdown('</div>', unsafe_allow_html=True)
 
+if run_clicked:
+    st.info("⏳ 執行中，請稍候...")
+
 
 # ═══════════════════════════════════════
 # 日誌區塊
@@ -232,6 +235,7 @@ if run_clicked:
         else:
             half = "上半月" if is_first_half(_period) else "下半月"
             add_log(f"執行【{_name}】{half} {_func}，期別：{_period}")
+            _render_log(log_placeholder)  # 立即顯示開始執行的訊息
 
             try:
                 from modules.master_sheet import record_execution, record_batch
@@ -267,8 +271,9 @@ if run_clicked:
                             if file_id:
                                 ss_order = open_spreadsheet(file_id)
                                 ws = ss_order.worksheets()[0]
-                                all_vals = ws.col_values(1)
-                                order_count = len([v for v in all_vals[1:] if v and v.strip()])
+                                # 用 B 欄（訂單編號）計算筆數
+                                b_vals = ws.col_values(2)
+                                order_count = len([v for v in b_vals[1:] if v and v.strip()])
                                 add_log(f"🔵 訂單筆數：{order_count} 筆")
                         except Exception as e:
                             add_log(f"⚠️ 讀取筆數失敗：{e}", "warning")
@@ -408,8 +413,13 @@ if run_clicked:
                             try:
                                 ss = open_spreadsheet(fid)
                                 ws = ss.worksheets()[0]
-                                vals = ws.col_values(1)
-                                return len([v for v in vals[1:] if v and v.strip()])
+                                # 優先用 B 欄，若 B 欄全空則用 A 欄
+                                b_vals = ws.col_values(2)
+                                count = len([v for v in b_vals[1:] if v and v.strip()])
+                                if count == 0:
+                                    a_vals = ws.col_values(1)
+                                    count = len([v for v in a_vals[1:] if v and v.strip()])
+                                return count if count > 0 else None
                             except Exception:
                                 return None
 
@@ -455,6 +465,9 @@ if run_clicked:
                 import traceback
                 add_log(f"執行失敗：{e}", "error")
                 add_log(traceback.format_exc(), "error")
+
+    # 執行完後 rerun，讓日誌立即顯示
+    st.rerun()
 
 
 # ═══════════════════════════════════════
