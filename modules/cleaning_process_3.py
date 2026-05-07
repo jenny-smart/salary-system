@@ -7,7 +7,7 @@ Lemon Clean 清潔承攬 — 08季獎金 / 09薪資結算整理
     modules/master_sheet.py — record_execution()
 
 打卡：統一寫入主控試算表（record_execution），不寫入 exec 工作表。
-    08季獎金       → task_key = "07季獎金"    （GAS 尚未實作，待補充）
+    08季獎金       → task_key = "06季獎金"    （GAS 尚未實作，待補充）
     09薪資結算整理 → task_key = "薪資結算"
 """
 
@@ -46,7 +46,7 @@ def _punch(task_key: str, region: str, period: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────
-# 07 季獎金（待實作）
+# 06 季獎金（待實作）
 # ──────────────────────────────────────────────────────────────
 
 def run_season_bonus(
@@ -57,7 +57,7 @@ def run_season_bonus(
     log: List[str],
 ) -> bool:
     """
-    07 季獎金。
+    06 季獎金。
     GAS 原版尚未實作，此處保留框架待補充。
     """
     _log(log, "▶ 08季獎金：尚未實作")
