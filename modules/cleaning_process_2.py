@@ -61,7 +61,7 @@ scheduleName = B1（YYYYMM）+ "-1"（上半月）/ "-2"（下半月）
     03新人實境      exec 列15
     04新人實習      exec 列16
     05組長津貼      exec 列17
-    新人實境期別標註 exec 列23
+    新人實境實習期別 exec 列23
 """
 
 from __future__ import annotations
@@ -539,7 +539,7 @@ def _voucher_expand_qrs(
 
 
 # ──────────────────────────────────────────────────────────────
-# 新人實境期別標註
+# 新人實境實習期別
 # ──────────────────────────────────────────────────────────────
 
 def run_newcomer_label(
@@ -550,13 +550,13 @@ def run_newcomer_label(
     log: List[str],
 ) -> bool:
     """
-    新人實境期別標註。
+    新人實境實習期別。
     讀取薪資表 L1:1 員工名單，
     對照 03新人實境 AH 欄（姓名）× AF 欄（結訓日期）：
         結訓日期為空 → AK 欄（col37）寫入當期期別碼
     """
     label = "上半月" if is_first_half else "下半月"
-    _log(log, f"▶ 新人實境期別標註 {label} 開始")
+    _log(log, f"▶ 新人實境實習期別 {label} 開始")
     try:
         gc = get_gspread_client()
         ss = gc.open_by_key(cleaning_file_id)
@@ -598,12 +598,12 @@ def run_newcomer_label(
             })
         _log(log, f"    標註完成：{count} 筆")
 
-        ts = _punch("新人實境期別標註", region, period)
-        _log(log, f"✅ 新人實境期別標註 {label} 完成｜{ts}")
+        ts = _punch("新人實境實習期別", region, period)
+        _log(log, f"✅ 新人實境實習期別 {label} 完成｜{ts}")
         return True
 
     except Exception as e:
-        _log(log, f"❌ 新人實境期別標註失敗：{e}")
+        _log(log, f"❌ 新人實境實習期別失敗：{e}")
         return False
 
 
