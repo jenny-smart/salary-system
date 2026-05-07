@@ -155,14 +155,15 @@ FUNCTION_MAP = {
         "① 前置作業",
         "② 00調薪",
         "③ 01專員請款",
-        "④ 02儲值金",
-        "標注新人實境期別",
+        "④ 02儲值獎金",
+        "新人實境期別標註",
         "⑤ 03新人實境",
         "⑥ 04新人實習",
         "⑦ 05組長津貼",
-        "⑧ 工具包押金",
-        "元大帳戶更新",
-        "結算整理",
+        "⑧ 工具包押金＋介紹獎金",
+        "元大帳戶",
+        "07季獎金",
+        "薪資結算",
         "產生PDF",
     ],
     "📦 其他承攬": [
@@ -445,7 +446,7 @@ if run_clicked:
                 # █ 區塊8-B：清潔承攬執行邏輯
                 # ───────────────────────────────────────────────
                 elif _system == "🧹 清潔承攬":
-                    from modules.cleaning_process import find_cleaning_file
+                    from modules.cleaning_process_1 import find_cleaning_file
 
                     # 找清潔承攬試算表 ID
                     # Drive 路徑：{root_folder_id}/{period}/{period}清潔承攬-{region}
@@ -458,40 +459,75 @@ if run_clicked:
 
                     if cleaning_file_id:
 
-                        if "① 前置作業" in _func:
-                            from modules.cleaning_process import run_preparation
+                        def _run(fn, **kwargs):
+                            """執行清潔承攬函數並把 log_lines 轉入 add_log。"""
                             log_lines = []
-                            success = run_preparation(
+                            success = fn(
                                 cleaning_file_id=cleaning_file_id,
                                 region=_name,
                                 period=_period,
                                 is_first_half=_is_first_half,
                                 log=log_lines,
+                                **kwargs,
                             )
                             for line in log_lines:
                                 lvl = "success" if line.startswith("✅") else \
                                       "error"   if line.startswith("❌") else \
                                       "warning" if line.startswith("⚠️") else "info"
                                 add_log(line, lvl)
+                            return success
+
+                        if "① 前置作業" in _func:
+                            from modules.cleaning_process_1 import run_preparation
+                            success = _run(run_preparation)
 
                         elif "② 00調薪" in _func:
-                            from modules.cleaning_process import run_adjustment
-                            log_lines = []
-                            success = run_adjustment(
-                                cleaning_file_id=cleaning_file_id,
-                                region=_name,
-                                period=_period,
-                                is_first_half=_is_first_half,
-                                log=log_lines,
-                            )
-                            for line in log_lines:
-                                lvl = "success" if line.startswith("✅") else \
-                                      "error"   if line.startswith("❌") else \
-                                      "warning" if line.startswith("⚠️") else "info"
-                                add_log(line, lvl)
+                            from modules.cleaning_process_1 import run_adjustment
+                            success = _run(run_adjustment)
+
+                        elif "③ 01專員請款" in _func:
+                            from modules.cleaning_process_2 import run_allowance
+                            success = _run(run_allowance)
+
+                        elif "④ 02儲值獎金" in _func:
+                            from modules.cleaning_process_2 import run_voucher
+                            success = _run(run_voucher)
+
+                        elif "新人實境期別標註" in _func:
+                            from modules.cleaning_process_2 import run_newcomer_label
+                            success = _run(run_newcomer_label)
+
+                        elif "⑤ 03新人實境" in _func:
+                            from modules.cleaning_process_2 import run_newcomer
+                            success = _run(run_newcomer)
+
+                        elif "⑥ 04新人實習" in _func:
+                            from modules.cleaning_process_2 import run_intern
+                            success = _run(run_intern)
+
+                        elif "⑦ 05組長津貼" in _func:
+                            from modules.cleaning_process_2 import run_leader
+                            success = _run(run_leader)
+
+                        elif "⑧ 工具包押金" in _func:
+                            from modules.cleaning_process_4 import run_tool_deposit
+                            success = _run(run_tool_deposit)
+
+                        elif "元大帳戶" in _func:
+                            from modules.cleaning_process_4 import run_yuanta
+                            success = _run(run_yuanta)
+
+                        elif "07季獎金" in _func:
+                            from modules.cleaning_process_3 import run_season_bonus
+                            success = _run(run_season_bonus)
+
+                        elif "薪資結算" in _func:
+                            from modules.cleaning_process_3 import run_settlement
+                            success = _run(run_settlement)
 
                         else:
-                            add_log(f"{_func} 開發中", "warning")
+                            add_log(f"{_func} 尚未實作", "warning")
+                            success = False
 
                 # ───────────────────────────────────────────────
                 # █ 區塊8-C：其他承攬執行邏輯（待開發）
