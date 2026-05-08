@@ -1,35 +1,77 @@
 """
-Lemon Clean 清潔承攬 — 前置作業 & 00調薪
-檔案：modules/cleaning_process_1.py
+Lemon Clean 清潔承攬 — 01專員請款 / 02儲值獎金 / 03新人實境 / 04新人實習 / 05組長津貼
+檔案：modules/cleaning_process_2.py
 
 依賴：
-    modules/auth.py           — get_gspread_client()
-    modules/master_sheet.py   — record_execution()
+    modules/auth.py         — get_gspread_client()
+    modules/master_sheet.py — record_execution()
 
-參數來源（不讀 exec 工作表）：
-    allowance_id : config.yaml 地區設定
-    salary_id    : config.yaml 地區設定
-    roster_id    : config.yaml 地區設定
-    yyyymm       : period 參數取前6碼（如 "202604-2" → "202604"）
+清潔承攬試算表（exec 工作表）關鍵儲存格：
+    B1 → 期別 YYYYMM（如 202605）
+    C2 → 請款試算表 ID（01專員請款）
+    C3 → 薪資試算表 ID（03新人實境 / 04新人實習 / 05組長津貼）
+    C5 → 金流對帳試算表 ID（02儲值獎金）
 
-打卡：統一寫入主控試算表（master_sheet.py → record_execution）
-    前置作業 → task_key = "前置作業"
-    00調薪   → task_key = "00調薪"
+scheduleName = B1（YYYYMM）+ "-1"（上半月）/ "-2"（下半月）
 
-找清潔承攬檔案：
-    Drive 路徑：{root_folder_id}/{period}/{period}清潔承攬-{region}
-    呼叫 find_cleaning_file(root_folder_id, period, region) 取得 file_id
+共同流程（01~05 皆相同）：
+    上半月：清空工作表 A2:AC
+    下半月：找 A 欄第一個空白列，填入 IMPORTRANGE 公式
+    等待載入 → 轉為靜態值
+    計算 QRS
+    執行共通 QRS→U-Y→AA-AC 流程
+
+各作業差異（A欄公式 / QRS）：
+
+    01專員請款
+        來源 ID : exec C2
+        公式    : FILTER(IMPORTRANGE(C2,"專員請款!AJ2:AQ3000"), AJ=scheduleName)
+        QRS     : Q=B, R=F, S=H
+
+    02儲值獎金
+        來源 ID : exec C5
+        公式    : FILTER(IMPORTRANGE(C5,"範本!A2:BB3000"), A="儲值金")
+                  匯入欄位 B,C,D,E,M,BB（遮罩）
+        QRS 前先處理：
+            X 數量（F欄中X個數）→ 複製列數（最多3列）
+            G = X數量+1（最小2）
+            H = D含50,000→800；D含20,000→320
+            I = F欄拆解後各人姓名（每列一人）
+        QRS : Q=I, R=H/G（G<2以2計，四捨五入）, S=TEXT(C,"MM/DD")&E
+
+    03新人實境
+        來源 ID : exec C3
+        公式    : FILTER(IMPORTRANGE(C3,"新人實境!A2:L500"), A=scheduleName)
+        QRS     : Q=C, R=200*K, S=TEXT(E,"MM/DD")&G
+
+    04新人實習
+        來源 ID : exec C3
+        公式    : FILTER(IMPORTRANGE(C3,"新人實習!A2:L500"), A=scheduleName)
+        QRS     : Q=C, R=200*K, S=TEXT(E,"MM/DD")&G
+
+    05組長津貼
+        來源 ID : exec C3
+        公式    : FILTER(IMPORTRANGE(C3,"新人實習!A2:L500"), A=scheduleName)
+                  ※ 來源工作表名稱同 04
+        QRS     : Q=H, R=J*K, S=TEXT(E,"MM/DD")&G
+
+打卡（exec 工作表列 + 主控試算表）：
+    01專員請款      exec 列13
+    02儲值獎金      exec 列14
+    03新人實境      exec 列15
+    04新人實習      exec 列16
+    05組長津貼      exec 列17
+    新人實境實習期別 exec 列23
 """
 
 from __future__ import annotations
 
+import datetime
 import re
 import time
-from datetime import datetime
-from typing import List, Tuple
+from typing import Dict, List
 
 import gspread
-from gspread.utils import rowcol_to_a1
 
 from modules.auth import get_gspread_client
 from modules.master_sheet import record_execution
@@ -39,123 +81,24 @@ from modules.master_sheet import record_execution
 # 常數
 # ──────────────────────────────────────────────────────────────
 
-SUMMARY_START = 4     # 場次時數薪資總表資料起始列
-SUMMARY_END   = 120   # 場次時數薪資總表資料結束列
-
 TS_FMT = "%Y/%m/%d %H:%M"
 
 
-# ──────────────────────────────────────────────────────────────
-# 找清潔承攬檔案
-# ──────────────────────────────────────────────────────────────
-
-def find_cleaning_file(root_folder_id: str, period: str, region: str) -> str:
-    """
-    從 Drive 找到清潔承攬試算表 ID。
-    路徑：{root_folder_id}/{period}/{period}清潔承攬-{region}
-
-    Args:
-        root_folder_id: config.yaml 中該地區的 root_folder_id
-        period:         期別字串，如 "202605-1"
-        region:         地區名稱，如 "新北"
-
-    Returns:
-        Google Sheets 檔案 ID
-
-    Raises:
-        FileNotFoundError: 找不到期別資料夾或清潔承攬檔案
-    """
-    from modules.auth import get_drive_service
-    drive = get_drive_service()
-
-    def _query(parent_id: str, name: str, mime_type: str) -> str | None:
-        """Drive API query，回傳第一筆符合的檔案 ID，找不到回傳 None。"""
-        q = (
-            f"'{parent_id}' in parents"
-            f" and name = '{name}'"
-            f" and mimeType = '{mime_type}'"
-            f" and trashed = false"
-        )
-        resp = drive.files().list(
-            q=q,
-            fields="files(id, name)",
-            supportsAllDrives=True,
-            includeItemsFromAllDrives=True,
-            pageSize=5,
-        ).execute()
-        files = resp.get("files", [])
-        return files[0]["id"] if files else None
-
-    # 1. 在根目錄找期別資料夾
-    period_folder_id = _query(
-        root_folder_id, period, "application/vnd.google-apps.folder"
-    )
-    if not period_folder_id:
-        raise FileNotFoundError(f"找不到期別資料夾：{period}（根目錄 {root_folder_id}）")
-
-    # 2. 在期別資料夾找清潔承攬試算表
-    file_name = f"{period}清潔承攬-{region}"
-    file_id = _query(
-        period_folder_id, file_name, "application/vnd.google-apps.spreadsheet"
-    )
-    if not file_id:
-        raise FileNotFoundError(f"找不到清潔承攬檔案：{file_name}")
-
-    return file_id
-
-
-
-def find_payment_file(root_folder_id: str, period: str, region: str) -> str:
-    """
-    從 Drive 找到當期金流對帳試算表 ID。
-    路徑：{root_folder_id}/{period}/{period}金流對帳-{region}
-    """
-    from modules.auth import get_drive_service
-    drive = get_drive_service()
-
-    def _query(parent_id: str, name: str, mime_type: str) -> str | None:
-        q = (
-            f"'{parent_id}' in parents"
-            f" and name = '{name}'"
-            f" and mimeType = '{mime_type}'"
-            f" and trashed = false"
-        )
-        resp = drive.files().list(
-            q=q,
-            fields="files(id, name)",
-            supportsAllDrives=True,
-            includeItemsFromAllDrives=True,
-            pageSize=5,
-        ).execute()
-        files = resp.get("files", [])
-        return files[0]["id"] if files else None
-
-    period_folder_id = _query(
-        root_folder_id, period, "application/vnd.google-apps.folder"
-    )
-    if not period_folder_id:
-        raise FileNotFoundError(f"找不到期別資料夾：{period}")
-
-    file_name = f"{period}金流對帳-{region}"
-    file_id   = _query(
-        period_folder_id, file_name, "application/vnd.google-apps.spreadsheet"
-    )
-    if not file_id:
-        raise FileNotFoundError(f"找不到金流對帳檔案：{file_name}")
-
-    return file_id
-
 
 # ──────────────────────────────────────────────────────────────
-# 工具函數
+# 共用工具
 # ──────────────────────────────────────────────────────────────
 
 def _now_ts() -> str:
-    return datetime.now().strftime(TS_FMT)
+    return datetime.datetime.now().strftime(TS_FMT)
+
+
+def _log(log: List[str], msg: str) -> None:
+    log.append(msg)
 
 
 def _col_letter(n: int) -> str:
-    """欄號（1-based）→ 欄字母，如 12 → 'L'"""
+    """欄號（1-based）→ 欄字母，如 12 → 'L'。"""
     result = ""
     while n > 0:
         n, r = divmod(n - 1, 26)
@@ -163,994 +106,715 @@ def _col_letter(n: int) -> str:
     return result
 
 
-def _last_nonempty_row(ws: gspread.Worksheet, col: int = 2) -> int:
-    """
-    找指定欄（1-based）最後一筆非空白列號，找不到回傳 0。
-    從第 2 列起算（跳過第 1 列標題）。
-    """
-    vals = ws.col_values(col)
-    # index 0 = 第1列（標題），從最後往前找，跳過 index 0
-    for i in range(len(vals) - 1, 0, -1):
-        if str(vals[i]).strip():
-            return i + 1  # i 是 0-based index，+1 = 列號
-    return 0
-
-
-
-def _log(log_lines: List[str], msg: str):
-    log_lines.append(msg)
-
-
-def _get_first_empty_by_col_b(ws: gspread.Worksheet) -> int:
-    """找 B 欄最後非空白列的下一列。"""
-    last = _last_nonempty_row(ws, col=2)
-    return max(2, last + 1)
-
-
-def _pad_row(row: list, width: int = 62) -> list:
-    """補齊列寬到指定欄數。"""
-    return row + [""] * (width - len(row)) if len(row) < width else row
-
-
-# ──────────────────────────────────────────────────────────────
-# 底色工具
-# ──────────────────────────────────────────────────────────────
-
-def _get_backgrounds(
-    ws: gspread.Worksheet,
-    start_row: int,
-    start_col: int,
-    num_rows: int,
-    num_cols: int,
-) -> List[List[str]]:
-    """透過 Sheets API 取底色，回傳 num_rows × num_cols 的 hex 色碼陣列。"""
+def _to_num(val) -> float:
+    """安全轉數字，失敗回傳 0。"""
     try:
-        a1_start = rowcol_to_a1(start_row, start_col)
-        a1_end   = rowcol_to_a1(start_row + num_rows - 1, start_col + num_cols - 1)
-        resp = ws.spreadsheet.client.request(
-            "get",
-            f"https://sheets.googleapis.com/v4/spreadsheets/{ws.spreadsheet.id}",
-            params={
-                "ranges": f"'{ws.title}'!{a1_start}:{a1_end}",
-                "fields": "sheets(data(rowData(values(userEnteredFormat/backgroundColor))))",
-            },
-        ).json()
-        rows_data = (
-            resp.get("sheets", [{}])[0]
-                .get("data", [{}])[0]
-                .get("rowData", [])
-        )
-        bgs = []
-        for row_d in rows_data:
-            row_bg = []
-            for cell in row_d.get("values", []):
-                bg = cell.get("userEnteredFormat", {}).get("backgroundColor", {})
-                rv = int(round(bg.get("red",   1) * 255))
-                gv = int(round(bg.get("green", 1) * 255))
-                bv = int(round(bg.get("blue",  1) * 255))
-                row_bg.append(
-                    f"#{rv:02x}{gv:02x}{bv:02x}"
-                    if (rv, gv, bv) != (255, 255, 255) else ""
-                )
-            while len(row_bg) < num_cols:
-                row_bg.append("")
-            bgs.append(row_bg)
-        while len(bgs) < num_rows:
-            bgs.append([""] * num_cols)
-        return bgs
-    except Exception:
-        return [[""] * num_cols for _ in range(num_rows)]
+        return float(str(val).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return 0.0
 
 
-def _apply_backgrounds(
-    ws: gspread.Worksheet,
-    start_row: int,
-    start_col: int,
-    bgs: List[List[str]],
-):
-    """批次套用底色（只處理非空白、非白色的儲存格）。"""
-    if not bgs:
-        return
-    requests = []
-    for r_i, row_bg in enumerate(bgs):
-        for c_i, color in enumerate(row_bg):
-            if not color or color.lower() in ("#ffffff", ""):
-                continue
-            hex_c = color.lstrip("#")
-            if len(hex_c) != 6:
-                continue
-            red   = int(hex_c[0:2], 16) / 255
-            green = int(hex_c[2:4], 16) / 255
-            blue  = int(hex_c[4:6], 16) / 255
-            requests.append({
-                "repeatCell": {
-                    "range": {
-                        "sheetId":          ws.id,
-                        "startRowIndex":    start_row - 1 + r_i,
-                        "endRowIndex":      start_row + r_i,
-                        "startColumnIndex": start_col - 1 + c_i,
-                        "endColumnIndex":   start_col + c_i,
-                    },
-                    "cell": {
-                        "userEnteredFormat": {
-                            "backgroundColor": {
-                                "red": red, "green": green, "blue": blue
-                            }
-                        }
-                    },
-                    "fields": "userEnteredFormat.backgroundColor",
-                }
-            })
-    if requests:
-        ws.spreadsheet.batch_update({"requests": requests})
-
-
-# ──────────────────────────────────────────────────────────────
-# 前置作業
-# ──────────────────────────────────────────────────────────────
-
-def run_preparation(
-    cleaning_file_id: str,
-    region: str,
-    period: str,
-    is_first_half: bool,
-    log: List[str],
-    region_cfg: dict = None,
-    **kwargs,
-) -> bool:
-    """
-    前置作業主函數。
-
-    步驟1：薪資表特定列處理（只清空/貼值，薪資表有自己的公式，不另外寫入資料）
-    步驟2：讀取清潔營收明細（B欄非空，筆數參照主控表第25列）
-    步驟3：上半月清空清潔訂單/專案訂單；下半月找接續列
-    步驟4：Y欄=1299 → 專案訂單；其餘 → 清潔訂單（J欄保持數值）
-    步驟5：AH欄移除「檸檬人」；AH清空時連帶清空J欄
-
-    Args:
-        cleaning_file_id: 清潔承攬試算表 ID
-        region:           地區名稱（用於主控打卡）
-        period:           期別字串，如 "202605-1"
-        is_first_half:    是否為上半月
-        log:              日誌列表（in-place append）
-
-    Returns:
-        True 成功，False 失敗
-    """
-    label = "上半月" if is_first_half else "下半月"
-    _log(log, f"▶ 前置作業 {label} 開始")
-
-    try:
-        gc = get_gspread_client()
-        ss = gc.open_by_key(cleaning_file_id)
-
-        # 列出工作表供除錯
-        all_sheet_titles = [s.title for s in ss.worksheets()]
-        _log(log, f"    工作表清單：{all_sheet_titles}")
-
-        def _ws(name):
-            try:
-                return ss.worksheet(name)
-            except Exception:
-                raise ValueError(
-                    f"找不到工作表「{name}」，現有：{all_sheet_titles}"
-                )
-
-        ws_salary  = _ws("薪資表")
-        ws_revenue = _ws("清潔營收明細")
-        ws_order   = _ws("清潔訂單")
-        ws_proj    = _ws("專案訂單")
-
-        # 從主控試算表第39列「複製清潔訂單列數」讀取本期要搬運的總列數
-        # 注意：④加工可能拆解子單，清潔營收明細實際列數 ≥ 主列數
-        # 因此用主列數找起點，再取到B欄最後非空行即可包含所有子單
+def _format_date_mmdd(val) -> str:
+    """日期值 → 'MM/DD' 字串，無法解析回傳原字串。"""
+    if isinstance(val, (int, float)) and 30000 < val < 60000:
+        d = datetime.date(1899, 12, 30) + datetime.timedelta(days=int(val))
+        return d.strftime("%m/%d")
+    s = str(val).strip()
+    for fmt in ("%Y/%m/%d", "%Y-%m-%d"):
         try:
-            from modules.master_sheet import get_recorded_value
-            period_count = int(get_recorded_value(region, period, "複製清潔訂單列數") or 0)
-        except Exception as e:
-            period_count = 0
-            _log(log, f"    ⚠️ 讀取主控試算表失敗：{e}")
-
-        if period_count <= 0:
-            raise ValueError(
-                f"主控試算表「複製清潔訂單列數」筆數為 0 或未打卡"
-                f"（期別：{period}，地區：{region}），"
-                "請確認金流對帳 ⑤ 分類搬運已完成"
-            )
-        _log(log, f"    主控表「複製清潔訂單列數」：{period_count} 列")
-
-        # ── 步驟1：薪資表特定列處理 ──────────────────────────
-        _log(log, "  步驟1：薪資表特定列處理")
-        _prep_step1_salary_rows(ws_salary, is_first_half, log)
-
-        # ── 步驟2：讀取清潔營收明細 ──────────────────────────
-        _log(log, "  步驟2：讀取清潔營收明細")
-        values, bgs = _prep_step2_read_revenue(ws_revenue, period_count, log)
-        if not values:
-            raise ValueError("清潔營收明細中未找到本期資料，請確認金流對帳已完成分類搬入")
-
-        # ── 步驟3：清空 / 找接續列 ───────────────────────────
-        _log(log, "  步驟3：清空或接續訂單工作表")
-        order_start, proj_start = _prep_step3_prepare_sheets(
-            ws_order, ws_proj, is_first_half, log
-        )
-
-        # ── 步驟4：分流搬入 ──────────────────────────────────
-        _log(log, "  步驟4：分流搬入")
-        n_count, p_count = _prep_step4_split_paste(
-            ws_order, ws_proj, values, bgs,
-            order_start, proj_start, log
-        )
-        _log(log, f"  步驟4 完成：清潔訂單 {n_count} 筆，專案訂單 {p_count} 筆")
-
-        # ── 步驟5：移除檸檬人 ────────────────────────────────
-        _log(log, "  步驟5：移除清潔訂單 AH 欄檸檬人")
-        lemon_count = _prep_step5_remove_lemon(ws_order, log)
-        _log(log, f"  步驟5 完成：處理 {lemon_count} 筆")
-
-        # ── 打卡 ─────────────────────────────────────────────
-        ts = _now_ts()
-        record_execution(region, period, "前置作業", ts)
-        _log(log, f"✅ 前置作業 {label} 完成｜{ts}")
-        return True
-
-    except Exception as e:
-        _log(log, f"❌ 前置作業失敗：{e}")
-        return False
+            return datetime.datetime.strptime(s, fmt).strftime("%m/%d")
+        except ValueError:
+            pass
+    return s
 
 
-# ── 步驟1 ────────────────────────────────────────────────────
-
-def _prep_step1_salary_rows(
-    ws_salary: gspread.Worksheet,
-    is_first_half: bool,
-    log: List[str],
-):
-    """
-    薪資表有自己的公式，這裡只做特定列的清空或貼值，不寫入其他任何資料。
-    上半月：清空 L2041 及 L2045（整列至最後欄）
-    下半月：L2046→L2045、L2040→L2041（貼值，非公式複製）
-    """
-    last_col    = ws_salary.col_count
-    last_letter = _col_letter(last_col)
-
-    def _range(row: int) -> str:
-        return f"L{row}:{last_letter}{row}"
-
-    if is_first_half:
-        ws_salary.batch_clear([_range(2041), _range(2045)])
-        _log(log, "    上半月：已清空 L2041 及 L2045")
-    else:
-        # UNFORMATTED_VALUE：取原始數值（不含格式化字串），RAW 寫入保持數值型別
-        v2046 = ws_salary.get(_range(2046), value_render_option="UNFORMATTED_VALUE") or [[]]
-        ws_salary.update(_range(2045), v2046, value_input_option="RAW")
-        v2040 = ws_salary.get(_range(2040), value_render_option="UNFORMATTED_VALUE") or [[]]
-        ws_salary.update(_range(2041), v2040, value_input_option="RAW")
-        _log(log, "    下半月：L2046→L2045、L2040→L2041 貼值完成")
+def _first_empty_row_col_a(ws: gspread.Worksheet) -> int:
+    """找 A 欄第一個空白列（下半月接續用），最少從第 2 列起。"""
+    vals = ws.col_values(1)
+    for i in range(1, len(vals)):   # index 0 = 第1列（標題）
+        if not str(vals[i]).strip():
+            return i + 1
+    return len(vals) + 1
 
 
-# ── 步驟2：讀取清潔營收明細 ──────────────────────────────────
-
-def _prep_step2_read_revenue(
-    ws_revenue: gspread.Worksheet,
-    period_count: int,
-    log: List[str],
-) -> Tuple[List[List], List[List]]:
-    """
-    從清潔營收明細 B 欄最後非空白列往上數 period_count 列，取得本期資料。
-
-    period_count = 主控表第39列「複製清潔訂單列數」的數字，代表本期要搬運的總列數（含子單）。
-    清潔訂單本來就可能有子單（金流對帳加工時已存在），但清潔承攬不會新增子單，
-    因此 period_count 即為實際總列數，直接往上數即可，不需判斷子單後綴。
-
-    讀取時原樣搬入，不干預欄位格式：
-    - C/D/H 日期欄、Y:AB 數值欄由試算表本身格式維持
-    - 其他欄位不額外設定，以免影響試算表原有操作
-    """
-    last_row = _last_nonempty_row(ws_revenue, col=2)
-    if last_row < 2:
-        return [], []
-
-    start_row = max(2, last_row - period_count + 1)
-    num_rows  = last_row - start_row + 1
-
-    raw    = ws_revenue.get(f"A{start_row}:BJ{last_row}") or []
-    values = [_pad_row(r) for r in raw]
-    bgs    = _get_backgrounds(ws_revenue, start_row, 1, num_rows, 62)
-    _log(log, f"    讀取第 {start_row} 列起，共 {num_rows} 筆")
-    return values, bgs
-
-
-# ── 步驟3：清空 / 找接續列 ────────────────────────────────────
-
-def _prep_step3_prepare_sheets(
-    ws_order: gspread.Worksheet,
-    ws_proj: gspread.Worksheet,
-    is_first_half: bool,
-    log: List[str],
-) -> Tuple[int, int]:
-    """
-    上半月：清空清潔訂單 & 專案訂單，回傳起始列 (2, 2)
-    下半月：各自找 B 欄最後非空白列的下一列
-    """
-    if is_first_half:
-        ws_order.batch_clear(["A2:BJ"])
-        ws_proj.batch_clear(["A2:BJ"])
-        _log(log, "    上半月：清潔訂單 & 專案訂單已清空")
-        return 2, 2
-    else:
-        order_start = _get_first_empty_by_col_b(ws_order)
-        proj_start  = _get_first_empty_by_col_b(ws_proj)
-        _log(log, f"    下半月：清潔訂單接續列={order_start}，專案訂單接續列={proj_start}")
-        return order_start, proj_start
-
-
-# ── 步驟4：分流搬入 ──────────────────────────────────────────
-
-def _prep_step4_split_paste(
-    ws_order: gspread.Worksheet,
-    ws_proj: gspread.Worksheet,
-    values: List[List],
-    bgs: List[List],
-    order_start: int,
-    proj_start: int,
-    log: List[str],
-) -> Tuple[int, int]:
-    """
-    Y 欄（index 24）= 1299 → 專案訂單；其餘 → 清潔訂單。
-    原樣寫入（RAW），不轉換型態。
-    """
-    normal_v, normal_bg = [], []
-    proj_v,   proj_bg   = [], []
-
-    for i, row in enumerate(values):
-        y_val   = row[24] if len(row) > 24 else ""
-        is_proj = (str(y_val).strip() == "1299")
-        bg      = bgs[i] if i < len(bgs) else [""] * 62
-        if is_proj:
-            proj_v.append(row)
-            proj_bg.append(bg)
-        else:
-            normal_v.append(row)
-            normal_bg.append(bg)
-
-    def _paste(ws: gspread.Worksheet, start: int, data: List[List], b: List[List]):
-        if not data:
-            return
-        end_row = start + len(data) - 1
-        # USER_ENTERED：讓 Sheets 自動判斷型別，數字就是數字，不會加 apostrophe
-        ws.update(f"A{start}:BJ{end_row}", data, value_input_option="USER_ENTERED")
-        _apply_backgrounds(ws, start, 1, b)
-
-    _paste(ws_order, order_start, normal_v, normal_bg)
-    _paste(ws_proj,  proj_start,  proj_v,   proj_bg)
-
-    return len(normal_v), len(proj_v)
-
-
-# ── 步驟5：移除檸檬人 ────────────────────────────────────────
-
-def _prep_step5_remove_lemon(
-    ws_order: gspread.Worksheet,
-    log: List[str],
-) -> int:
-    """
-    清潔訂單 AH 欄（col 34）移除「檸檬人」。
-    AH 清空後，同列 J 欄（col 10）連帶清空。
-    """
-    all_ah      = ws_order.col_values(34)
-    ah_updates  = {}
-    j_clears    = set()
-    count       = 0
-
-    for i in range(1, len(all_ah)):   # index 0 = 標題列，跳過
-        ah = str(all_ah[i])
-        if "檸檬人" not in ah:
-            continue
-        cleaned = " X ".join(
-            s.strip()
-            for s in re.split(r"\s*[Xx×Ｘ]\s*", ah)
-            if s.strip() and "檸檬人" not in s
-        )
-        row = i + 1
-        ah_updates[row] = cleaned
-        if not cleaned:
-            j_clears.add(row)
-        count += 1
-
-    for row, val in ah_updates.items():
-        ws_order.update_cell(row, 34, val)
-    for row in j_clears:
-        ws_order.update_cell(row, 10, "")
-
-    return count
-
-
-# ──────────────────────────────────────────────────────────────
-# 00 調薪
-# ──────────────────────────────────────────────────────────────
-
-def run_adjustment(
-    cleaning_file_id: str,
+def _punch(
+    task_key: str,
     region: str,
     period: str,
-    is_first_half: bool,
+) -> str:
+    """打卡至主控試算表。"""
+    ts = _now_ts()
+    record_execution(region, period, task_key, ts)
+    return ts
+
+
+# ──────────────────────────────────────────────────────────────
+# 共同步驟
+# ──────────────────────────────────────────────────────────────
+
+def _clear_first_half(ws: gspread.Worksheet, log: List[str]) -> None:
+    """上半月：清空 A2:AC。"""
+    ws.batch_clear(["A2:AC"])
+    _log(log, "    上半月：已清空 A2:AC")
+
+
+def _wait_and_convert(
+    ws: gspread.Worksheet,
+    check_cell: str,
     log: List[str],
-    region_cfg: dict = None,
-) -> bool:
-    """
-    00調薪主函數。
-
-    Args:
-        cleaning_file_id: 清潔承攬試算表 ID
-        region:           地區名稱（用於主控打卡）
-        period:           期別字串，如 "202605-1"
-        is_first_half:    是否為上半月
-        log:              日誌列表（in-place append）
-
-    Returns:
-        True 成功，False 失敗
-    """
-    label = "上半月" if is_first_half else "下半月"
-    _log(log, f"▶ 00調薪 {label} 開始")
-
-    try:
-        gc = get_gspread_client()
-        ss = gc.open_by_key(cleaning_file_id)
-
-        ws_adjust  = ss.worksheet("00調薪")
-        ws_salary  = ss.worksheet("薪資表")
-        ws_summary = ss.worksheet("場次時數薪資總表")
-
-        # 從 period 取 YYYYMM，從 region_cfg 取各試算表 ID
-        yyyymm    = period[:6]   # 如 "202604-2" → "202604"
-        cfg       = region_cfg or {}
-        salary_id = str(cfg.get("salary_id",  "") or "").strip()
-        roster_id = str(cfg.get("roster_id",  "") or "").strip()
-
-        if not salary_id:
-            raise ValueError("config 地區設定缺少 salary_id（薪資 ID）")
-        if not roster_id:
-            raise ValueError("config 地區設定缺少 roster_id（名冊 ID）")
-
-        # ── 步驟1（已移至 _adj_import_roster 統一處理）─────────
-        # S3:AP 清空在寫入公式前由 _adj_import_roster 執行
-
-        # ── 步驟2：匯入專員名冊 → S3:W ──────────────────────
-        _log(log, "  步驟2：匯入專員名冊 S3:W")
-        _adj_import_roster(ws_adjust, roster_id, yyyymm, log)
-
-        # ── 步驟3：匯入調薪資料 → Y3:AF ─────────────────────
-        _log(log, "  步驟3：匯入調薪資料 Y3:AF")
-        _adj_import_salary_k_r(ws_adjust, salary_id, yyyymm, log)
-
-        # ── 步驟4：匯入調薪資料 → AG3:AL ────────────────────
-        _log(log, "  步驟4：匯入調薪資料 AG3:AL")
-        _adj_import_salary_aa_af(ws_adjust, salary_id, yyyymm, log)
-
-        # ── 步驟5：轉為靜態值 ────────────────────────────────
-        _log(log, "  步驟5：S3:AL 轉為靜態值")
-        num_rows = _adj_convert_to_values(ws_adjust, log)
-        if num_rows == 0:
-            raise ValueError("00調薪 S 欄無有效資料，請確認 IMPORTRANGE 已授權")
-
-        # ── 步驟6：設定 A:O 計算公式 ────────────────────────
-        _log(log, "  步驟6：設定 A:O 計算公式")
-        _adj_set_formulas_a_to_o(ws_adjust, num_rows, log)
-
-        # ── 步驟7：更新場次時數薪資總表 A 欄 ────────────────
-        _log(log, "  步驟7：更新場次時數薪資總表 A 欄")
-        _adj_update_summary_a(ws_adjust, ws_summary, num_rows, log)
-
-        # ── 步驟8：設定場次時數薪資總表 B-G 欄公式 ──────────
-        _log(log, "  步驟8：設定場次時數薪資總表 B-G 公式")
-        _adj_set_summary_b_to_g(ws_summary, num_rows, log)
-
-        # ── 步驟9：設定場次時數薪資總表 H-K 欄 ──────────────
-        _log(log, "  步驟9：設定場次時數薪資總表 H-K 欄")
-        _adj_set_summary_h_to_k(ws_summary, roster_id, yyyymm, num_rows, log)
-
-        # ── 步驟10：設定 P-Q（上）/ W-X（下）欄 ─────────────
-        _log(log, "  步驟10：設定 P-Q / W-X 欄")
-        _adj_set_summary_pq_or_wx(ws_summary, is_first_half, log)
-
-        # ── 步驟11：設定 N-O（上）/ U-V（下）欄 ─────────────
-        _log(log, "  步驟11：設定 N-O / U-V 欄")
-        _adj_set_summary_no_or_uv(ws_summary, is_first_half, log)
-
-        # ── 步驟12：更新薪資表 L1:1 員工名單 ────────────────
-        _log(log, "  步驟12：更新薪資表 L1:1 員工名單")
-        _adj_update_salary_l1(ws_adjust, ws_salary, is_first_half, log)
-
-        # ── 步驟13：設定期別標記 E1 ──────────────────────────
-        _log(log, "  步驟13：設定期別標記 E1")
-        ws_adjust.update_cell(1, 5, -1 if is_first_half else -2)  # E1
-
-        # ── 打卡 ─────────────────────────────────────────────
-        ts = _now_ts()
-        record_execution(region, period, "00調薪", ts)
-        _log(log, f"✅ 00調薪 {label} 完成｜{ts}")
-        return True
-
-    except Exception as e:
-        _log(log, f"❌ 00調薪失敗：{e}")
-        return False
-
-
-# ── 步驟2：匯入專員名冊 ──────────────────────────────────────
-
-def _adj_import_roster(
-    ws_adjust: gspread.Worksheet,
-    roster_id: str,
-    yyyymm: str,
-    log: List[str],
-):
-    # 先清空 S3:AP（確保舊資料不殘留）
-    ws_adjust.batch_clear(["S3:AP"])
-    _log(log, "    S3:AP 已清空")
-
-    # 直接 IMPORTRANGE，不需要 ARRAYFORMULA+FILTER
-    formula = f'=IMPORTRANGE("{roster_id}","{yyyymm}專員名冊!B2:F")'
-    ws_adjust.update_cell(3, 19, formula)  # S3 = row 3, col 19
-    _log(log, f"    S3 IMPORTRANGE 已寫入（名冊 {yyyymm}）")
-    time.sleep(5)
-
-
-# ── 步驟3：匯入調薪資料 K:R ──────────────────────────────────
-
-def _adj_import_salary_k_r(
-    ws_adjust: gspread.Worksheet,
-    salary_id: str,
-    yyyymm: str,
-    log: List[str],
-):
-    formula = (
-        f'=ARRAYFORMULA(IF(S3:S="",,FILTER('
-        f'IMPORTRANGE("{salary_id}","{yyyymm}專員調薪!K3:R"),'
-        f'IMPORTRANGE("{salary_id}","{yyyymm}專員調薪!B3:B")=S3:S)))'
-    )
-    ws_adjust.update_cell(3, 25, formula)  # Y3 = row 3, col 25
-    _log(log, "    Y3 IMPORTRANGE 已寫入（調薪 K:R）")
-    time.sleep(5)
-
-
-# ── 步驟4：匯入調薪資料 AA:AF ────────────────────────────────
-
-def _adj_import_salary_aa_af(
-    ws_adjust: gspread.Worksheet,
-    salary_id: str,
-    yyyymm: str,
-    log: List[str],
-):
-    formula = (
-        f'=ARRAYFORMULA(IF(S3:S="",,FILTER('
-        f'IMPORTRANGE("{salary_id}","{yyyymm}專員調薪!AA3:AF"),'
-        f'IMPORTRANGE("{salary_id}","{yyyymm}專員調薪!B3:B")=S3:S)))'
-    )
-    ws_adjust.update_cell(3, 33, formula)  # AG3 = row 3, col 33
-    _log(log, "    AG3 IMPORTRANGE 已寫入（調薪 AA:AF）")
-    time.sleep(5)
-
-
-# ── 步驟5：轉為靜態值 ────────────────────────────────────────
-
-def _adj_convert_to_values(
-    ws_adjust: gspread.Worksheet,
-    log: List[str],
+    extra_wait: int = 3,
 ) -> int:
     """
-    等待 S3 有值後，將 S3:AL 整段轉為靜態值。
-    回傳有效列數（S 欄非空白列數）。
-    S = col 19，AL = col 38，共 20 欄。
+    等待 IMPORTRANGE 載入，轉為靜態值，回傳有效列數（A欄非空，不含標題）。
     """
-    # 等待 S3 有值（最多 30 秒）
     deadline = time.time() + 30
     while time.time() < deadline:
-        v = ws_adjust.acell("S3").value
+        v = ws.acell(check_cell).value
         if v and str(v).strip():
             break
         time.sleep(2)
     else:
-        _log(log, "    ⚠️ 等待逾時，S3 仍為空")
+        _log(log, f"    ⚠️ 等待逾時：{check_cell} 仍為空，嘗試繼續")
 
-    # 找有效列數
-    s_vals   = ws_adjust.col_values(19)  # S 欄
-    num_rows = 0
-    for i in range(2, len(s_vals)):      # index 0=列1, 1=列2, 2=列3...
-        if str(s_vals[i]).strip():
-            num_rows = i - 1             # 相對第 3 列的偏移數
-        else:
-            break
+    time.sleep(extra_wait)
 
-    if num_rows == 0:
-        _log(log, "    ⚠️ S3:S 無有效資料")
+    a_vals  = ws.col_values(1)
+    last    = 0
+    for i in range(1, len(a_vals)):
+        if str(a_vals[i]).strip():
+            last = i + 1
+    if last < 2:
         return 0
 
-    end_row = 2 + num_rows               # row 3 = index 2, end = 2 + num_rows
-    data = ws_adjust.get(f"S3:AL{end_row}") or []
-    ws_adjust.update(f"S3:AL{end_row}", data, value_input_option="RAW")
-    _log(log, f"    S3:AL 轉靜態值完成（{num_rows} 列）")
-    return num_rows
+    data = ws.get(f"A2:AC{last}") or []
+    if data:
+        ws.update(f"A2:AC{last}", data, value_input_option="USER_ENTERED")
+    _log(log, f"    A2:AC{last} 轉靜態值完成（{last - 1} 列）")
+    return last - 1
 
 
-# ── 步驟6：設定 A:O 計算公式 ─────────────────────────────────
+def _run_common_process(ws: gspread.Worksheet, log: List[str]) -> None:
+    """
+    共通 QRS→U-Y→AA-AC 流程。
 
-def _adj_set_formulas_a_to_o(
-    ws_adjust: gspread.Worksheet,
+    欄位：
+      Q(17)=姓名, R(18)=金額, S(19)=備註
+
+    步驟：
+    1. 篩選 R≠0 的列 → 寫入 V(22)/W(23)/X(24)
+    2. U(21) = V 欄同名出現次數
+    3. Y(25) = 當 U>1 時，合併同名的所有 X 欄，用全形「，」分隔
+    4. AA(27) = V 欄去重（唯一姓名）
+    5. AB(28) = SUMIF：AA=V 時加總 W
+    6. AC(29) = AC$1 & Y（Y 欄合併後的備註）
+    """
+    # 找 Q 欄最後有資料的列
+    q_vals = ws.col_values(17)
+    last_q = 0
+    for i in range(len(q_vals) - 1, 0, -1):
+        if str(q_vals[i]).strip():
+            last_q = i + 1
+            break
+    if last_q < 2:
+        _log(log, "    共通流程：Q 欄無資料，跳過")
+        return
+
+    qrs = ws.get(f"Q2:S{last_q}") or []
+    rows = []
+    for r in qrs:
+        q = r[0] if r else ""
+        rv = r[1] if len(r) > 1 else ""
+        s  = r[2] if len(r) > 2 else ""
+        rows.append((str(q).strip(), rv, str(s).strip()))
+
+    # 篩選 R≠0
+    vwx = [(q, r, s) for q, r, s in rows if r and str(r).strip() not in ("", "0")]
+    if not vwx:
+        _log(log, "    共通流程：R 欄全為 0，跳過")
+        return
+
+    n = len(vwx)
+    end_row = 1 + n  # 資料從第2列開始
+
+    # 清空 U:AC
+    ws.batch_clear([f"U2:AC{max(last_q, end_row)}"])
+
+    # 寫入 V/W/X
+    vwx_data = [[q, r, s] for q, r, s in vwx]
+    ws.update(f"V2:X{end_row}", vwx_data, value_input_option="USER_ENTERED")
+
+    # U 欄：統計 V 欄同名次數
+    v_col  = [t[0] for t in vwx]
+    u_data = [[v_col.count(name)] for name in v_col]
+    ws.update(f"U2:U{end_row}", u_data, value_input_option="USER_ENTERED")
+
+    # Y 欄：同名時合併所有 X 欄，用全形「，」分隔
+    # 先建立 name→[x列表] 的對照
+    from collections import defaultdict, OrderedDict
+    name_xs: dict = defaultdict(list)
+    name_first_row: dict = OrderedDict()  # 記錄每個姓名第一次出現的列索引
+    for i, (q, r, s) in enumerate(vwx):
+        name_xs[q].append(s)
+        if q not in name_first_row:
+            name_first_row[q] = i
+
+    y_data = [[""] for _ in range(n)]
+    for name, first_i in name_first_row.items():
+        xs = name_xs[name]
+        if len(xs) > 1:
+            # 只在第一列寫合併結果，其餘空白
+            y_data[first_i] = ["，".join(x for x in xs if x)]
+
+    ws.update(f"Y2:Y{end_row}", y_data, value_input_option="USER_ENTERED")
+
+    # AA:AC — 去重後彙總
+    # AA = 唯一姓名（依出現順序）
+    unique_names = list(name_first_row.keys())
+    aa_data  = [[name] for name in unique_names]
+    ab_data  = []  # W 欄加總
+    ac_data  = []  # AC$1 & Y
+
+    # 讀取 AC1（固定前綴）
+    ac1 = str(ws.acell("AC1").value or "").strip()
+
+    # 建立 name→W合計 和 name→Y 的對照
+    name_w: dict = defaultdict(float)
+    for q, r, s in vwx:
+        try:
+            name_w[q] += float(str(r).replace(",", ""))
+        except (ValueError, TypeError):
+            pass
+    name_y: dict = {name: y_data[first_i][0] for name, first_i in name_first_row.items()}
+
+    for name in unique_names:
+        ab_data.append([name_w[name]])
+        y_val = name_y.get(name, "")
+        # 若只有一筆，Y 欄是空的，直接用 X 欄
+        if not y_val:
+            y_val = name_xs[name][0] if name_xs[name] else ""
+        ac_data.append([ac1 + y_val if y_val else ""])
+
+    aa_end = 1 + len(unique_names)
+    ws.update(f"AA2:AA{aa_end}", aa_data, value_input_option="USER_ENTERED")
+    ws.update(f"AB2:AB{aa_end}", ab_data, value_input_option="USER_ENTERED")
+    ws.update(f"AC2:AC{aa_end}", ac_data, value_input_option="USER_ENTERED")
+
+    _log(log, f"    共通流程完成：V/W/X {n} 筆，AA/AB/AC {len(unique_names)} 筆（唯一姓名）")
+
+
+# ──────────────────────────────────────────────────────────────
+# QRS 計算
+# ──────────────────────────────────────────────────────────────
+
+def _calc_qrs_direct(
+    ws: gspread.Worksheet,
+    start_row: int,
+    num_rows: int,
+    q_col: int,
+    r_col: int,
+    s_col: int,
+    log: List[str],
+) -> None:
+    """直接對應欄號複製（用於 01專員請款：Q=B, R=F, S=H）。"""
+    end_row = start_row + num_rows - 1
+
+    def _get(col: int) -> List[List]:
+        raw = ws.get(f"{_col_letter(col)}{start_row}:{_col_letter(col)}{end_row}") or []
+        padded = raw + [[""]] * (num_rows - len(raw))
+        return padded
+
+    ws.update(f"Q{start_row}:Q{end_row}", _get(q_col), value_input_option="USER_ENTERED")
+    ws.update(f"R{start_row}:R{end_row}", _get(r_col), value_input_option="USER_ENTERED")
+    ws.update(f"S{start_row}:S{end_row}", _get(s_col), value_input_option="USER_ENTERED")
+    _log(log, f"    QRS 寫入完成（{num_rows} 列）")
+
+
+def _calc_qrs_salary(
+    ws: gspread.Worksheet,
+    start_row: int,
+    num_rows: int,
+    q_idx: int,
+    r_expr: str,
+    log: List[str],
+) -> None:
+    """
+    03/04/05 的 QRS 計算。
+    q_idx  : Q 來源欄索引（0-based，對應 A:L 讀取後的位置）
+    r_expr : "200*K"（R = 200 × K）或 "J*K"（R = J × K）
+    S 欄   : TEXT(E,"MM/DD") & G（固定）
+    A:L 欄索引（0-based）: A=0,B=1,C=2,D=3,E=4,F=5,G=6,H=7,I=8,J=9,K=10,L=11
+    """
+    end_row = start_row + num_rows - 1
+    raw     = ws.get(f"A{start_row}:L{end_row}") or []
+
+    q_data, r_data, s_data = [], [], []
+    for row in raw:
+        while len(row) < 12:
+            row.append("")
+
+        q_data.append([row[q_idx]])
+
+        if r_expr == "200*K":
+            r_data.append([200 * _to_num(row[10]) or ""])
+        elif r_expr == "J*K":
+            j, k = _to_num(row[9]), _to_num(row[10])
+            r_data.append([j * k if (j and k) else ""])
+        else:
+            r_data.append([""])
+
+        s_data.append([_format_date_mmdd(row[4]) + str(row[6])])
+
+    ws.update(f"Q{start_row}:Q{end_row}", q_data, value_input_option="USER_ENTERED")
+    ws.update(f"R{start_row}:R{end_row}", r_data, value_input_option="USER_ENTERED")
+    ws.update(f"S{start_row}:S{end_row}", s_data, value_input_option="USER_ENTERED")
+    _log(log, f"    QRS 寫入完成（{num_rows} 列）")
+
+
+# ──────────────────────────────────────────────────────────────
+# 01 專員請款
+# ──────────────────────────────────────────────────────────────
+
+def run_allowance(
+    cleaning_file_id: str,
+    region: str,
+    period: str,
+    is_first_half: bool,
+    log: List[str],
+    region_cfg: dict = None,
+) -> bool:
+    label = "上半月" if is_first_half else "下半月"
+    _log(log, f"▶ 01專員請款 {label} 開始")
+    try:
+        gc = get_gspread_client()
+        ss = gc.open_by_key(cleaning_file_id)
+        ws_allowance = ss.worksheet("01專員請款")
+
+        yyyymm       = period[:6]
+        cfg          = region_cfg or {}
+        allowance_id = str(cfg.get("allowance_id", "") or "").strip()
+        schedule     = f"{yyyymm}-{'1' if is_first_half else '2'}"
+        if not allowance_id:
+            raise ValueError("config 地區設定缺少 allowance_id（請款 ID）")
+
+        if is_first_half:
+            _clear_first_half(ws_allowance, log)
+            target_row = 2
+        else:
+            target_row = _first_empty_row_col_a(ws_allowance)
+            _log(log, f"    下半月接續列：{target_row}")
+
+        formula = (
+            f'=FILTER('
+            f'IMPORTRANGE("{allowance_id}","專員請款!AJ2:AQ3000"),'
+            f'IMPORTRANGE("{allowance_id}","專員請款!AJ2:AJ3000")="{schedule}"'
+            f')'
+        )
+        ws_allowance.update_cell(target_row, 1, formula)
+        _log(log, f"    IMPORTRANGE 已寫入 A{target_row}")
+
+        num_rows = _wait_and_convert(ws_allowance, f"A{target_row}", log)
+        if num_rows == 0:
+            raise ValueError("匯入資料為空，請確認請款試算表ID與期別")
+        _log(log, f"    匯入完成：{num_rows} 筆")
+
+        # Q=B(col2), R=F(col6), S=H(col8)
+        _calc_qrs_direct(ws_allowance, target_row, num_rows, 2, 6, 8, log)
+        _run_common_process(ws_allowance, log)
+
+        ts = _punch("01專員請款", region, period)
+        _log(log, f"✅ 01專員請款 {label} 完成｜{ts}")
+        return True
+
+    except Exception as e:
+        _log(log, f"❌ 01專員請款失敗：{e}")
+        return False
+
+
+# ──────────────────────────────────────────────────────────────
+# 02 儲值獎金
+# ──────────────────────────────────────────────────────────────
+
+def run_voucher(
+    cleaning_file_id: str,
+    region: str,
+    period: str,
+    is_first_half: bool,
+    log: List[str],
+    region_cfg: dict = None,
+    payment_file_id: str = None,
+) -> bool:
+    label = "上半月" if is_first_half else "下半月"
+    _log(log, f"▶ 02儲值獎金 {label} 開始")
+    try:
+        gc = get_gspread_client()
+        ss = gc.open_by_key(cleaning_file_id)
+        ws_voucher = ss.worksheet("02儲值獎金")
+
+        # payment_file_id 由 salaryapp.py 透過 find_payment_file() 取得
+        payment_id = payment_file_id or ""
+        if not payment_id:
+            raise ValueError("缺少金流對帳試算表 ID（payment_file_id），請確認已傳入")
+
+        if is_first_half:
+            _clear_first_half(ws_voucher, log)
+            target_row = 2
+        else:
+            target_row = _first_empty_row_col_a(ws_voucher)
+            _log(log, f"    下半月接續列：{target_row}")
+
+        # 匯入欄位遮罩：只取 B(2),C(3),D(4),E(5),M(13),BB(54)，其餘補空字串
+        # 使用 {IF(TRUE,col,...), ...} 的方式比 IMPORTRANGE 遮罩更可靠
+        # 改用較簡單的方式：先全部匯入後再取欄
+        formula = (
+            f'=FILTER('
+            f'IMPORTRANGE("{payment_id}","範本!A2:BB3000"),'
+            f'IMPORTRANGE("{payment_id}","範本!A2:A3000")="儲值金"'
+            f')'
+        )
+        ws_voucher.update_cell(target_row, 1, formula)
+        _log(log, f"    IMPORTRANGE 已寫入 A{target_row}")
+
+        num_rows = _wait_and_convert(ws_voucher, f"A{target_row}", log, extra_wait=8)
+        if num_rows == 0:
+            _log(log, "    ⚠️ 本期無儲值金資料")
+            ts = _punch("02儲值獎金", region, period)
+            _log(log, f"✅ 02儲值獎金 {label} 完成（無資料）｜{ts}")
+            return True
+        _log(log, f"    匯入完成：{num_rows} 筆（原始）")
+
+        # 匯入後只保留需要的欄，其餘清空
+        # 保留欄：B(2),C(3),D(4),E(5),M(13),BB(54)
+        # 工作表現在 A 欄起對應原 A 欄（全部匯入）
+        # 需要的欄（以工作表欄號1-based）: 2,3,4,5,13,54
+        _voucher_keep_cols(ws_voucher, target_row, num_rows, {2, 3, 4, 5, 13, 54}, log)
+
+        # 拆解 F 欄（原 BB=col54，匯入後在 col54 位置，但工作表只到 AC=col29）
+        # 注意：工作表最多到 AC 欄，但 BB=col54 超出 AC 範圍
+        # 因此轉值後，保留的欄會在工作表的對應位置
+        # 重新讀取並展開：F欄（原BB欄資料）在轉值後的位置
+        # 由 _voucher_expand_qrs 處理
+        actual_rows = _voucher_expand_qrs(ws_voucher, target_row, num_rows, log)
+        _log(log, f"    F欄拆解後共 {actual_rows} 列")
+
+        _run_common_process(ws_voucher, log)
+
+        ts = _punch("02儲值獎金", region, period)
+        _log(log, f"✅ 02儲值獎金 {label} 完成｜{ts}")
+        return True
+
+    except Exception as e:
+        _log(log, f"❌ 02儲值獎金失敗：{e}")
+        return False
+
+
+def _voucher_keep_cols(
+    ws: gspread.Worksheet,
+    start_row: int,
+    num_rows: int,
+    keep_cols: set,   # 1-based 欄號集合
+    log: List[str],
+) -> None:
+    """
+    只保留 keep_cols 的欄，其餘清空。
+    因 FILTER(IMPORTRANGE) 全部匯入，需要把不要的欄清空。
+    """
+    end_row  = start_row + num_rows - 1
+    last_col = ws.col_count
+    clear_ranges = []
+    for c in range(1, last_col + 1):
+        if c not in keep_cols:
+            letter = _col_letter(c)
+            clear_ranges.append(f"{letter}{start_row}:{letter}{end_row}")
+    if clear_ranges:
+        # 批次清空（分批，避免請求過大）
+        for i in range(0, len(clear_ranges), 50):
+            ws.batch_clear(clear_ranges[i:i + 50])
+    _log(log, f"    保留欄 {sorted(keep_cols)}，其餘已清空")
+
+
+def _voucher_expand_qrs(
+    ws: gspread.Worksheet,
+    start_row: int,
     num_rows: int,
     log: List[str],
-):
+) -> int:
     """
-    A=S, B=T（直接等於）
-    C/D/E/G → VLOOKUP(A, $S:$AL, offset, FALSE)
-        S:AL 欄偏移（S=1）：Z=8, AA=9, AC=11, AF=14
-    J:O（6欄）→ FILTER($AG:$AL, $S:$S=A{r})（ARRAYFORMULA 展開至 O 欄）
+    02儲值獎金：讀取保留欄後的資料，拆解 F 欄（原 BB，姓名字串），
+    展開多列後寫回，並計算 QRS。
+
+    保留欄對應（匯入並保留後）：
+        工作表欄2  = 原 C 欄（日期）
+        工作表欄3  = 原 D 欄（方案金額描述）
+        工作表欄4  = 原 E 欄（期別）
+        工作表欄5  = 原 M 欄（備註）
+        工作表欄54 = 原 BB 欄（姓名字串，含 X 分隔）
+
+    QRS：
+        Q = I（col9，拆解後各人姓名）→ 寫到 Q(col17)
+        R = H(col8) / G(col7)（G<2 以 2 計，四捨五入）
+        S = TEXT(C(col2),"MM/DD") & E(col4)
     """
-    batch = []
+    end_row = start_row + num_rows - 1
+
+    # 讀取關鍵欄：col2(C日期), col3(D方案), col4(E期別), col54(BB姓名)
+    c_vals  = ws.get(f"B{start_row}:B{end_row}") or []   # col2=B（日期）
+    d_vals  = ws.get(f"C{start_row}:C{end_row}") or []   # col3=C（方案）
+    e_vals  = ws.get(f"D{start_row}:D{end_row}") or []   # col4=D（期別）
+    bb_vals = ws.get(f"{_col_letter(54)}{start_row}:{_col_letter(54)}{end_row}") or []  # BB
+
+    output_a: List[List] = []   # 回寫 A 欄（原值保留）
+    q_data:   List[List] = []
+    r_data:   List[List] = []
+    s_data:   List[List] = []
+
+    def _get(lst, i, default=""):
+        return lst[i][0] if i < len(lst) and lst[i] else default
+
     for i in range(num_rows):
-        r = i + 3
-        batch.extend([
-            {"range": f"A{r}", "values": [[f"=S{r}"]]},
-            {"range": f"B{r}", "values": [[f"=T{r}"]]},
-            {"range": f"C{r}", "values": [[
-                f'=IFERROR(VLOOKUP(A{r},$S:$AL,8,FALSE),"")' ]]},  # Z
-            {"range": f"D{r}", "values": [[
-                f'=IFERROR(VLOOKUP(A{r},$S:$AL,9,FALSE),"")' ]]},  # AA
-            {"range": f"E{r}", "values": [[
-                f'=IFERROR(VLOOKUP(A{r},$S:$AL,11,FALSE),"")' ]]}, # AC
-            {"range": f"G{r}", "values": [[
-                f'=IFERROR(VLOOKUP(A{r},$S:$AL,14,FALSE),"")' ]]}, # AF
-            {"range": f"J{r}", "values": [[
-                f'=IFERROR(FILTER($AG:$AL,$S:$S=A{r}),"")' ]]},    # AG:AL
-        ])
+        c_val  = _get(c_vals, i)     # 日期
+        d_val  = _get(d_vals, i)     # 方案描述
+        e_val  = _get(e_vals, i)     # 期別
+        bb_val = _get(bb_vals, i)    # 姓名字串
 
-    # 每批 500 個以內，range 加工作表名稱
-    sheet_name = ws_adjust.title
-    for item in batch:
-        if not item["range"].startswith("'"):
-            item["range"] = f"'{sheet_name}'!{item['range']}"
-    for i in range(0, len(batch), 500):
-        ws_adjust.spreadsheet.values_batch_update({
-            "valueInputOption": "USER_ENTERED",
-            "data": batch[i:i + 500],
-        })
-    _log(log, f"    A:O 公式設定完成（{num_rows} 列）")
+        # H 欄值（總獎金）
+        d_str = str(d_val)
+        if "50,000" in d_str or "50000" in d_str:
+            h = 800
+        elif "20,000" in d_str or "20000" in d_str:
+            h = 320
+        else:
+            h = ""
 
+        # 拆解 BB 欄姓名
+        names = [n.strip() for n in re.split(r"\s*[Xx×Ｘ]\s*", str(bb_val)) if n.strip()]
+        if not names:
+            names = [""]
 
-# ── 步驟7：更新場次時數薪資總表 A 欄 ────────────────────────
+        # X 數量 = len(names) - 1（無X不複製，X1加1列，至多3列）
+        names = names[:3]                   # 最多3人
+        g     = max(2, len(names))          # G欄，最小2
 
-def _adj_update_summary_a(
-    ws_adjust: gspread.Worksheet,
-    ws_summary: gspread.Worksheet,
-    num_rows: int,
-    log: List[str],
-):
-    ws_summary.batch_clear([f"A{SUMMARY_START}:A{SUMMARY_END}"])
-    if num_rows <= 0:
-        return
-    a_vals = ws_adjust.get(f"A3:A{2 + num_rows}") or []
-    ws_summary.update(
-        f"A{SUMMARY_START}:A{SUMMARY_START + num_rows - 1}",
-        a_vals, value_input_option="USER_ENTERED"
-    )
-    _log(log, f"    A{SUMMARY_START} 起寫入 {num_rows} 筆姓名")
+        s_val = _format_date_mmdd(c_val) + str(e_val)
+
+        for name in names:
+            r_val = round(h / g) if h != "" else ""
+            q_data.append([name])
+            r_data.append([r_val])
+            s_data.append([s_val])
+
+    total   = len(q_data)
+    new_end = start_row + total - 1
+
+    if total > num_rows:
+        # 需要插入額外列
+        ws.insert_rows([[]] * (total - num_rows), row=end_row + 1)
+
+    ws.update(f"Q{start_row}:Q{new_end}", q_data, value_input_option="USER_ENTERED")
+    ws.update(f"R{start_row}:R{new_end}", r_data, value_input_option="USER_ENTERED")
+    ws.update(f"S{start_row}:S{new_end}", s_data, value_input_option="USER_ENTERED")
+    _log(log, f"    Q/R/S 寫入完成（展開後 {total} 列）")
+    return total
 
 
-# ── 步驟8：設定場次時數薪資總表 B-G 欄公式 ──────────────────
+# ──────────────────────────────────────────────────────────────
+# 新人實境實習期別
+# ──────────────────────────────────────────────────────────────
 
-def _adj_set_summary_b_to_g(
-    ws_summary: gspread.Worksheet,
-    num_rows: int,
-    log: List[str],
-):
-    if num_rows <= 0:
-        return
-    batch = []
-    for i in range(num_rows):
-        r = i + SUMMARY_START
-        batch.extend([
-            {"range": f"B{r}", "values": [[
-                f"=HLOOKUP(A{r},'薪資表'!$1:$2001,2001,FALSE)"]]},
-            {"range": f"C{r}", "values": [[
-                f"=HLOOKUP(A{r},'薪資表'!$1:$2013,2013,FALSE)"]]},
-            {"range": f"D{r}", "values": [[
-                f"=IF(AND(E{r}=0,'薪資單'!$AD$1=$D$1),"
-                f"HLOOKUP($A{r},'薪資表'!$1:$2047,2042,FALSE),"
-                f"HLOOKUP($A{r},'薪資表'!$1:$2047,2043,FALSE))"]]},
-            {"range": f"E{r}", "values": [[
-                f"=IF('薪資單'!$AD$1=$E$1,"
-                f"HLOOKUP($A{r},'薪資表'!$1:$2047,2044,FALSE),0)"]]},
-            {"range": f"F{r}", "values": [[
-                f"=HLOOKUP(A{r},'薪資表'!$1:$2042,2039,FALSE)"
-                f"+HLOOKUP(A{r},'薪資表'!$1:$2042,2040,FALSE)"]]},
-            {"range": f"G{r}", "values": [[
-                f"=HLOOKUP($A{r},'薪資表'!$1:$2042,2041,FALSE)"
-                f"+HLOOKUP($A{r},'薪資表'!$1:$2042,2042,FALSE)"]]},
-        ])
-    sheet_name = ws_summary.title
-    for item in batch:
-        if not item["range"].startswith("'"):
-            item["range"] = f"'{sheet_name}'!{item['range']}"
-    for i in range(0, len(batch), 500):
-        ws_summary.spreadsheet.values_batch_update({
-            "valueInputOption": "USER_ENTERED",
-            "data": batch[i:i + 500],
-        })
-    _log(log, f"    B-G 公式設定完成（{num_rows} 列）")
-
-
-# ── 步驟9：設定場次時數薪資總表 H-K 欄 ──────────────────────
-
-def _adj_set_summary_h_to_k(
-    ws_summary: gspread.Worksheet,
-    roster_id: str,
-    yyyymm: str,
-    num_rows: int,
-    log: List[str],
-):
-    ws_summary.batch_clear([f"H{SUMMARY_START}:K{SUMMARY_END}"])
-    if num_rows <= 0:
-        return
-    batch = []
-    for i in range(num_rows):
-        r = i + SUMMARY_START
-        batch.append({"range": f"H{r}", "values": [[f"=A{r}"]]})
-        batch.append({"range": f"I{r}", "values": [[
-            f'=IFERROR(FILTER('
-            f'IMPORTRANGE("{roster_id}","{yyyymm}專員名冊!G2:I"),'
-            f'IMPORTRANGE("{roster_id}","{yyyymm}專員名冊!B2:B")=H{r}),"")' ]]})
-    sheet_name = ws_summary.title
-    for item in batch:
-        if not item["range"].startswith("'"):
-            item["range"] = f"'{sheet_name}'!{item['range']}"
-    for i in range(0, len(batch), 500):
-        ws_summary.spreadsheet.values_batch_update({
-            "valueInputOption": "USER_ENTERED",
-            "data": batch[i:i + 500],
-        })
-    _log(log, "    H-K 欄設定完成")
-
-
-# ── 步驟10：P-Q（上）/ W-X（下）欄 ──────────────────────────
-
-def _adj_set_summary_pq_or_wx(
-    ws_summary: gspread.Worksheet,
+def run_newcomer_label(
+    cleaning_file_id: str,
+    region: str,
+    period: str,
     is_first_half: bool,
     log: List[str],
-):
-    count = SUMMARY_END - SUMMARY_START + 1
-
-    def _get(col_letter: str) -> List[List]:
-        return ws_summary.get(
-            f"{col_letter}{SUMMARY_START}:{col_letter}{SUMMARY_END}"
-        ) or []
-
-    if is_first_half:
-        ws_summary.batch_clear(["N4:Q"])
-        d_col = _get("D")
-        a_col = _get("A")
-        p_data, q_data = [], []
-        for i in range(count):
-            d = d_col[i][0] if i < len(d_col) and d_col[i] else ""
-            a = a_col[i][0] if i < len(a_col) and a_col[i] else ""
-            try:
-                d_val = float(d) if d else 0
-            except ValueError:
-                d_val = 0
-            if a and d_val > 0:
-                p_data.append([d])
-                q_data.append([a])
-        if p_data:
-            ws_summary.update(
-                f"P{SUMMARY_START}:P{SUMMARY_START + len(p_data) - 1}",
-                p_data, value_input_option="USER_ENTERED"
-            )
-            ws_summary.update(
-                f"Q{SUMMARY_START}:Q{SUMMARY_START + len(q_data) - 1}",
-                q_data, value_input_option="USER_ENTERED"
-            )
-        _log(log, f"    上半月 P-Q 寫入 {len(p_data)} 筆")
-
-    else:
-        ws_summary.batch_clear(["U4:X"])
-        e_col = _get("E")
-        a_col = _get("A")
-        w_data, x_data = [], []
-        for i in range(count):
-            e = e_col[i][0] if i < len(e_col) and e_col[i] else ""
-            a = a_col[i][0] if i < len(a_col) and a_col[i] else ""
-            try:
-                e_val = float(e) if e else 0
-            except ValueError:
-                e_val = 0
-            if a and e_val > 0:
-                w_data.append([e])
-                x_data.append([a])
-        if w_data:
-            ws_summary.update(
-                f"W{SUMMARY_START}:W{SUMMARY_START + len(w_data) - 1}",
-                w_data, value_input_option="USER_ENTERED"
-            )
-            ws_summary.update(
-                f"X{SUMMARY_START}:X{SUMMARY_START + len(x_data) - 1}",
-                x_data, value_input_option="USER_ENTERED"
-            )
-        _log(log, f"    下半月 W-X 寫入 {len(w_data)} 筆")
-
-
-# ── 步驟11：N-O（上）/ U-V（下）欄 ──────────────────────────
-
-def _adj_set_summary_no_or_uv(
-    ws_summary: gspread.Worksheet,
-    is_first_half: bool,
-    log: List[str],
-):
+    region_cfg: dict = None,
+) -> bool:
     """
-    上半月 N-O：Q 欄姓名 → 對應 H 欄 → 取 I/J 欄
-    下半月 U-V：X 欄姓名 → 對應 H 欄 → 取 I/J 欄
+    新人實境實習期別。
+    讀取薪資表 L1:1 員工名單，
+    對照 03新人實境 AH 欄（姓名）× AF 欄（結訓日期）：
+        結訓日期為空 → AK 欄（col37）寫入當期期別碼
     """
-    count = SUMMARY_END - SUMMARY_START + 1
+    label = "上半月" if is_first_half else "下半月"
+    _log(log, f"▶ 新人實境實習期別 {label} 開始")
+    try:
+        gc = get_gspread_client()
+        ss = gc.open_by_key(cleaning_file_id)
+        ws_salary   = ss.worksheet("薪資表")
+        ws_newcomer = ss.worksheet("03新人實境")
 
-    def _get(col: str) -> List[List]:
-        return ws_summary.get(
-            f"{col}{SUMMARY_START}:{col}{SUMMARY_END}"
-        ) or []
+        period_code = period   # 直接用 period（如 "202604-2"）
 
-    h_col = _get("H")
-    i_col = _get("I")
-    j_col = _get("J")
+        # 薪資表 L1:1 員工名單（L=col12, index 11）
+        l1        = ws_salary.row_values(1)
+        employees = {v.strip() for v in l1[11:] if v and v.strip()}
+        _log(log, f"    薪資表員工數：{len(employees)}")
 
-    # H 欄姓名 → 行索引
-    h_map: dict[str, int] = {}
-    for idx, row in enumerate(h_col):
-        name = str(row[0]).strip() if row else ""
-        if name:
-            h_map[name] = idx
+        # 讀取 03新人實境 AH（col34）和 AF（col32）欄
+        ah_vals = ws_newcomer.col_values(34)  # AH
+        af_vals = ws_newcomer.col_values(32)  # AF
 
-    ref_col  = _get("Q") if is_first_half else _get("X")
-    out_cols = ("N", "O") if is_first_half else ("U", "V")
-    batch    = []
-    matched  = 0
-
-    for i in range(count):
-        name = str(ref_col[i][0]).strip() if i < len(ref_col) and ref_col[i] else ""
-        if not name:
-            continue
-        h_idx = h_map.get(name)
-        if h_idx is None:
-            continue
-        r    = i + SUMMARY_START
-        i_v  = i_col[h_idx][0] if h_idx < len(i_col) and i_col[h_idx] else ""
-        j_v  = j_col[h_idx][0] if h_idx < len(j_col) and j_col[h_idx] else ""
-        batch.extend([
-            {"range": f"{out_cols[0]}{r}", "values": [[i_v]]},
-            {"range": f"{out_cols[1]}{r}", "values": [[j_v]]},
-        ])
-        matched += 1
-
-    if batch:
-        sheet_name = ws_summary.title
-        for item in batch:
-            if not item["range"].startswith("'"):
-                item["range"] = f"'{sheet_name}'!{item['range']}"
-        ws_summary.spreadsheet.values_batch_update({
-            "valueInputOption": "USER_ENTERED",
-            "data": batch,
-        })
-    half_label = "上半月 N-O" if is_first_half else "下半月 U-V"
-    _log(log, f"    {half_label} 寫入 {matched} 筆")
-
-
-# ── 步驟12：更新薪資表 L1:1 員工名單 ────────────────────────
-
-def _adj_update_salary_l1(
-    ws_adjust: gspread.Worksheet,
-    ws_salary: gspread.Worksheet,
-    is_first_half: bool,
-    log: List[str],
-):
-    # 從 00調薪 S 欄（col 19）取非空白姓名（跳過前兩列）
-    s_vals    = ws_adjust.col_values(19)
-    names     = [v for v in s_vals[2:] if v and str(v).strip()]
-    new_count = len(names)
-
-    if new_count == 0:
-        _log(log, "    ⚠️ S 欄無有效姓名，跳過 L1:1 更新")
-        return
-
-    # 目前 L1:1 員工數（L = col 12, index 11）
-    l1_row   = ws_salary.row_values(1)
-    old_count = sum(1 for v in l1_row[11:] if v and str(v).strip())
-    diff      = new_count - old_count
-
-    # 清空舊的 L1:1
-    if old_count > 0:
-        end_ltr = _col_letter(11 + old_count)
-        ws_salary.batch_clear([f"L1:{end_ltr}1"])
-
-    # 寫入新名單
-    end_ltr = _col_letter(11 + new_count)
-    ws_salary.update(f"L1:{end_ltr}1", [names], value_input_option="USER_ENTERED")
-    _log(log, f"    L1:1 更新：{old_count} → {new_count} 人（diff={diff}）")
-
-    # 若有新增員工，複製 L 欄樣板公式到新欄
-    if diff > 0:
-        _copy_salary_formulas(ws_salary, old_count, diff, is_first_half, log)
-
-    # 下半月有新增時，清空特定列
-    if not is_first_half and diff > 0:
-        s_col   = 12 + old_count       # 新增欄起始（L=12）
-        e_col   = s_col + diff - 1
-        s_ltr   = _col_letter(s_col)
-        e_ltr   = _col_letter(e_col)
-        ws_salary.batch_clear([
-            f"{s_ltr}2039:{e_ltr}2039",
-            f"{s_ltr}2043:{e_ltr}2043",
-        ])
-        _log(log, "    下半月：已清空新增欄位的列 2039 及 2043")
-
-
-def _copy_salary_formulas(
-    ws_salary: gspread.Worksheet,
-    old_count: int,
-    diff: int,
-    is_first_half: bool,
-    log: List[str],
-):
-    """
-    從 L 欄（樣板，col 12）複製公式到 (L + old_count) 起的 diff 欄。
-    L 欄公式範例：=IF(ISNUMBER(FIND(L$1,$F2)),$G2,"")
-    - L$1 是混合參照（列固定），需連同 L$數字 一起替換欄字母
-    - $L1 是欄固定，不需替換
-    下半月跳過列 2039、2043。
-    """
-    SKIP      = {2039, 2043} if not is_first_half else set()
-    SRC_COL   = 12    # L = col 12
-    START_ROW = 2
-    END_ROW   = 2048
-
-    # FORMULA 模式取得公式
-    src_formulas = ws_salary.get(
-        f"L{START_ROW}:L{END_ROW}",
-        value_render_option="FORMULA"
-    ) or []
-
-    _log(log, f"    L欄公式讀取：{len(src_formulas)} 列")
-
-    sheet_title = ws_salary.title
-    batch = []
-
-    for c in range(diff):
-        tgt_col = SRC_COL + old_count + c
-        tgt_ltr = _col_letter(tgt_col)
-
-        for i, row_f in enumerate(src_formulas):
-            actual_row = START_ROW + i
-            if actual_row in SKIP:
+        updates = []
+        count   = 0
+        for i in range(1, len(ah_vals)):    # index 0 = 標題
+            name   = str(ah_vals[i]).strip() if i < len(ah_vals) else ""
+            af_val = str(af_vals[i]).strip() if i < len(af_vals) else ""
+            if not name or name not in employees:
                 continue
-            formula = row_f[0] if row_f else ""
-            if not formula or not str(formula).startswith("="):
-                continue
+            if not af_val:
+                row = i + 1
+                updates.append({
+                    "range": f"'{ws_newcomer.title}'!AK{row}",
+                    "values": [[period_code]],
+                })
+                count += 1
 
-            # 替換欄字母：
-            # 1. L$數字  → {tgt_ltr}$數字（如 L$1 → M$1）
-            # 2. L數字   → {tgt_ltr}數字  （如 L2  → M2）
-            # 排除 $L（欄絕對參照，不替換）
-            new_formula = re.sub(
-                r'(?<!\$)L(?=\$?\d)',
-                tgt_ltr,
-                formula
-            )
-            batch.append({
-                "range": f"'{sheet_title}'!{tgt_ltr}{actual_row}",
-                "values": [[new_formula]],
-            })
-
-    if batch:
-        for i in range(0, len(batch), 500):
-            ws_salary.spreadsheet.values_batch_update({
+        if updates:
+            ws_newcomer.spreadsheet.values_batch_update({
                 "valueInputOption": "USER_ENTERED",
-                "data": batch[i:i + 500],
+                "data": updates,
             })
-        _log(log, f"    公式複製完成：{diff} 欄，共 {len(batch)} 格")
-        _log(log, f"    薪資公式複製完成（{diff} 欄，{len(batch)} 格）")
+        _log(log, f"    標註完成：{count} 筆")
+
+        ts = _punch("新人實境實習期別", region, period)
+        _log(log, f"✅ 新人實境實習期別 {label} 完成｜{ts}")
+        return True
+
+    except Exception as e:
+        _log(log, f"❌ 新人實境實習期別失敗：{e}")
+        return False
+
+
+# ──────────────────────────────────────────────────────────────
+# 03 新人實境 / 04 新人實習 / 05 組長津貼（共用框架）
+# ──────────────────────────────────────────────────────────────
+
+def run_newcomer(
+    cleaning_file_id: str, region: str, period: str,
+    is_first_half: bool, log: List[str],
+    region_cfg: dict = None,
+) -> bool:
+    """03 新人實境。來源：新人實境!A2:L500；Q=C(idx2), R=200*K, S=TEXT(E)&G"""
+    return _run_salary_module(
+        cleaning_file_id, region, period, is_first_half, log,
+        task_key  = "03新人實境",
+        sheet_name= "03新人實境",
+        src_sheet = "新人實境",
+        id_cell   = "C3",
+        src_range = "A2:L500",
+        q_idx     = 2,          # C 欄（0-based index in A:L）
+        r_expr    = "200*K",
+    )
+
+
+def run_intern(
+    cleaning_file_id: str, region: str, period: str,
+    is_first_half: bool, log: List[str],
+    region_cfg: dict = None,
+) -> bool:
+    """04 新人實習。來源：新人實習!A2:L500；Q=C(idx2), R=200*K, S=TEXT(E)&G"""
+    return _run_salary_module(
+        cleaning_file_id, region, period, is_first_half, log,
+        task_key  = "04新人實習",
+        sheet_name= "04新人實習",
+        src_sheet = "新人實習",
+        id_cell   = "C3",
+        src_range = "A2:L500",
+        q_idx     = 2,          # C 欄
+        r_expr    = "200*K",
+    )
+
+
+def run_leader(
+    cleaning_file_id: str, region: str, period: str,
+    is_first_half: bool, log: List[str],
+    region_cfg: dict = None,
+) -> bool:
+    """05 組長津貼。來源：新人實習!A2:L500（同 04）；Q=H(idx7), R=J*K, S=TEXT(E)&G"""
+    return _run_salary_module(
+        cleaning_file_id, region, period, is_first_half, log,
+        task_key  = "05組長津貼",
+        sheet_name= "05組長津貼",
+        src_sheet = "新人實習",  # ※ 同 04，來源工作表名稱相同
+        id_cell   = "C3",
+        src_range = "A2:L500",
+        q_idx     = 7,          # H 欄（0-based index in A:L）
+        r_expr    = "J*K",
+    )
+
+
+def _run_salary_module(
+    cleaning_file_id: str,
+    region: str,
+    period: str,
+    is_first_half: bool,
+    log: List[str],
+    task_key: str,
+    sheet_name: str,
+    src_sheet: str,
+    id_cell: str,
+    src_range: str,
+    q_idx: int,
+    r_expr: str,
+    **kwargs,
+) -> bool:
+    """
+    03/04/05 共用執行框架。
+    q_idx  : Q 來源欄的 0-based index（對應 A:L 讀取後的位置）
+    r_expr : "200*K" 或 "J*K"
+    S 欄   : TEXT(E,"MM/DD") & G（固定）
+    """
+    label = "上半月" if is_first_half else "下半月"
+    _log(log, f"▶ {task_key} {label} 開始")
+    try:
+        gc       = get_gspread_client()
+        ss       = gc.open_by_key(cleaning_file_id)
+        ws       = ss.worksheet(sheet_name)
+
+        yyyymm   = period[:6]
+        cfg      = kwargs.get("region_cfg") or {}
+        # id_cell 對應 config 欄位：C3 → salary_id
+        id_map   = {"C2": "allowance_id", "C3": "salary_id", "C4": "roster_id", "C5": "payment_id"}
+        cfg_key  = id_map.get(id_cell, "salary_id")
+        src_id   = str(cfg.get(cfg_key, "") or "").strip()
+        schedule = f"{yyyymm}-{'1' if is_first_half else '2'}"
+        if not src_id:
+            raise ValueError(f"config 地區設定缺少 {cfg_key}（{id_cell}）")
+
+        # 篩選結束列號（從 src_range 解析）
+        filter_end = src_range.split(":")[1]  # 如 "L500" → "L500"
+        filter_col = src_range[0]             # 篩選欄字母（"A"）
+
+        if is_first_half:
+            _clear_first_half(ws, log)
+            target_row = 2
+        else:
+            target_row = _first_empty_row_col_a(ws)
+            _log(log, f"    下半月接續列：{target_row}")
+
+        formula = (
+            f'=FILTER('
+            f'IMPORTRANGE("{src_id}","{src_sheet}!{src_range}"),'
+            f'IMPORTRANGE("{src_id}","{src_sheet}!{filter_col}2:{filter_end}")="{schedule}"'
+            f')'
+        )
+        ws.update_cell(target_row, 1, formula)
+        _log(log, f"    IMPORTRANGE 已寫入 A{target_row}")
+
+        num_rows = _wait_and_convert(ws, f"A{target_row}", log)
+        if num_rows == 0:
+            _log(log, f"    ⚠️ {task_key} 無資料，結束")
+            ts = _punch(task_key, region, period)
+            _log(log, f"✅ {task_key} {label} 完成（無資料）｜{ts}")
+            return True
+        _log(log, f"    匯入完成：{num_rows} 筆")
+
+        _calc_qrs_salary(ws, target_row, num_rows, q_idx, r_expr, log)
+        _run_common_process(ws, log)
+
+        ts = _punch(task_key, region, period)
+        _log(log, f"✅ {task_key} {label} 完成｜{ts}")
+        return True
+
+    except Exception as e:
+        _log(log, f"❌ {task_key} 失敗：{e}")
+        return False
