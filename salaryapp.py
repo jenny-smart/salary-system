@@ -561,6 +561,34 @@ if run_clicked:
                             from modules.cleaning_process_4 import run_yuanta
                             success = _run(run_yuanta)
 
+                        elif _func == "產生PDF":
+                            from modules.cleaning_pdf import run_pdf
+                            root_id = _region.get("root_folder_id", "")
+                            live    = _make_live_log()
+                            success = run_pdf(
+                                cleaning_file_id = cleaning_file_id,
+                                root_folder_id   = root_id,
+                                region           = _name,
+                                period           = _period,
+                                job_type         = "CLEANING",
+                                log              = live,
+                                region_cfg       = _region,
+                            )
+
+                        elif _func == "產生專案PDF":
+                            from modules.cleaning_pdf import run_pdf
+                            root_id = _region.get("root_folder_id", "")
+                            live    = _make_live_log()
+                            success = run_pdf(
+                                cleaning_file_id = cleaning_file_id,
+                                root_folder_id   = root_id,
+                                region           = _name,
+                                period           = _period,
+                                job_type         = "PROJECT",
+                                log              = live,
+                                region_cfg       = _region,
+                            )
+
                         else:
                             add_log(f"{_func} 尚未實作", "warning")
                             success = False
