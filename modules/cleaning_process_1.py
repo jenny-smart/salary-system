@@ -419,9 +419,10 @@ def _prep_step1_salary_rows(
         ws_salary.batch_clear([_range(2041), _range(2045)])
         _log(log, "    上半月：已清空 L2041 及 L2045")
     else:
-        v2046 = ws_salary.get(_range(2046)) or [[]]
+        # UNFORMATTED_VALUE：取原始數值（不含格式化字串），RAW 寫入保持數值型別
+        v2046 = ws_salary.get(_range(2046), value_render_option="UNFORMATTED_VALUE") or [[]]
         ws_salary.update(_range(2045), v2046, value_input_option="RAW")
-        v2040 = ws_salary.get(_range(2040)) or [[]]
+        v2040 = ws_salary.get(_range(2040), value_render_option="UNFORMATTED_VALUE") or [[]]
         ws_salary.update(_range(2041), v2040, value_input_option="RAW")
         _log(log, "    下半月：L2046→L2045、L2040→L2041 貼值完成")
 
@@ -515,7 +516,8 @@ def _prep_step4_split_paste(
         if not data:
             return
         end_row = start + len(data) - 1
-        ws.update(f"A{start}:BJ{end_row}", data, value_input_option="RAW")
+        # USER_ENTERED：讓 Sheets 自動判斷型別，數字就是數字，不會加 apostrophe
+        ws.update(f"A{start}:BJ{end_row}", data, value_input_option="USER_ENTERED")
         _apply_backgrounds(ws, start, 1, b)
 
     _paste(ws_order, order_start, normal_v, normal_bg)
@@ -1103,7 +1105,11 @@ def _copy_salary_formulas(
     END_ROW   = 2044
     num_rows  = END_ROW - START_ROW + 1
 
-    src_formulas = ws_salary.get(f"L{START_ROW}:L{END_ROW}") or []
+    # FORMULA：取得儲存格公式（而非顯示值）
+    src_formulas = ws_salary.get(
+        f"L{START_ROW}:L{END_ROW}",
+        value_render_option="FORMULA"
+    ) or []
     batch = []
 
     for c in range(diff):
