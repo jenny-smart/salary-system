@@ -664,25 +664,29 @@ if st.session_state.adding_region:
         if submitted:
             if not new_name or not new_root:
                 st.error("地區名稱和根目錄 ID 為必填")
+            elif any(r["name"] == new_name for r in regions):
+                st.error(f"地區「{new_name}」已存在，請勿重複新增")
             else:
-                regions.append({
-                    "name":           new_name,
-                    "root_folder_id": new_root,
-                    "allowance_id":   new_allowance,
-                    "salary_id":      new_salary,
-                    "roster_id":      new_roster,
-                })
-                config["regions"] = regions
-                save_config(config)
-                init_msg = ""
-                try:
-                    from modules.master_sheet import init_region_sheet
-                    is_new   = init_region_sheet(new_name)
-                    init_msg = f"主控試算表：【{new_name}】工作表{'已建立' if is_new else '已存在'}"
-                except Exception as e:
-                    init_msg = f"主控試算表初始化失敗：{e}"
+                with st.spinner(f"儲存地區「{new_name}」中..."):
+                    regions.append({
+                        "name":           new_name,
+                        "root_folder_id": new_root,
+                        "allowance_id":   new_allowance,
+                        "salary_id":      new_salary,
+                        "roster_id":      new_roster,
+                    })
+                    config["regions"] = regions
+                    save_config(config)
+                    init_msg = ""
+                    try:
+                        from modules.master_sheet import init_region_sheet
+                        is_new   = init_region_sheet(new_name)
+                        init_msg = f"主控試算表：【{new_name}】工作表{'已建立' if is_new else '已存在'}"
+                    except Exception as e:
+                        init_msg = f"主控試算表初始化失敗：{e}"
                 add_log(f"新增地區：{new_name}", "success")
                 add_log(init_msg, "success" if "已建立" in init_msg or "已存在" in init_msg else "warning")
+                st.success(f"✅ 地區「{new_name}」已儲存")
                 st.session_state.adding_region = False
                 st.rerun()
 
