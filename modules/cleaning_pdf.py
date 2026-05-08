@@ -130,8 +130,10 @@ def run_pdf(
 
                 # 2. 找最後一列（AB欄）
                 last_export_row = _find_last_export_row(ws_salary)
+                _log(log, f"      匯出範圍：AB1:AH{last_export_row}")
 
                 # 3. export PDF
+                _log(log, f"      呼叫 export API...")
                 export_range = f"AB1:AH{last_export_row}"
                 pdf_bytes    = _export_pdf(
                     token         = token,
@@ -139,15 +141,16 @@ def run_pdf(
                     sheet_gid     = salary_sheet_id,
                     export_range  = export_range,
                 )
+                _log(log, f"      PDF 大小：{len(pdf_bytes)} bytes")
 
                 if len(pdf_bytes) < 1000:
                     raise ValueError(f"PDF 過小（{len(pdf_bytes)} bytes），可能為空白頁")
 
                 # 4. 存到 Drive
                 file_title = f"{period}_{label}_{name}.pdf"
+                _log(log, f"      上傳至 Drive：{file_title}")
 
-                # 若 E欄已有連結，先嘗試更新原檔
-                existing_link = _get_cell(ws_list, row, 5)
+                existing_link    = _get_cell(ws_list, row, 5)
                 existing_file_id = _extract_file_id(existing_link)
                 drive = get_drive_service()
 
@@ -169,15 +172,21 @@ def run_pdf(
                     [[now_str, file_url]],
                     value_input_option="USER_ENTERED"
                 )
-                ws_list.update_cell(row, 8, "")   # H欄清空
+                ws_list.update_cell(row, 8, "")
                 _log(log, f"      ✅ {name} PDF 已存至 Drive")
                 count += 1
 
             except Exception as e:
                 import traceback
-                err_msg = str(e) or repr(e) or "未知錯誤"
+                # googleapiclient.errors.HttpError 需要特別處理
+                if hasattr(e, 'reason'):
+                    err_msg = f"HttpError {e.status_code}: {e.reason}"
+                elif hasattr(e, 'content'):
+                    err_msg = f"HttpError: {e.content[:200]}"
+                else:
+                    err_msg = str(e) or repr(e) or "未知錯誤"
                 _log(log, f"      ❌ {name} 失敗：{err_msg}")
-                _log(log, f"      {traceback.format_exc().splitlines()[-1]}")
+                _log(log, f"      traceback: {traceback.format_exc().splitlines()[-2]}")
                 skipped += 1
 
             time.sleep(0.8)   # 避免 API 速率限制
