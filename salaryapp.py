@@ -474,22 +474,28 @@ if run_clicked:
 
                     if cleaning_file_id:
 
+                        def _make_live_log():
+                            """建立即時寫入 add_log 的 log list（每次 append 就立即顯示）。"""
+                            class LiveLog(list):
+                                def append(self, msg):
+                                    super().append(msg)
+                                    lvl = "success" if msg.startswith("✅") else \
+                                          "error"   if msg.startswith("❌") else \
+                                          "warning" if msg.startswith("⚠️") else "info"
+                                    add_log(msg, lvl)
+                            return LiveLog()
+
                         def _run(fn, **kwargs):
-                            """執行清潔承攬函數並把 log_lines 轉入 add_log。"""
-                            log_lines = []
-                            success   = fn(
+                            """執行清潔承攬函數，log 即時顯示在 Streamlit 日誌區。"""
+                            live = _make_live_log()
+                            success = fn(
                                 cleaning_file_id=cleaning_file_id,
                                 region=_name,
                                 period=_period,
                                 is_first_half=_is_first_half,
-                                log=log_lines,
+                                log=live,
                                 **kwargs,
                             )
-                            for line in log_lines:
-                                lvl = "success" if line.startswith("✅") else \
-                                      "error"   if line.startswith("❌") else \
-                                      "warning" if line.startswith("⚠️") else "info"
-                                add_log(line, lvl)
                             return success
 
                         if _func == "前置作業":
