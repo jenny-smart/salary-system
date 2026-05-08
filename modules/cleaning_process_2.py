@@ -75,6 +75,7 @@ import gspread
 
 from modules.auth import get_gspread_client
 from modules.master_sheet import record_execution
+from modules.common_process import run_common_process as _run_common_process
 
 
 # ──────────────────────────────────────────────────────────────
@@ -192,114 +193,6 @@ def _wait_and_convert(
     _log(log, f"    A2:AC{last} 轉靜態值完成（{last - 1} 列）")
     return last - 1
 
-
-def _run_common_process(ws: gspread.Worksheet, log: List[str]) -> None:
-    """
-    共通 QRS→U-Y→AA-AC 流程。
-
-    欄位：
-      Q(17)=姓名, R(18)=金額, S(19)=備註
-
-    步驟：
-    1. 篩選 R≠0 的列 → 寫入 V(22)/W(23)/X(24)
-    2. U(21) = V 欄同名出現次數
-    3. Y(25) = 當 U>1 時，合併同名的所有 X 欄，用全形「，」分隔
-    4. AA(27) = V 欄去重（唯一姓名）
-    5. AB(28) = SUMIF：AA=V 時加總 W
-    6. AC(29) = AC$1 & Y（Y 欄合併後的備註）
-    """
-    # 找 Q 欄最後有資料的列
-    q_vals = ws.col_values(17)
-    last_q = 0
-    for i in range(len(q_vals) - 1, 0, -1):
-        if str(q_vals[i]).strip():
-            last_q = i + 1
-            break
-    if last_q < 2:
-        _log(log, "    共通流程：Q 欄無資料，跳過")
-        return
-
-    qrs = ws.get(f"Q2:S{last_q}") or []
-    rows = []
-    for r in qrs:
-        q = r[0] if r else ""
-        rv = r[1] if len(r) > 1 else ""
-        s  = r[2] if len(r) > 2 else ""
-        rows.append((str(q).strip(), rv, str(s).strip()))
-
-    # 篩選 R≠0
-    vwx = [(q, r, s) for q, r, s in rows if r and str(r).strip() not in ("", "0")]
-    if not vwx:
-        _log(log, "    共通流程：R 欄全為 0，跳過")
-        return
-
-    n = len(vwx)
-    end_row = 1 + n  # 資料從第2列開始
-
-    # 清空 U:AC
-    ws.batch_clear([f"U2:AC{max(last_q, end_row)}"])
-
-    # 寫入 V/W/X
-    vwx_data = [[q, r, s] for q, r, s in vwx]
-    ws.update(f"V2:X{end_row}", vwx_data, value_input_option="USER_ENTERED")
-
-    # U 欄：統計 V 欄同名次數
-    v_col  = [t[0] for t in vwx]
-    u_data = [[v_col.count(name)] for name in v_col]
-    ws.update(f"U2:U{end_row}", u_data, value_input_option="USER_ENTERED")
-
-    # Y 欄：同名時合併所有 X 欄，用全形「，」分隔
-    # 先建立 name→[x列表] 的對照
-    from collections import defaultdict, OrderedDict
-    name_xs: dict = defaultdict(list)
-    name_first_row: dict = OrderedDict()  # 記錄每個姓名第一次出現的列索引
-    for i, (q, r, s) in enumerate(vwx):
-        name_xs[q].append(s)
-        if q not in name_first_row:
-            name_first_row[q] = i
-
-    y_data = [[""] for _ in range(n)]
-    for name, first_i in name_first_row.items():
-        xs = name_xs[name]
-        if len(xs) > 1:
-            # 只在第一列寫合併結果，其餘空白
-            y_data[first_i] = ["，".join(x for x in xs if x)]
-
-    ws.update(f"Y2:Y{end_row}", y_data, value_input_option="USER_ENTERED")
-
-    # AA:AC — 去重後彙總
-    # AA = 唯一姓名（依出現順序）
-    unique_names = list(name_first_row.keys())
-    aa_data  = [[name] for name in unique_names]
-    ab_data  = []  # W 欄加總
-    ac_data  = []  # AC$1 & Y
-
-    # 讀取 AC1（固定前綴）
-    ac1 = str(ws.acell("AC1").value or "").strip()
-
-    # 建立 name→W合計 和 name→Y 的對照
-    name_w: dict = defaultdict(float)
-    for q, r, s in vwx:
-        try:
-            name_w[q] += float(str(r).replace(",", ""))
-        except (ValueError, TypeError):
-            pass
-    name_y: dict = {name: y_data[first_i][0] for name, first_i in name_first_row.items()}
-
-    for name in unique_names:
-        ab_data.append([name_w[name]])
-        y_val = name_y.get(name, "")
-        # 若只有一筆，Y 欄是空的，直接用 X 欄
-        if not y_val:
-            y_val = name_xs[name][0] if name_xs[name] else ""
-        ac_data.append([ac1 + y_val if y_val else ""])
-
-    aa_end = 1 + len(unique_names)
-    ws.update(f"AA2:AA{aa_end}", aa_data, value_input_option="USER_ENTERED")
-    ws.update(f"AB2:AB{aa_end}", ab_data, value_input_option="USER_ENTERED")
-    ws.update(f"AC2:AC{aa_end}", ac_data, value_input_option="USER_ENTERED")
-
-    _log(log, f"    共通流程完成：V/W/X {n} 筆，AA/AB/AC {len(unique_names)} 筆（唯一姓名）")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -462,14 +355,18 @@ def run_voucher(
             target_row = _first_empty_row_col_a(ws_voucher)
             _log(log, f"    下半月接續列：{target_row}")
 
-        # 匯入欄位遮罩：只取 B(2),C(3),D(4),E(5),M(13),BB(54)，其餘補空字串
-        # 使用 {IF(TRUE,col,...), ...} 的方式比 IMPORTRANGE 遮罩更可靠
-        # 改用較簡單的方式：先全部匯入後再取欄
+        # 遮罩：只取 B(2),C(3),D(4),E(5),M(13),BB(54) 欄
+        # 共 54 欄，遮罩為 {0,1,1,1,1,0,0,0,0,0,0,0,1,0,...,0,1}
+        mask_parts = []
+        keep = {2, 3, 4, 5, 13, 54}
+        for col in range(1, 55):
+            mask_parts.append("1" if col in keep else "0")
+        mask = "{" + ",".join(mask_parts) + "}"
         formula = (
-            f'=FILTER('
-            f'IMPORTRANGE("{payment_id}","範本!A2:BB3000"),'
-            f'IMPORTRANGE("{payment_id}","範本!A2:A3000")="儲值金"'
-            f')'
+            f'=filter({{' +
+            f'filter(importrange("{payment_id}","範本!A2:BB3000"),' +
+            f'importrange("{payment_id}","範本!A2:A3000")="儲值金")' +
+            f'}},{mask})' 
         )
         ws_voucher.update_cell(target_row, 1, formula)
         _log(log, f"    IMPORTRANGE 已寫入 A{target_row}")
@@ -701,8 +598,9 @@ def run_newcomer(
         src_sheet = "新人實境",
         id_cell   = "C3",
         src_range = "A2:L500",
-        q_idx     = 2,          # C 欄（0-based index in A:L）
+        q_idx     = 2,
         r_expr    = "200*K",
+        region_cfg= region_cfg,
     )
 
 
@@ -719,8 +617,9 @@ def run_intern(
         src_sheet = "新人實習",
         id_cell   = "C3",
         src_range = "A2:L500",
-        q_idx     = 2,          # C 欄
+        q_idx     = 2,
         r_expr    = "200*K",
+        region_cfg= region_cfg,
     )
 
 
@@ -734,11 +633,12 @@ def run_leader(
         cleaning_file_id, region, period, is_first_half, log,
         task_key  = "05組長津貼",
         sheet_name= "05組長津貼",
-        src_sheet = "新人實習",  # ※ 同 04，來源工作表名稱相同
+        src_sheet = "新人實習",
         id_cell   = "C3",
         src_range = "A2:L500",
-        q_idx     = 7,          # H 欄（0-based index in A:L）
+        q_idx     = 7,
         r_expr    = "J*K",
+        region_cfg= region_cfg,
     )
 
 
@@ -755,6 +655,7 @@ def _run_salary_module(
     src_range: str,
     q_idx: int,
     r_expr: str,
+    region_cfg: dict = None,
     **kwargs,
 ) -> bool:
     """
@@ -771,7 +672,7 @@ def _run_salary_module(
         ws       = ss.worksheet(sheet_name)
 
         yyyymm   = period[:6]
-        cfg      = kwargs.get("region_cfg") or {}
+        cfg      = region_cfg or {}
         # id_cell 對應 config 欄位：C3 → salary_id
         id_map   = {"C2": "allowance_id", "C3": "salary_id", "C4": "roster_id", "C5": "payment_id"}
         cfg_key  = id_map.get(id_cell, "salary_id")
