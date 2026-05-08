@@ -241,7 +241,7 @@ def _tool_process(
         end_row = TOOL_DEPOSIT_START_ROW + len(dep_rows) - 1
         ws_summary.update(
             f"A{TOOL_DEPOSIT_START_ROW}:E{end_row}",
-            dep_rows, value_input_option="RAW"
+            dep_rows, value_input_option="USER_ENTERED"
         )
         _log(log, f"    工具包押金寫入 A{TOOL_DEPOSIT_START_ROW}:E{end_row}，共 {len(dep_rows)} 筆")
 
@@ -250,7 +250,7 @@ def _tool_process(
         ws_intro.batch_clear(["A2:C"])
         ws_intro.update(
             f"A2:C{1 + len(intro_rows)}",
-            intro_rows, value_input_option="RAW"
+            intro_rows, value_input_option="USER_ENTERED"
         )
         _log(log, f"    介紹獎金寫入 A2:C{1 + len(intro_rows)}，共 {len(intro_rows)} 筆")
 
