@@ -238,6 +238,30 @@ with col_clear:
         st.session_state.logs = ["[--:--:--] 日誌已清除"]
         _render_log(log_placeholder)
 
+# ── PDF 下載區塊 ──────────────────────────────────────────────
+if st.session_state.get("pdf_result"):
+    pdf_result = st.session_state["pdf_result"]
+    pdfs   = pdf_result.get("pdfs", {})
+    failed = pdf_result.get("failed", [])
+
+    if pdfs:
+        st.markdown('<div class="card"><div class="card-title">📥 PDF 下載</div>', unsafe_allow_html=True)
+        for filename, pdf_bytes in pdfs.items():
+            st.download_button(
+                label      = f"⬇️ {filename}",
+                data       = pdf_bytes,
+                file_name  = filename,
+                mime       = "application/pdf",
+                key        = f"dl_{filename}",
+                use_container_width = True,
+            )
+        if failed:
+            st.warning(f"⚠️ 以下人員產出失敗（可重新執行）：{', '.join(failed)}")
+        if st.button("🗑️ 清除下載清單"):
+            del st.session_state["pdf_result"]
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
 
 # ═══════════════════════════════════════════════════════════
 # █ 區塊8：執行邏輯 — 共用前置檢查
@@ -562,33 +586,23 @@ if run_clicked:
                             from modules.cleaning_process_4 import run_yuanta
                             success = _run(run_yuanta)
 
-                        elif _func == "產生PDF":
+                        elif _func in ("產生PDF", "產生專案PDF"):
                             from modules.cleaning_pdf import run_pdf
-                            root_id = _region.get("root_folder_id", "")
-                            live    = _make_live_log()
-                            success = run_pdf(
+                            root_id  = _region.get("root_folder_id", "")
+                            job_type = "CLEANING" if _func == "產生PDF" else "PROJECT"
+                            live     = _make_live_log()
+                            pdf_result = run_pdf(
                                 cleaning_file_id = cleaning_file_id,
                                 root_folder_id   = root_id,
                                 region           = _name,
                                 period           = _period,
-                                job_type         = "CLEANING",
+                                job_type         = job_type,
                                 log              = live,
                                 region_cfg       = _region,
                             )
-
-                        elif _func == "產生專案PDF":
-                            from modules.cleaning_pdf import run_pdf
-                            root_id = _region.get("root_folder_id", "")
-                            live    = _make_live_log()
-                            success = run_pdf(
-                                cleaning_file_id = cleaning_file_id,
-                                root_folder_id   = root_id,
-                                region           = _name,
-                                period           = _period,
-                                job_type         = "PROJECT",
-                                log              = live,
-                                region_cfg       = _region,
-                            )
+                            # 儲存到 session_state 供 rerun 後顯示下載按鈕
+                            st.session_state["pdf_result"] = pdf_result
+                            success = len(pdf_result.get("pdfs", {})) > 0
 
                         else:
                             add_log(f"{_func} 尚未實作", "warning")
