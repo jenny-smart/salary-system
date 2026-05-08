@@ -609,10 +609,8 @@ def run_adjustment(
         if not roster_id:
             raise ValueError("config 地區設定缺少 roster_id（名冊 ID）")
 
-        # ── 步驟1：上半月清空 S3:AL ──────────────────────────
-        if is_first_half:
-            _log(log, "  步驟1：清空 S3:AL")
-            ws_adjust.batch_clear(["S3:AL"])
+        # ── 步驟1（已移至 _adj_import_roster 統一處理）─────────
+        # S3:AP 清空在寫入公式前由 _adj_import_roster 執行
 
         # ── 步驟2：匯入專員名冊 → S3:W ──────────────────────
         _log(log, "  步驟2：匯入專員名冊 S3:W")
@@ -683,11 +681,12 @@ def _adj_import_roster(
     yyyymm: str,
     log: List[str],
 ):
-    formula = (
-        f'=ARRAYFORMULA(IFERROR(FILTER('
-        f'IMPORTRANGE("{roster_id}","{yyyymm}專員名冊!B2:F"),'
-        f'IMPORTRANGE("{roster_id}","{yyyymm}專員名冊!B2:B")<>""),""))'
-    )
+    # 先清空 S3:AP（確保舊資料不殘留）
+    ws_adjust.batch_clear(["S3:AP"])
+    _log(log, "    S3:AP 已清空")
+
+    # 直接 IMPORTRANGE，不需要 ARRAYFORMULA+FILTER
+    formula = f'=IMPORTRANGE("{roster_id}","{yyyymm}專員名冊!B2:F")'
     ws_adjust.update_cell(3, 19, formula)  # S3 = row 3, col 19
     _log(log, f"    S3 IMPORTRANGE 已寫入（名冊 {yyyymm}）")
     time.sleep(5)
