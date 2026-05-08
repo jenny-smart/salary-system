@@ -356,17 +356,14 @@ def run_voucher(
             _log(log, f"    下半月接續列：{target_row}")
 
         # 遮罩：只取 B(2),C(3),D(4),E(5),M(13),BB(54) 欄
-        # 共 54 欄，遮罩為 {0,1,1,1,1,0,0,0,0,0,0,0,1,0,...,0,1}
-        mask_parts = []
+        # 格式：=FILTER(FILTER(IMPORTRANGE(...), 篩選條件), {遮罩})
         keep = {2, 3, 4, 5, 13, 54}
-        for col in range(1, 55):
-            mask_parts.append("1" if col in keep else "0")
-        mask = "{" + ",".join(mask_parts) + "}"
+        mask = "{" + ",".join("1" if col in keep else "0" for col in range(1, 55)) + "}"
         formula = (
-            f'=filter({{' +
-            f'filter(importrange("{payment_id}","範本!A2:BB3000"),' +
-            f'importrange("{payment_id}","範本!A2:A3000")="儲值金")' +
-            f'}},{mask})' 
+            f'=FILTER('
+            f'FILTER(IMPORTRANGE("{payment_id}","範本!A2:BB3000"),'
+            f'IMPORTRANGE("{payment_id}","範本!A2:A3000")="儲值金"),'
+            f'{mask})'
         )
         ws_voucher.update_cell(target_row, 1, formula)
         _log(log, f"    IMPORTRANGE 已寫入 A{target_row}")
