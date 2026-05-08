@@ -161,11 +161,10 @@ FUNCTION_MAP = {
         "04新人實習",
         "05組長津貼",
         "06季獎金",
-        "薪資結算",
+        "結算作業",
         "一鍵執行",
         "新人實境實習期別",
         "工具包押金",
-        "介紹獎金",
         "元大帳戶",
         "產生PDF",
     ],
@@ -541,7 +540,7 @@ if run_clicked:
                             from modules.cleaning_process_3 import run_season_bonus
                             success = _run(run_season_bonus)
 
-                        elif _func == "薪資結算":
+                        elif _func == "結算作業":
                             from modules.cleaning_process_3 import run_settlement
                             success = _run(run_settlement)
 
@@ -557,9 +556,6 @@ if run_clicked:
                             from modules.cleaning_process_4 import run_tool_deposit
                             success = _run(run_tool_deposit)
 
-                        elif _func == "介紹獎金":
-                            from modules.cleaning_process_4 import run_tool_deposit
-                            success = _run(run_tool_deposit)
 
                         elif _func == "元大帳戶":
                             from modules.cleaning_process_4 import run_yuanta
