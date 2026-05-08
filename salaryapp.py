@@ -463,7 +463,7 @@ if run_clicked:
                 # █ 區塊8-B：清潔承攬執行邏輯
                 # ───────────────────────────────────────────────
                 elif _system == "🧹 清潔承攬":
-                    from modules.cleaning_process_1 import find_cleaning_file
+                    from modules.cleaning_process_1 import find_cleaning_file, find_payment_file
 
                     try:
                         cleaning_file_id = find_cleaning_file(root_id, _period, _name)
@@ -471,6 +471,16 @@ if run_clicked:
                     except FileNotFoundError as e:
                         add_log(str(e), "error")
                         cleaning_file_id = None
+
+                    # 儲值獎金需要金流對帳 ID，提前取得（其他作業不需要）
+                    _payment_file_id = None
+                    if cleaning_file_id and _func == "02儲值獎金":
+                        try:
+                            _payment_file_id = find_payment_file(root_id, _period, _name)
+                            add_log(f"找到金流對帳檔案：{_payment_file_id}")
+                        except FileNotFoundError as e:
+                            add_log(str(e), "error")
+                            cleaning_file_id = None  # 找不到就中止
 
                     if cleaning_file_id:
 
@@ -494,6 +504,7 @@ if run_clicked:
                                 period=_period,
                                 is_first_half=_is_first_half,
                                 log=live,
+                                region_cfg=_region,
                                 **kwargs,
                             )
                             return success
@@ -512,7 +523,7 @@ if run_clicked:
 
                         elif _func == "02儲值獎金":
                             from modules.cleaning_process_2 import run_voucher
-                            success = _run(run_voucher)
+                            success = _run(run_voucher, payment_file_id=_payment_file_id)
 
                         elif _func == "03新人實境":
                             from modules.cleaning_process_2 import run_newcomer
