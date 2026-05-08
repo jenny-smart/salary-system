@@ -295,6 +295,8 @@ def run_preparation(
     period: str,
     is_first_half: bool,
     log: List[str],
+    region_cfg: dict = None,
+    **kwargs,
 ) -> bool:
     """
     前置作業主函數。
