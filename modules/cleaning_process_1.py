@@ -650,13 +650,8 @@ def run_adjustment(
         _log(log, "  步驟9：設定場次時數薪資總表 H-K 欄")
         _adj_set_summary_h_to_k(ws_summary, roster_id, yyyymm, num_rows, log)
 
-        # ── 步驟10：設定 P-Q（上）/ W-X（下）欄 ─────────────
-        _log(log, "  步驟10：設定 P-Q / W-X 欄")
-        _adj_set_summary_pq_or_wx(ws_summary, is_first_half, log)
-
-        # ── 步驟11：設定 N-O（上）/ U-V（下）欄 ─────────────
-        _log(log, "  步驟11：設定 N-O / U-V 欄")
-        _adj_set_summary_no_or_uv(ws_summary, is_first_half, log)
+        # ── 步驟10/11：P-Q/W-X、N-O/U-V 欄 ─────────────────────
+        # 這些步驟屬於結算作業，不在調薪中執行
 
         # ── 步驟12：更新薪資表 L1:1 員工名單 ────────────────
         _log(log, "  步驟12：更新薪資表 L1:1 員工名單")
