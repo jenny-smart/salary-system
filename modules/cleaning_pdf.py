@@ -88,7 +88,6 @@ def run_pdf(
         ss = gc.open_by_key(cleaning_file_id)
 
         ws_list   = ss.worksheet(job["list_sheet"])
-        ws_salary = ss.worksheet(job["salary_sheet"])
 
         raw = ws_list.get("A2:H", value_render_option="UNFORMATTED_VALUE") or []
         targets = []
@@ -104,13 +103,21 @@ def run_pdf(
 
         _log(log, f"    待產出：{len(targets)} 人")
 
-        token           = _get_access_token()
+        token = _get_access_token()
+
+        # 讀取來源工作表
+        if job_type == "PROJECT":
+            src_sheet_name = "專案薪資表"
+            salary_sheet_name = "專案薪資單"
+        else:
+            src_sheet_name = "薪資表"
+            salary_sheet_name = "薪資單"
+
+        _log(log, f"    讀取{src_sheet_name}資料...")
+        ws_main   = ss.worksheet(src_sheet_name)
+        ws_salary = ss.worksheet(salary_sheet_name)
         salary_sheet_id = ws_salary.id
 
-        # 讀取薪資表（B=服務日期, C=星期, E=客戶姓名, F=服務專員, G=服務時數）
-        # A欄=序號(index 0), B=1, C=2, D=3, E=4, F=5, G=6
-        _log(log, "    讀取薪資表資料...")
-        ws_main   = ss.worksheet("薪資表")
         main_raw  = ws_main.get(
             "A2:G",
             value_render_option="UNFORMATTED_VALUE",
@@ -123,43 +130,47 @@ def run_pdf(
             _log(log, f"    [{i+1}/{len(targets)}] 產出：{name}")
 
             try:
-                # 1. 清空舊明細（AC31:AF，不動 AD1/AD2）
-                ws_salary.batch_clear(["AC31:AF"])
+                # 1. 清空舊明細（AB31:AF，不動 AD1/AD2）
+                ws_salary.batch_clear(["AB31:AF"])
 
-                # 2. 篩選薪資表 F 欄（index 5）包含此姓名的列
+                # 2. 篩選來源工作表 F 欄包含此姓名的列
+                # A=0, B=1, C=2, D=3, E=4, F=5, G=6
                 detail_rows = []
                 for r in main_raw:
                     while len(r) < 7:
                         r.append("")
-                    f_val = str(r[5]).strip()   # F = 服務專員
+                    f_val = str(r[5]).strip()
                     if name in f_val:
-                        b_val = str(r[1]).strip()   # B = 服務日期
-                        c_val = str(r[2]).strip()   # C = 星期
-                        e_val = str(r[4]).strip()   # E = 客戶姓名
-                        g_val = r[6]                # G = 服務時數
+                        b_val = str(r[1]).strip()
+                        c_val = str(r[2]).strip()
+                        e_val = str(r[4]).strip()
+                        g_val = r[6]
                         detail_rows.append([
-                            f"{b_val}（{c_val}）",  # AC = 日期(星期)
-                            e_val,                   # AD = 客戶姓名
-                            g_val,                   # AE = 服務時數
-                            f_val,                   # AF = 服務專員
+                            f"{b_val}（{c_val}）",  # AC
+                            e_val,                   # AD
+                            g_val,                   # AE
+                            f_val,                   # AF
                         ])
 
                 if detail_rows:
-                    end_r = 30 + len(detail_rows)
-                    ws_salary.update(
-                        f"AC31:AF{end_r}",
-                        detail_rows,
-                        value_input_option="USER_ENTERED"
-                    )
-                    _log(log, f"      明細寫入：{len(detail_rows)} 筆")
-                else:
-                    _log(log, f"      ⚠️ 薪資表中找不到含「{name}」的資料")
+                    n = len(detail_rows)
+                    end_r = 30 + n
 
-                # 3. 寫入 AD2 姓名（不動 AD1，觸發薪資單上方公式）
-                ws_salary.update_cell(2, 30, name)   # row=2, col=30(AD)
+                    # AB 欄序號（只有 AC 有資料才寫，從 AB31 起）
+                    ab_data = [[idx + 1] for idx in range(n)]
+                    ws_salary.update(f"AB31:AB{end_r}", ab_data, value_input_option="USER_ENTERED")
+
+                    # AC:AF 明細
+                    ws_salary.update(f"AC31:AF{end_r}", detail_rows, value_input_option="USER_ENTERED")
+                    _log(log, f"      明細寫入：{n} 筆")
+                else:
+                    _log(log, f"      ⚠️ {src_sheet_name}中找不到含「{name}」的資料")
+
+                # 3. 寫入 AD2 姓名（不動 AD1）
+                ws_salary.update_cell(2, 30, name)
                 time.sleep(3.0)
 
-                # 4. 匯出範圍：AB1 到明細最後列
+                # 4. 匯出範圍
                 last_export_row = 30 + len(detail_rows) + 3 if detail_rows else 40
                 _log(log, f"      匯出範圍：AB1:AH{last_export_row}")
 
