@@ -107,16 +107,60 @@ def run_pdf(
         token           = _get_access_token()
         salary_sheet_id = ws_salary.id
 
+        # 讀取清潔訂單（B=服務日期, C=星期, E=客戶姓名, F=服務專員, G=服務時數）
+        _log(log, "    讀取清潔訂單工作表資料...")
+        ws_order   = ss.worksheet("清潔訂單")
+        order_raw  = ws_order.get(
+            "A2:G",
+            value_render_option="UNFORMATTED_VALUE",
+            date_time_render_option="FORMATTED_STRING"
+        ) or []
+
         for i, target in enumerate(targets):
             name = target["name"]
             row  = target["row"]
             _log(log, f"    [{i+1}/{len(targets)}] 產出：{name}")
 
             try:
-                ws_salary.update_cell(2, 30, name)
-                time.sleep(2.5)
+                # 1. 清空舊明細（AC31:AF 清空，避免殘留上一人資料）
+                ws_salary.batch_clear(["AC31:AF"])
 
-                last_export_row = _find_last_export_row(ws_salary)
+                # 2. 篩選清潔訂單中 F 欄（服務專員）包含此姓名的列
+                #    A=0, B=1, C=2, D=3, E=4, F=5, G=6
+                detail_rows = []
+                for r in order_raw:
+                    while len(r) < 7:
+                        r.append("")
+                    f_val = str(r[5]).strip()   # F = 服務專員
+                    if name in f_val:
+                        b_val = str(r[1]).strip()   # B = 服務日期
+                        c_val = str(r[2]).strip()   # C = 星期
+                        e_val = str(r[4]).strip()   # E = 客戶姓名
+                        g_val = r[6]                # G = 服務時數
+                        detail_rows.append([
+                            f"{b_val}（{c_val}）",  # AC = 日期(星期)
+                            e_val,                   # AD = 客戶姓名
+                            g_val,                   # AE = 服務時數
+                            f_val,                   # AF = 服務專員
+                        ])
+
+                if detail_rows:
+                    end_r = 30 + len(detail_rows)
+                    ws_salary.update(
+                        f"AC31:AF{end_r}",
+                        detail_rows,
+                        value_input_option="USER_ENTERED"
+                    )
+                    _log(log, f"      明細寫入：{len(detail_rows)} 筆")
+                else:
+                    _log(log, f"      ⚠️ 清潔訂單中找不到含「{name}」的資料")
+
+                # 3. 寫入 AD2 姓名（薪資單 AD2 = 姓名，觸發上方公式）
+                ws_salary.update_cell(2, 30, name)   # row=2, col=30(AD)
+                time.sleep(3.0)   # 等公式計算
+
+                # 4. 匯出範圍：AB1 到明細最後列（多留 3 列緩衝）
+                last_export_row = 30 + len(detail_rows) + 3 if detail_rows else 40
                 _log(log, f"      匯出範圍：AB1:AH{last_export_row}")
 
                 pdf_bytes = _export_pdf(
@@ -153,141 +197,6 @@ def run_pdf(
     except Exception as e:
         _log(log, f"❌ PDF產出失敗：{e}")
         return result
-    """
-    產出 PDF。
-
-    Args:
-        cleaning_file_id : 清潔承攬試算表 ID
-        root_folder_id   : 地區根目錄 Drive ID（config.yaml root_folder_id）
-        region           : 地區名稱（用於檔名）
-        period           : 期別，如 "202604-2"
-        job_type         : "CLEANING" 或 "PROJECT"
-        log              : 日誌列表
-    """
-    job   = PDF_JOBS.get(job_type, PDF_JOBS["CLEANING"])
-    label = job["file_title"]
-    _log(log, f"▶ PDF產出 [{label}] {region} {period} 開始")
-
-    try:
-        gc = get_gspread_client()
-        ss = gc.open_by_key(cleaning_file_id)
-
-        ws_list   = ss.worksheet(job["list_sheet"])
-        ws_salary = ss.worksheet(job["salary_sheet"])
-
-        # 讀取待產出名單（B欄=姓名, H欄=Y）
-        last_row = ws_list.row_count
-        raw = ws_list.get("A2:H", value_render_option="UNFORMATTED_VALUE") or []
-        targets = []
-        for i, row in enumerate(raw):
-            name = str(row[1]).strip() if len(row) > 1 else ""
-            flag = str(row[7]).strip() if len(row) > 7 else ""
-            if name and flag == "Y":
-                targets.append({"name": name, "row": i + 2})
-
-        if not targets:
-            _log(log, f"    [{job['list_sheet']}] 無 H=Y 的待產出人員")
-            return True
-
-        _log(log, f"    待產出：{len(targets)} 人")
-
-        # 取得 Drive 目標資料夾
-        folder_id = _get_or_create_pdf_folder(root_folder_id, period)
-        _log(log, f"    Drive 資料夾：{folder_id}")
-
-        # 取得 OAuth token（Service Account）
-        token = _get_access_token()
-
-        # 逐人產出
-        salary_sheet_id = ws_salary.id
-        count   = 0
-        skipped = 0
-
-        for i, target in enumerate(targets):
-            name = target["name"]
-            row  = target["row"]
-            _log(log, f"    [{i+1}/{len(targets)}] 產出：{name}")
-
-            try:
-                # 1. 寫入姓名到 AD2（col 30 = AD）
-                ws_salary.update_cell(2, 30, name)
-                time.sleep(2.5)   # 等公式計算
-
-                # 2. 找最後一列（AB欄）
-                last_export_row = _find_last_export_row(ws_salary)
-                _log(log, f"      匯出範圍：AB1:AH{last_export_row}")
-
-                # 3. export PDF
-                _log(log, f"      呼叫 export API...")
-                export_range = f"AB1:AH{last_export_row}"
-                pdf_bytes    = _export_pdf(
-                    token         = token,
-                    spreadsheet_id= cleaning_file_id,
-                    sheet_gid     = salary_sheet_id,
-                    export_range  = export_range,
-                )
-                _log(log, f"      PDF 大小：{len(pdf_bytes)} bytes")
-
-                if len(pdf_bytes) < 1000:
-                    raise ValueError(f"PDF 過小（{len(pdf_bytes)} bytes），可能為空白頁")
-
-                # 4. 存到 Drive
-                file_title = f"{period}_{label}_{name}.pdf"
-                _log(log, f"      上傳至 Drive：{file_title}")
-
-                existing_link    = _get_cell(ws_list, row, 5)
-                existing_file_id = _extract_file_id(existing_link)
-                drive = get_drive_service()
-
-                if existing_file_id:
-                    try:
-                        _update_drive_file(drive, existing_file_id, pdf_bytes, file_title)
-                        file_id = existing_file_id
-                    except Exception:
-                        file_id = _create_drive_file(drive, folder_id, pdf_bytes, file_title)
-                else:
-                    file_id = _create_drive_file(drive, folder_id, pdf_bytes, file_title)
-
-                file_url = f"https://drive.google.com/file/d/{file_id}/view"
-
-                # 5. 回寫 D/E 欄，清除 H 欄
-                now_str = datetime.datetime.now().strftime(TS_FMT)
-                ws_list.update(
-                    f"D{row}:E{row}",
-                    [[now_str, file_url]],
-                    value_input_option="USER_ENTERED"
-                )
-                ws_list.update_cell(row, 8, "")
-                _log(log, f"      ✅ {name} PDF 已存至 Drive")
-                count += 1
-
-            except Exception as e:
-                import traceback
-                # googleapiclient.errors.HttpError 需要特別處理
-                if hasattr(e, 'reason'):
-                    err_msg = f"HttpError {e.status_code}: {e.reason}"
-                elif hasattr(e, 'content'):
-                    err_msg = f"HttpError: {e.content[:200]}"
-                else:
-                    err_msg = str(e) or repr(e) or "未知錯誤"
-                _log(log, f"      ❌ {name} 失敗：{err_msg}")
-                _log(log, f"      traceback: {traceback.format_exc().splitlines()[-2]}")
-                skipped += 1
-
-            time.sleep(0.8)   # 避免 API 速率限制
-
-        _log(log, f"✅ PDF產出完成：成功 {count} 份，失敗 {skipped} 份")
-        return count > 0 or skipped == 0
-
-    except Exception as e:
-        _log(log, f"❌ PDF產出失敗：{e}")
-        return False
-
-
-# ──────────────────────────────────────────────────────────────
-# Drive 資料夾
-# ──────────────────────────────────────────────────────────────
-
 def _get_or_create_pdf_folder(root_id: str, period: str) -> str:
     """取得或建立 {根目錄}/{期別}/{期別} 資料夾，回傳最內層資料夾 ID。"""
     drive = get_drive_service()
