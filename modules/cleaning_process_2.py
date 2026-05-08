@@ -422,47 +422,46 @@ def _voucher_keep_cols(
 
 
 def _voucher_expand_qrs(
-    ws: gspread.Worksheet,
+    ws,
     start_row: int,
     num_rows: int,
-    log: List[str],
+    log,
 ) -> int:
     """
     02儲值獎金：轉值後處理 G/H/I 欄，展開多列，計算 QRS。
 
-    匯入後欄位（已用遮罩，只保留 B/C/D/E/M/BB）：
-        工作表欄1 = 原B（空白）
-        工作表欄2 = 原C（日期）
-        工作表欄3 = 原D（方案描述，如 儲值金20,000）
-        工作表欄4 = 原E（服務期別）
-        工作表欄5 = 原M（備註）
-        工作表欄6 = 原BB（姓名字串，如 A1XA2）
+    匯入後遮罩欄位（FILTER 後剩 B/C/D/E/M/BB → 工作表欄 A~F）：
+        A = 原B（訂單編號）
+        B = 原C（購買日期）
+        C = 原D（服務日期）
+        D = 原E（方案描述，如 儲值金20,000）
+        E = 原M（客戶姓名）
+        F = 原BB（獎金字串，如 獎金：江宜真 X 孫易成）
 
-    G 欄：F欄姓名數或X個數+1，最小 2
-    H 欄：D含50,000→800；D含20,000→320
-    I 欄：拆解F欄各人姓名（每列一人）
-    複製列數：X個數（F欄無姓名或X=0→不複製；X=1→複製1列，以此類推）
+    G = F欄 X 個數+1（最小2）
+    H = D含50,000→800；D含20,000→320
+    複製列數 = G（每人一列）
+    I = 拆解F欄姓名（去掉「獎金：」後依 X 分隔）
 
     QRS：Q=I, R=H/G（四捨五入）, S=TEXT(C,"MM/DD")&E
     """
     end_row = start_row + num_rows - 1
-
-    # 讀取 A:F（遮罩後6欄）
     raw = ws.get(f"A{start_row}:F{end_row}") or []
 
-    output_rows: List[List] = []
-    q_data:      List[List] = []
-    r_data:      List[List] = []
-    s_data:      List[List] = []
+    output_rows = []
+    g_data, h_data, i_data = [], [], []
+    q_data, r_data, s_data = [], [], []
 
     for row in raw:
         while len(row) < 6:
             row.append("")
-        # 遮罩後位置：col1=原B(空), col2=原C(日期), col3=原D(方案), col4=原E(期別), col5=原M, col6=原BB(姓名)
-        c_val = row[1]   # 日期
-        d_val = str(row[2])  # 方案描述
-        e_val = str(row[3])  # 服務期別
-        f_val = str(row[5]).strip()  # 姓名字串（原BB欄）
+
+        a_val = row[0]
+        b_val = row[1]
+        c_val = row[2]   # 服務日期
+        d_val = str(row[3])
+        e_val = str(row[4])
+        f_val = str(row[5]).strip()
 
         # H 欄
         if "50,000" in d_val or "50000" in d_val:
@@ -472,25 +471,31 @@ def _voucher_expand_qrs(
         else:
             h = 0
 
-        # 拆解姓名（以 X/x/Ｘ/× 分隔）
-        names = [n.strip() for n in re.split(r"\s*[Xx×Ｘ]\s*", f_val) if n.strip()]
-        x_count = len(names) - 1 if len(names) > 1 else 0  # X 的個數
+        # 去掉「獎金：」前綴（含全形冒號）
+        clean_f = f_val
+        for prefix in ["獎金：", "獎金:", "獎金　"]:
+            if clean_f.startswith(prefix):
+                clean_f = clean_f[len(prefix):].strip()
+                break
 
-        # G 欄：姓名數或 X+1，最小 2
-        g = max(2, len(names) if names else 1)
+        # 拆解姓名
+        if not clean_f or clean_f == "無":
+            names = [""]
+        else:
+            names = [n.strip() for n in re.split(r"\s*[Xx×Ｘ]\s*", clean_f) if n.strip()]
+            if not names:
+                names = [""]
 
-        # 複製列數：X=0 不複製（只有1列）；X=1 複製1列（共2列）
-        if not names:
-            names = [""]   # 無姓名時用空白
-
-        # R = H / G（四捨五入）
+        # G = 姓名數，最小 2
+        g = max(2, len(names))
         r_val = round(h / g) if h and g else 0
-
-        # S = TEXT(C,"MM/DD") & E
         s_val = _format_date_mmdd(c_val) + e_val
 
         for name in names:
-            output_rows.append(list(row))   # 原列複製
+            output_rows.append([a_val, b_val, c_val, d_val, e_val, f_val])
+            g_data.append([g])
+            h_data.append([h])
+            i_data.append([name])
             q_data.append([name])
             r_data.append([r_val])
             s_data.append([s_val])
@@ -501,15 +506,17 @@ def _voucher_expand_qrs(
     total   = len(output_rows)
     new_end = start_row + total - 1
 
-    # 若展開後列數多於原始，插入額外空列
     if total > num_rows:
         ws.insert_rows([[]] * (total - num_rows), row=end_row + 1)
 
     ws.update(f"A{start_row}:F{new_end}", output_rows, value_input_option="USER_ENTERED")
-    ws.update(f"Q{start_row}:Q{new_end}", q_data, value_input_option="USER_ENTERED")
-    ws.update(f"R{start_row}:R{new_end}", r_data, value_input_option="USER_ENTERED")
-    ws.update(f"S{start_row}:S{new_end}", s_data, value_input_option="USER_ENTERED")
-    _log(log, f"    G/H/I 拆解展開：{num_rows} 列 → {total} 列，Q/R/S 寫入完成")
+    ws.update(f"G{start_row}:G{new_end}", g_data,      value_input_option="USER_ENTERED")
+    ws.update(f"H{start_row}:H{new_end}", h_data,      value_input_option="USER_ENTERED")
+    ws.update(f"I{start_row}:I{new_end}", i_data,      value_input_option="USER_ENTERED")
+    ws.update(f"Q{start_row}:Q{new_end}", q_data,      value_input_option="USER_ENTERED")
+    ws.update(f"R{start_row}:R{new_end}", r_data,      value_input_option="USER_ENTERED")
+    ws.update(f"S{start_row}:S{new_end}", s_data,      value_input_option="USER_ENTERED")
+    _log(log, f"    儲值獎金展開：{num_rows} 列 → {total} 列")
     return total
 
 
