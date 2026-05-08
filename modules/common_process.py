@@ -1,160 +1,147 @@
 """
-清潔承攬共用處理模組
+清潔承攬共用整理流程
 對應 GAS runCommonProcess()
 
-適用功能：01專員請款、02儲值獎金、03新人實境、04新人實習、05組長津貼
+適用：01專員請款、02儲值獎金、03新人實境、04新人實習、05組長津貼
 
-流程：
-Q/R/S 計算完後 →
-1. 過濾 Q 有值且 R≠0 → 貼到 V/W/X（第 22/23/24 欄）
-2. U 欄（第 21）統計同名出現次數
-3. 排序 U→V→X
-4. 合併備註 Y 欄（第 25），逗號分隔
-5. V 欄去重複 → AA 欄（第 27）
-6. AB 欄（第 28）：SUMIF 金額加總
-7. AC 欄（第 29）：備註組字
+流程：QRS計算完後 →
+1. 篩選 Q有值且R≠0 → 寫入 V(22)/W(23)/X(24)
+2. U(21) = 統計 V 欄同名出現次數
+3. 依 U→V→X 排序
+4. Y(25) = 同名時合併所有 X 欄，用全形「，」分隔（只寫第一列）
+           U=1 時 Y=X
+5. AA(27) = V 欄去重（唯一姓名，依排序後順序）
+6. AB(28) = SUMIF：AA=V 時加總 W
+7. AC(29) = AC$1 & Y（Y 欄的值）
 """
 
-from modules.sheet_helper import open_spreadsheet
+from __future__ import annotations
+from collections import OrderedDict
+from typing import List
+import gspread
 
 
-def run_common_process(file_id: str, sheet_name: str) -> dict:
+def run_common_process(ws: gspread.Worksheet, log: List[str]) -> None:
     """
-    執行共用整理流程
-    回傳：{"processed": 處理筆數, "unique_names": 去重後人數}
+    執行共通 QRS→U-Y→AA-AC 流程。
+    ws：已開啟的工作表物件（01~05 各自的工作表）
     """
-    ss = open_spreadsheet(file_id)
-    sheet = ss.worksheet(sheet_name)
+    # ── 找 Q 欄最後有資料的列 ────────────────────────────────
+    q_vals = ws.col_values(17)   # Q = col 17
+    last_q = 0
+    for i in range(len(q_vals) - 1, 0, -1):
+        if str(q_vals[i]).strip():
+            last_q = i + 1
+            break
+    if last_q < 2:
+        _log(log, "    共通流程：Q 欄無資料，跳過")
+        return
 
-    last_row = len(sheet.col_values(1))
-    if last_row <= 1:
-        return {"processed": 0, "unique_names": 0}
+    # ── 讀取 Q/R/S ───────────────────────────────────────────
+    qrs = ws.get(f"Q2:S{last_q}") or []
+    rows = []
+    for r in qrs:
+        q  = str(r[0]).strip() if r else ""
+        rv = r[1] if len(r) > 1 else ""
+        s  = str(r[2]).strip() if len(r) > 2 else ""
+        rows.append((q, rv, s))
 
-    num_rows = last_row - 1
-
-    # 讀取 Q/R/S（第 17/18/19 欄，1-based）
-    qrs_data = sheet.get(f"Q2:S{last_row}")
-
-    # ─── 步驟1：過濾 Q 有值且 R≠0 → V/W/X ───
-    vwx_data = []
-    for row in qrs_data:
-        q = row[0] if len(row) > 0 else ""
-        r = row[1] if len(row) > 1 else ""
-        s = row[2] if len(row) > 2 else ""
+    # ── 步驟1：篩選 Q有值且R≠0 ──────────────────────────────
+    valid = []
+    for q, r, s in rows:
+        if not q:
+            continue
         try:
             r_val = float(str(r).replace(",", "")) if r else 0
         except (ValueError, TypeError):
             r_val = 0
+        if r_val != 0:
+            valid.append((q, r_val, s))
 
-        if q and q != "" and r_val != 0:
-            vwx_data.append([q, r_val, s])
+    if not valid:
+        _log(log, "    共通流程：R 欄全為 0，跳過")
+        return
+
+    # ── 步驟2：計算各姓名出現次數 ────────────────────────────
+    name_count: dict = {}
+    for q, r, s in valid:
+        name_count[q] = name_count.get(q, 0) + 1
+
+    # ── 步驟3：組合 U/V/W/X，依 U→V→X 排序 ──────────────────
+    uvwx = [(name_count[q], q, r, s) for q, r, s in valid]
+    uvwx.sort(key=lambda row: (row[0], row[1], row[3]))
+
+    # ── 步驟4：計算 Y 欄（同名 X 欄合併，只寫第一列）─────────
+    # 以排序後的順序，收集每個姓名的所有 X
+    name_xs: OrderedDict = OrderedDict()
+    for u, v, w, x in uvwx:
+        if v not in name_xs:
+            name_xs[v] = []
+        if x:
+            name_xs[v].append(x)
+
+    # 建立 name → Y 值（全形「，」分隔）
+    name_y: dict = {}
+    for name, xs in name_xs.items():
+        if len(xs) == 0:
+            name_y[name] = ""
+        elif len(xs) == 1:
+            name_y[name] = xs[0]        # U=1 時 Y=X
         else:
-            vwx_data.append(["", "", ""])
+            name_y[name] = "，".join(xs)  # U>1 時合併
 
-    # 過濾真正有資料的列
-    valid_rows = [(i, row) for i, row in enumerate(vwx_data) if row[0] != ""]
+    # ── 寫入 V/W/X/U/Y ───────────────────────────────────────
+    n      = len(uvwx)
+    end_vwx = 1 + n
 
-    if not valid_rows:
-        return {"processed": 0, "unique_names": 0}
+    # 清空 U:AC
+    ws.batch_clear([f"U2:AC{max(last_q, end_vwx)}"])
 
-    # ─── 步驟2：統計 U 欄（V 欄姓名出現次數）───
-    # 先算各姓名出現次數
-    name_count = {}
-    for _, row in valid_rows:
-        name = row[0]
-        name_count[name] = name_count.get(name, 0) + 1
+    # V/W/X
+    vwx_data = [[v, w, x] for u, v, w, x in uvwx]
+    ws.update(f"V2:X{end_vwx}", vwx_data, value_input_option="USER_ENTERED")
 
-    # 組合 U/V/W/X 資料
-    uvwx_rows = []
-    for _, row in valid_rows:
-        name = row[0]
-        uvwx_rows.append([name_count[name], row[0], row[1], row[2]])
+    # U
+    u_data = [[u] for u, v, w, x in uvwx]
+    ws.update(f"U2:U{end_vwx}", u_data, value_input_option="USER_ENTERED")
 
-    # ─── 步驟3：排序 U→V→X（count → name → remark）───
-    uvwx_rows.sort(key=lambda r: (r[0], r[1], r[3]))
+    # Y：只在每個姓名第一次出現的列寫入
+    y_data   = [[""] for _ in range(n)]
+    seen_y   = set()
+    for i, (u, v, w, x) in enumerate(uvwx):
+        if v not in seen_y:
+            y_data[i] = [name_y[v]]
+            seen_y.add(v)
+    ws.update(f"Y2:Y{end_vwx}", y_data, value_input_option="USER_ENTERED")
 
-    # ─── 步驟4：合併備註 Y 欄（相同姓名的備註用逗號串）───
-    processed_names = set()
-    final_rows = []  # [u, v, w, x, y]
+    # ── 步驟5-7：AA/AB/AC ────────────────────────────────────
+    unique_names = list(name_xs.keys())   # 依排序後唯一順序
 
-    i = 0
-    while i < len(uvwx_rows):
-        count = uvwx_rows[i][0]
-        name = uvwx_rows[i][1]
+    # AB：各姓名 W 加總
+    name_w: dict = {}
+    for u, v, w, x in uvwx:
+        name_w[v] = name_w.get(v, 0) + (w if isinstance(w, (int, float)) else 0)
 
-        if name in processed_names:
-            i += 1
-            continue
+    # AC$1 固定前綴
+    try:
+        ac1 = str(ws.acell("AC1").value or "").strip()
+    except Exception:
+        ac1 = ""
 
-        processed_names.add(name)
+    aa_data, ab_data, ac_data = [], [], []
+    for name in unique_names:
+        aa_data.append([name])
+        ab_data.append([name_w.get(name, 0)])
+        y_val = name_y.get(name, "")
+        ac_data.append([ac1 + y_val if y_val else ""])
 
-        # 收集同名的所有備註
-        remarks = []
-        for j in range(i, min(i + count, len(uvwx_rows))):
-            x_val = uvwx_rows[j][3]
-            if x_val and str(x_val).strip():
-                remarks.append(str(x_val).strip())
+    aa_end = 1 + len(unique_names)
+    ws.update(f"AA2:AA{aa_end}", aa_data, value_input_option="USER_ENTERED")
+    ws.update(f"AB2:AB{aa_end}", ab_data, value_input_option="USER_ENTERED")
+    ws.update(f"AC2:AC{aa_end}", ac_data, value_input_option="USER_ENTERED")
 
-        combined_remark = ",".join(remarks)
+    _log(log, f"    共通流程完成：{n} 筆 → {len(unique_names)} 人（唯一）")
 
-        # 只保留第一列（合計金額、合併備註）
-        final_rows.append([
-            count,              # U：出現次數
-            name,               # V：姓名
-            uvwx_rows[i][2],    # W：金額（第一筆）
-            uvwx_rows[i][3],    # X：原備註
-            combined_remark     # Y：合併備註
-        ])
 
-        i += count
-
-    if not final_rows:
-        return {"processed": 0, "unique_names": 0}
-
-    # ─── 步驟5：V 欄去重複 → AA 欄，同時算 AB/AC ───
-    unique_names = [row[1] for row in final_rows]  # V 欄去重後即為 final_rows
-
-    # AA 欄寫入唯一姓名
-    aa_data = [[name] for name in unique_names]
-
-    # AB 欄：SUMIF 金額（用 Python 計算，不用公式）
-    # 先建立 name → 金額加總 的 map
-    name_amount_map = {}
-    for _, row in valid_rows:
-        name = row[0]
-        try:
-            amount = float(str(row[1]).replace(",", "")) if row[1] else 0
-        except (ValueError, TypeError):
-            amount = 0
-        name_amount_map[name] = name_amount_map.get(name, 0) + amount
-
-    # AC 欄：備註
-    name_remark_map = {row[1]: row[4] for row in final_rows}
-
-    ab_data = [[name_amount_map.get(name, 0)] for name in unique_names]
-    ac_data = [[name_remark_map.get(name, "")] for name in unique_names]
-
-    # ─── 寫回試算表 ───
-    # 先清空 U:AC 區域
-    sheet.batch_clear([f"U2:AC{last_row}"])
-
-    # 寫入 U/V/W/X/Y（第 21-25 欄）
-    uvwxy_output = [
-        [row[0], row[1], row[2], row[3], row[4]]
-        for row in final_rows
-    ]
-    if uvwxy_output:
-        sheet.update(f"U2:Y{1 + len(uvwxy_output)}", uvwxy_output)
-
-    # 寫入 AA/AB/AC（第 27-29 欄）
-    if unique_names:
-        aabac_output = [
-            [aa_data[i][0], ab_data[i][0], ac_data[i][0]]
-            for i in range(len(unique_names))
-        ]
-        sheet.update(f"AA2:AC{1 + len(unique_names)}", aabac_output)
-
-    return {
-        "processed": len(valid_rows),
-        "unique_names": len(unique_names)
-    }
+def _log(log: List[str], msg: str) -> None:
+    log.append(msg)
