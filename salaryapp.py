@@ -601,8 +601,13 @@ if run_clicked:
                                 region_cfg       = _region,
                             )
                             # 儲存到 session_state 供 rerun 後顯示下載按鈕
-                            st.session_state["pdf_result"] = pdf_result
-                            success = len(pdf_result.get("pdfs", {})) > 0
+                            if isinstance(pdf_result, dict):
+                                st.session_state["pdf_result"] = pdf_result
+                                success = len(pdf_result.get("pdfs", {})) > 0
+                            else:
+                                # 舊版 run_pdf 回傳 bool，GitHub 尚未更新
+                                success = bool(pdf_result)
+                                add_log("⚠️ cleaning_pdf.py 需更新至最新版（GitHub push）", "warning")
 
                         else:
                             add_log(f"{_func} 尚未實作", "warning")
