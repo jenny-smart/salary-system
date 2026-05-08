@@ -11,7 +11,7 @@ ID：1GdW3FSZ0s3TGeYiNx3JtYvED_RRfJjiFYwLFeYHZ1hA
 設計原則：
   - 打卡時用 A 欄比對作業名稱找行號，不依賴固定行號
   - 新增作業時插入整列，舊資料自動往下移
-  - 區塊標題（排程手動資料夾、清潔承攬）只作標記用，不打卡
+  - 區塊標題（清潔承攬）只作標記用，不打卡
 """
 
 import pytz
@@ -29,9 +29,10 @@ DATA_START_ROW = 3
 
 # ═══════════════════════════════════════
 # 作業清單（定義打卡表的列順序）
+# "__TITLE__:xxx" = 區塊標題列（A欄顯示 xxx，不打卡）
+# "__BLANK__"     = 空白列
 # ═══════════════════════════════════════
 
-# 金流對帳作業（"__TITLE__" 代表區塊標題列，不打卡）
 PAYMENT_TASKS = [
     "__TITLE__:排程期別資料夾",
     "排程期別資料夾",
@@ -90,21 +91,21 @@ PAYMENT_TASKS = [
     "複製藍新退款",
 ]
 
+# ★ 對應主控表圖片（第59-72列）★
 CLEANING_TASKS = [
     "__TITLE__:清潔承攬",
-    "薪資表整理",
+    "前置作業",
     "00調薪",
     "01專員請款",
     "02儲值獎金",
     "03新人實境",
     "04新人實習",
     "05組長津貼",
-    "06工具包押金",
-    "07介紹獎金",
-    "08季獎金",
-    "09薪資結算整理",
+    "06季獎金",
+    "結算作業",
     "一鍵執行",
-    "新人實境期別標註",
+    "新人實境實習期別",
+    "工具包押金",
     "元大帳戶",
 ]
 
@@ -112,7 +113,7 @@ ALL_TASKS = PAYMENT_TASKS + ["__BLANK__"] + CLEANING_TASKS
 
 
 def _display_name(task: str) -> str:
-    """取得 A 欄顯示名稱（去掉 __TITLE__: 前綴）"""
+    """取得 A 欄顯示名稱"""
     if task.startswith("__TITLE__:"):
         return task[10:]
     if task == "__BLANK__":
@@ -121,7 +122,7 @@ def _display_name(task: str) -> str:
 
 
 def _is_data_row(task: str) -> bool:
-    """是否為可打卡的資料列（非標題、非空白）"""
+    """是否為可打卡的資料列"""
     return not task.startswith("__TITLE__") and task != "__BLANK__"
 
 
@@ -130,9 +131,9 @@ def _is_data_row(task: str) -> bool:
 # ═══════════════════════════════════════
 
 def period_to_col(period: str) -> int:
-    year = int(period[:4])
+    year  = int(period[:4])
     month = int(period[4:6])
-    half = int(period[7])
+    half  = int(period[7])
     months_from_start = (year - START_YEAR) * 12 + (month - START_MONTH)
     return 2 + months_from_start * 4 + (half - 1) * 2
 
@@ -171,8 +172,7 @@ def _find_row(sheet, task_name: str) -> int | None:
     return None
 
 
-def _get_all_a_col(sheet) -> list[str]:
-    """取得 A 欄所有值"""
+def _get_all_a_col(sheet) -> list:
     return [v.strip() if v else "" for v in sheet.col_values(1)]
 
 
@@ -182,13 +182,11 @@ def _get_all_a_col(sheet) -> list[str]:
 
 def init_region_sheet(region_name: str) -> bool:
     """
-    建立或更新地區工作表
+    建立或更新地區工作表。
     - 新建：填入標題行和所有作業名稱
-    - 已存在：
-        更新標題行（第1、2行）
-        比對 A 欄，在正確位置插入缺少的作業（整列插入）
-        不刪除已有的作業列
-    回傳 True=新建，False=更新
+    - 已存在：只更新標題行（第1、2行），不插入任何列
+      （避免重複執行時不斷插入作業列破壞現有打卡資料）
+    回傳 True=新建，False=已存在
     """
     ss = open_spreadsheet(MASTER_SHEET_ID)
 
@@ -208,48 +206,9 @@ def init_region_sheet(region_name: str) -> bool:
         # 全新建立：直接寫入所有作業名稱
         task_rows = [[_display_name(t)] for t in ALL_TASKS]
         sheet.update(f"A{DATA_START_ROW}", task_rows)
-    else:
-        # 更新：比對 A 欄，在正確位置插入缺少的作業
-        _sync_task_rows(sheet)
 
+    # 已存在的工作表不做任何插入，避免破壞現有打卡資料
     return is_new
-
-
-def _sync_task_rows(sheet):
-    """
-    比對 ALL_TASKS 和目前工作表的 A 欄
-    在正確位置插入缺少的作業（整列插入，舊資料往下移）
-    """
-    a_col = _get_all_a_col(sheet)
-
-    # 從 DATA_START_ROW 開始（跳過標題行）
-    existing = a_col[DATA_START_ROW - 1:]  # 0-based index
-
-    expected = [_display_name(t) for t in ALL_TASKS]
-
-    # 找出缺少的作業及應插入的位置
-    # 用雙指針比對
-    insert_ops = []  # [(插入在第幾列之前, 作業名稱)]
-    ei = 0  # existing index
-    for exp_name in expected:
-        if ei < len(existing) and existing[ei] == exp_name:
-            ei += 1
-        else:
-            # 這個作業在現有列中找不到，需要插入
-            # 插入位置 = DATA_START_ROW + ei（1-based）
-            insert_row = DATA_START_ROW + ei
-            insert_ops.append((insert_row, exp_name))
-            ei += 1  # 插入後 existing 也往後移一格
-
-    if not insert_ops:
-        return  # 沒有需要插入的
-
-    # 從後往前插入，避免行號偏移影響前面的操作
-    for insert_row, task_name in reversed(insert_ops):
-        # 插入空白列
-        sheet.insert_row([], insert_row)
-        # 寫入作業名稱
-        sheet.update_cell(insert_row, 1, task_name)
 
 
 # ═══════════════════════════════════════
@@ -263,23 +222,23 @@ def record_execution(
     count=None,
 ) -> bool:
     """
-    記錄執行結果
+    記錄執行結果。
     task_key：作業名稱（直接對應 A 欄）
     count：ID 或筆數（None 只記時間）
     """
     try:
-        ss = open_spreadsheet(MASTER_SHEET_ID)
+        ss    = open_spreadsheet(MASTER_SHEET_ID)
         sheet = ss.worksheet(region_name)
-        row = _find_row(sheet, task_key)
+        row   = _find_row(sheet, task_key)
         if row is None:
             import streamlit as st
             st.warning(f"⚠️ 打卡找不到作業：{task_key}")
             return False
 
-        col = period_to_col(period)
+        col       = period_to_col(period)
         count_col = col_to_letter(col)
-        time_col = col_to_letter(col + 1)
-        time_str = datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %H:%M:%S")
+        time_col  = col_to_letter(col + 1)
+        time_str  = datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %H:%M:%S")
 
         updates = []
         if count is not None:
@@ -295,17 +254,15 @@ def record_execution(
 
 def record_batch(region_name: str, period: str, records: list) -> None:
     """
-    批次打卡
-    records = [{"task_key": "期別訂單轉檔", "count": 427}, ...]
-    task_key 直接對應 A 欄作業名稱
-    count 可省略（只記時間）
+    批次打卡。
+    records = [{"task_key": "複製清潔訂單列數", "count": 153}, ...]
+    count 可省略（None = 只記完成時間）
     """
     try:
-        ss = open_spreadsheet(MASTER_SHEET_ID)
+        ss    = open_spreadsheet(MASTER_SHEET_ID)
         sheet = ss.worksheet(region_name)
         time_str = datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %H:%M:%S")
 
-        # 一次讀取 A 欄，減少 API 呼叫
         a_col = _get_all_a_col(sheet)
 
         def find_row_from_cache(task_name: str) -> int | None:
@@ -314,18 +271,18 @@ def record_batch(region_name: str, period: str, records: list) -> None:
                     return i + 1
             return None
 
-        updates = []
+        updates   = []
         not_found = []
         for record in records:
             task_key = record.get("task_key", "")
-            count = record.get("count")
-            row = find_row_from_cache(task_key)
+            count    = record.get("count")
+            row      = find_row_from_cache(task_key)
             if row is None:
                 not_found.append(task_key)
                 continue
-            col = period_to_col(period)
+            col       = period_to_col(period)
             count_col = col_to_letter(col)
-            time_col = col_to_letter(col + 1)
+            time_col  = col_to_letter(col + 1)
             if count is not None:
                 updates.append({"range": f"{count_col}{row}", "values": [[count]]})
             updates.append({"range": f"{time_col}{row}", "values": [[time_str]]})
@@ -343,15 +300,14 @@ def record_batch(region_name: str, period: str, records: list) -> None:
 
 def get_recorded_value(region_name: str, period: str, task_key: str):
     """
-    從打卡表讀取某作業的 ID/筆數欄值
-    用於 double check
+    從打卡表讀取某作業的 ID/筆數欄值（供 double check 用）。
     """
-    ss = open_spreadsheet(MASTER_SHEET_ID)
+    ss    = open_spreadsheet(MASTER_SHEET_ID)
     sheet = ss.worksheet(region_name)
-    row = _find_row(sheet, task_key)
+    row   = _find_row(sheet, task_key)
     if row is None:
         return None
-    col = period_to_col(period)
+    col       = period_to_col(period)
     count_col = col_to_letter(col)
-    val = sheet.acell(f"{count_col}{row}").value
+    val       = sheet.acell(f"{count_col}{row}").value
     return val if val else None
