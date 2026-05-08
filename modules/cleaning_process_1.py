@@ -6,14 +6,11 @@ Lemon Clean 清潔承攬 — 前置作業 & 00調薪
     modules/auth.py           — get_gspread_client()
     modules/master_sheet.py   — record_execution()
 
-清潔承攬試算表（exec 工作表）關鍵儲存格（供程式讀取，不在此打卡）：
-    B1  → 期別 YYYYMM（如 202605）
-    C2  → 請款試算表 ID
-    C3  → 薪資試算表 ID
-    C4  → 名冊試算表 ID
-    C5  → 金流對帳試算表 ID
-    C8  → 上半月搬入清潔訂單筆數
-    D8  → 下半月搬入清潔訂單筆數
+參數來源（不讀 exec 工作表）：
+    allowance_id : config.yaml 地區設定
+    salary_id    : config.yaml 地區設定
+    roster_id    : config.yaml 地區設定
+    yyyymm       : period 參數取前6碼（如 "202604-2" → "202604"）
 
 打卡：統一寫入主控試算表（master_sheet.py → record_execution）
     前置作業 → task_key = "前置作業"
@@ -103,6 +100,48 @@ def find_cleaning_file(root_folder_id: str, period: str, region: str) -> str:
     )
     if not file_id:
         raise FileNotFoundError(f"找不到清潔承攬檔案：{file_name}")
+
+    return file_id
+
+
+
+def find_payment_file(root_folder_id: str, period: str, region: str) -> str:
+    """
+    從 Drive 找到當期金流對帳試算表 ID。
+    路徑：{root_folder_id}/{period}/{period}金流對帳-{region}
+    """
+    from modules.auth import get_drive_service
+    drive = get_drive_service()
+
+    def _query(parent_id: str, name: str, mime_type: str) -> str | None:
+        q = (
+            f"'{parent_id}' in parents"
+            f" and name = '{name}'"
+            f" and mimeType = '{mime_type}'"
+            f" and trashed = false"
+        )
+        resp = drive.files().list(
+            q=q,
+            fields="files(id, name)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+            pageSize=5,
+        ).execute()
+        files = resp.get("files", [])
+        return files[0]["id"] if files else None
+
+    period_folder_id = _query(
+        root_folder_id, period, "application/vnd.google-apps.folder"
+    )
+    if not period_folder_id:
+        raise FileNotFoundError(f"找不到期別資料夾：{period}")
+
+    file_name = f"{period}金流對帳-{region}"
+    file_id   = _query(
+        period_folder_id, file_name, "application/vnd.google-apps.spreadsheet"
+    )
+    if not file_id:
+        raise FileNotFoundError(f"找不到金流對帳檔案：{file_name}")
 
     return file_id
 
@@ -533,6 +572,7 @@ def run_adjustment(
     period: str,
     is_first_half: bool,
     log: List[str],
+    region_cfg: dict = None,
 ) -> bool:
     """
     00調薪主函數。
@@ -554,22 +594,20 @@ def run_adjustment(
         gc = get_gspread_client()
         ss = gc.open_by_key(cleaning_file_id)
 
-        ws_exec    = ss.worksheet("執行")
         ws_adjust  = ss.worksheet("00調薪")
         ws_salary  = ss.worksheet("薪資表")
         ws_summary = ss.worksheet("場次時數薪資總表")
 
-        # 讀取 exec 關鍵儲存格
-        yyyymm    = str(ws_exec.acell("B1").value or "").strip()
-        salary_id = str(ws_exec.acell("C3").value or "").strip()
-        roster_id = str(ws_exec.acell("C4").value or "").strip()
+        # 從 period 取 YYYYMM，從 region_cfg 取各試算表 ID
+        yyyymm    = period[:6]   # 如 "202604-2" → "202604"
+        cfg       = region_cfg or {}
+        salary_id = str(cfg.get("salary_id",  "") or "").strip()
+        roster_id = str(cfg.get("roster_id",  "") or "").strip()
 
-        if len(yyyymm) != 6 or not yyyymm.isdigit():
-            raise ValueError(f"exec B1 期別格式錯誤：{yyyymm!r}，應為 YYYYMM")
         if not salary_id:
-            raise ValueError("exec C3 薪資試算表 ID 為空")
+            raise ValueError("config 地區設定缺少 salary_id（薪資 ID）")
         if not roster_id:
-            raise ValueError("exec C4 名冊試算表 ID 為空")
+            raise ValueError("config 地區設定缺少 roster_id（名冊 ID）")
 
         # ── 步驟1：上半月清空 S3:AL ──────────────────────────
         if is_first_half:
