@@ -124,9 +124,7 @@ def run_pdf(
             _log(log, f"    [{i+1}/{len(targets)}] 產出：{name}")
 
             try:
-                # 1. 寫入姓名到 AD2
-                ws_salary.update_cell(1, 30, name)   # AD=col30, 但薪資單 row 1 = 標題？
-                # AD2 = row 2, col 30
+                # 1. 寫入姓名到 AD2（col 30 = AD）
                 ws_salary.update_cell(2, 30, name)
                 time.sleep(2.5)   # 等公式計算
 
@@ -176,7 +174,10 @@ def run_pdf(
                 count += 1
 
             except Exception as e:
-                _log(log, f"      ❌ {name} 失敗：{e}（H=Y 保留，可重跑）")
+                import traceback
+                err_msg = str(e) or repr(e) or "未知錯誤"
+                _log(log, f"      ❌ {name} 失敗：{err_msg}")
+                _log(log, f"      {traceback.format_exc().splitlines()[-1]}")
                 skipped += 1
 
             time.sleep(0.8)   # 避免 API 速率限制
