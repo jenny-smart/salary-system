@@ -1,5 +1,5 @@
 """
-Lemon Clean 清潔承攬 — 08季獎金 / 09薪資結算整理
+Lemon Clean 清潔承攬 — 06季獎金 / 09結算作業整理
 檔案：modules/cleaning_process_3.py
 
 依賴：
@@ -7,8 +7,8 @@ Lemon Clean 清潔承攬 — 08季獎金 / 09薪資結算整理
     modules/master_sheet.py — record_execution()
 
 打卡：統一寫入主控試算表（record_execution），不寫入 exec 工作表。
-    08季獎金       → task_key = "06季獎金"    （GAS 尚未實作，待補充）
-    09薪資結算整理 → task_key = "薪資結算"
+    06季獎金       → task_key = "06季獎金"    （GAS 尚未實作，待補充）
+    09結算作業整理 → task_key = "結算作業"
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ def _punch(task_key: str, region: str, period: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────
-# 06 季獎金（待實作）
+# 08 季獎金（待實作）
 # ──────────────────────────────────────────────────────────────
 
 def run_season_bonus(
@@ -57,15 +57,15 @@ def run_season_bonus(
     log: List[str],
 ) -> bool:
     """
-    06 季獎金。
+    08 季獎金。
     GAS 原版尚未實作，此處保留框架待補充。
     """
-    _log(log, "▶ 08季獎金：尚未實作")
+    _log(log, "▶ 06季獎金：尚未實作")
     return False
 
 
 # ──────────────────────────────────────────────────────────────
-# 薪資結算（待補充細節）
+# 結算作業（待補充細節）
 # ──────────────────────────────────────────────────────────────
 
 def run_settlement(
@@ -76,19 +76,19 @@ def run_settlement(
     log: List[str],
 ) -> bool:
     """
-    薪資結算。
+    結算作業。
     對應 GAS 的 runFinalSettlement。
     細節待確認後補充。
     """
     label = "上半月" if is_first_half else "下半月"
-    _log(log, f"▶ 09薪資結算整理 {label} 開始")
+    _log(log, f"▶ 09結算作業整理 {label} 開始")
     try:
-        # TODO: 補充薪資結算整理的具體步驟
+        # TODO: 補充結算作業整理的具體步驟
 
-        ts = _punch("薪資結算", region, period)
-        _log(log, f"✅ 09薪資結算整理 {label} 完成｜{ts}")
+        ts = _punch("結算作業", region, period)
+        _log(log, f"✅ 09結算作業整理 {label} 完成｜{ts}")
         return True
 
     except Exception as e:
-        _log(log, f"❌ 09薪資結算整理失敗：{e}")
+        _log(log, f"❌ 09結算作業整理失敗：{e}")
         return False
