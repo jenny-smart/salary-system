@@ -63,11 +63,96 @@ def run_pdf(
     root_folder_id: str,
     region: str,
     period: str,
-    job_type: str,       # "CLEANING" 或 "PROJECT"
+    job_type: str,
     log: List[str],
     region_cfg: dict = None,
     **kwargs,
-) -> bool:
+) -> dict:
+    """
+    產出 PDF bytes，回傳 {name: bytes} 供 Streamlit 下載。
+
+    Service Account 沒有 Drive 儲存空間，無法直接建立檔案，
+    改為把 PDF bytes 回傳給 salaryapp.py 提供下載按鈕。
+
+    Returns:
+        {"pdfs": {name: bytes}, "failed": [name, ...]}
+    """
+    job   = PDF_JOBS.get(job_type, PDF_JOBS["CLEANING"])
+    label = job["file_title"]
+    _log(log, f"▶ PDF產出 [{label}] {region} {period} 開始")
+
+    result = {"pdfs": {}, "failed": []}
+
+    try:
+        gc = get_gspread_client()
+        ss = gc.open_by_key(cleaning_file_id)
+
+        ws_list   = ss.worksheet(job["list_sheet"])
+        ws_salary = ss.worksheet(job["salary_sheet"])
+
+        raw = ws_list.get("A2:H", value_render_option="UNFORMATTED_VALUE") or []
+        targets = []
+        for i, row in enumerate(raw):
+            name = str(row[1]).strip() if len(row) > 1 else ""
+            flag = str(row[7]).strip() if len(row) > 7 else ""
+            if name and flag == "Y":
+                targets.append({"name": name, "row": i + 2})
+
+        if not targets:
+            _log(log, f"    [{job['list_sheet']}] 無 H=Y 的待產出人員")
+            return result
+
+        _log(log, f"    待產出：{len(targets)} 人")
+
+        token           = _get_access_token()
+        salary_sheet_id = ws_salary.id
+
+        for i, target in enumerate(targets):
+            name = target["name"]
+            row  = target["row"]
+            _log(log, f"    [{i+1}/{len(targets)}] 產出：{name}")
+
+            try:
+                ws_salary.update_cell(2, 30, name)
+                time.sleep(2.5)
+
+                last_export_row = _find_last_export_row(ws_salary)
+                _log(log, f"      匯出範圍：AB1:AH{last_export_row}")
+
+                pdf_bytes = _export_pdf(
+                    token          = token,
+                    spreadsheet_id = cleaning_file_id,
+                    sheet_gid      = salary_sheet_id,
+                    export_range   = f"AB1:AH{last_export_row}",
+                )
+
+                if len(pdf_bytes) < 1000:
+                    raise ValueError(f"PDF 過小（{len(pdf_bytes)} bytes）")
+
+                file_title = f"{period}_{label}_{name}.pdf"
+                result["pdfs"][file_title] = pdf_bytes
+                _log(log, f"      ✅ {name} PDF 產出成功（{len(pdf_bytes):,} bytes）")
+
+            except Exception as e:
+                if hasattr(e, 'reason'):
+                    err_msg = f"HttpError {e.status_code}: {e.reason}"
+                else:
+                    err_msg = str(e) or repr(e)
+                _log(log, f"      ❌ {name} 失敗：{err_msg}")
+                result["failed"].append(name)
+
+            time.sleep(0.8)
+
+        total   = len(result["pdfs"])
+        failed  = len(result["failed"])
+        _log(log, f"✅ PDF產出完成：成功 {total} 份，失敗 {failed} 份")
+        if total > 0:
+            _log(log, f"    請點擊下方下載按鈕儲存 PDF")
+        return result
+
+    except Exception as e:
+        _log(log, f"❌ PDF產出失敗：{e}")
+        return result
     """
     產出 PDF。
 
