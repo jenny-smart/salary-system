@@ -831,7 +831,7 @@ def _adj_update_summary_a(
     a_vals = ws_adjust.get(f"A3:A{2 + num_rows}") or []
     ws_summary.update(
         f"A{SUMMARY_START}:A{SUMMARY_START + num_rows - 1}",
-        a_vals, value_input_option="RAW"
+        a_vals, value_input_option="USER_ENTERED"
     )
     _log(log, f"    A{SUMMARY_START} 起寫入 {num_rows} 筆姓名")
 
@@ -943,11 +943,11 @@ def _adj_set_summary_pq_or_wx(
         if p_data:
             ws_summary.update(
                 f"P{SUMMARY_START}:P{SUMMARY_START + len(p_data) - 1}",
-                p_data, value_input_option="RAW"
+                p_data, value_input_option="USER_ENTERED"
             )
             ws_summary.update(
                 f"Q{SUMMARY_START}:Q{SUMMARY_START + len(q_data) - 1}",
-                q_data, value_input_option="RAW"
+                q_data, value_input_option="USER_ENTERED"
             )
         _log(log, f"    上半月 P-Q 寫入 {len(p_data)} 筆")
 
@@ -969,11 +969,11 @@ def _adj_set_summary_pq_or_wx(
         if w_data:
             ws_summary.update(
                 f"W{SUMMARY_START}:W{SUMMARY_START + len(w_data) - 1}",
-                w_data, value_input_option="RAW"
+                w_data, value_input_option="USER_ENTERED"
             )
             ws_summary.update(
                 f"X{SUMMARY_START}:X{SUMMARY_START + len(x_data) - 1}",
-                x_data, value_input_option="RAW"
+                x_data, value_input_option="USER_ENTERED"
             )
         _log(log, f"    下半月 W-X 寫入 {len(w_data)} 筆")
 
@@ -1034,7 +1034,7 @@ def _adj_set_summary_no_or_uv(
             if not item["range"].startswith("'"):
                 item["range"] = f"'{sheet_name}'!{item['range']}"
         ws_summary.spreadsheet.values_batch_update({
-            "valueInputOption": "RAW",
+            "valueInputOption": "USER_ENTERED",
             "data": batch,
         })
     half_label = "上半月 N-O" if is_first_half else "下半月 U-V"
@@ -1070,7 +1070,7 @@ def _adj_update_salary_l1(
 
     # 寫入新名單
     end_ltr = _col_letter(11 + new_count)
-    ws_salary.update(f"L1:{end_ltr}1", [names], value_input_option="RAW")
+    ws_salary.update(f"L1:{end_ltr}1", [names], value_input_option="USER_ENTERED")
     _log(log, f"    L1:1 更新：{old_count} → {new_count} 人（diff={diff}）")
 
     # 若有新增員工，複製 L 欄樣板公式到新欄
