@@ -376,11 +376,6 @@ def run_voucher(
             return True
         _log(log, f"    匯入完成：{num_rows} 筆（原始）")
 
-        # 匯入後只保留需要的欄，其餘清空
-        # 保留欄：B(2),C(3),D(4),E(5),M(13),BB(54)
-        # 工作表現在 A 欄起對應原 A 欄（全部匯入）
-        # 需要的欄（以工作表欄號1-based）: 2,3,4,5,13,54
-        _voucher_keep_cols(ws_voucher, target_row, num_rows, {2, 3, 4, 5, 13, 54}, log)
 
         # 拆解 F 欄（原 BB=col54，匯入後在 col54 位置，但工作表只到 AC=col29）
         # 注意：工作表最多到 AC 欄，但 BB=col54 超出 AC 範圍
@@ -433,86 +428,90 @@ def _voucher_expand_qrs(
     log: List[str],
 ) -> int:
     """
-    02儲值獎金：讀取保留欄後的資料，拆解 F 欄（原 BB，姓名字串），
-    展開多列後寫回，並計算 QRS。
+    02儲值獎金：轉值後處理 G/H/I 欄，展開多列，計算 QRS。
 
-    保留欄對應（匯入並保留後）：
-        工作表欄2  = 原 C 欄（日期）
-        工作表欄3  = 原 D 欄（方案金額描述）
-        工作表欄4  = 原 E 欄（期別）
-        工作表欄5  = 原 M 欄（備註）
-        工作表欄54 = 原 BB 欄（姓名字串，含 X 分隔）
+    匯入後欄位（已用遮罩，只保留 B/C/D/E/M/BB）：
+        工作表欄1 = 原B（空白）
+        工作表欄2 = 原C（日期）
+        工作表欄3 = 原D（方案描述，如 儲值金20,000）
+        工作表欄4 = 原E（服務期別）
+        工作表欄5 = 原M（備註）
+        工作表欄6 = 原BB（姓名字串，如 A1XA2）
 
-    QRS：
-        Q = I（col9，拆解後各人姓名）→ 寫到 Q(col17)
-        R = H(col8) / G(col7)（G<2 以 2 計，四捨五入）
-        S = TEXT(C(col2),"MM/DD") & E(col4)
+    G 欄：F欄姓名數或X個數+1，最小 2
+    H 欄：D含50,000→800；D含20,000→320
+    I 欄：拆解F欄各人姓名（每列一人）
+    複製列數：X個數（F欄無姓名或X=0→不複製；X=1→複製1列，以此類推）
+
+    QRS：Q=I, R=H/G（四捨五入）, S=TEXT(C,"MM/DD")&E
     """
     end_row = start_row + num_rows - 1
 
-    # 讀取關鍵欄：col2(C日期), col3(D方案), col4(E期別), col54(BB姓名)
-    c_vals  = ws.get(f"B{start_row}:B{end_row}") or []   # col2=B（日期）
-    d_vals  = ws.get(f"C{start_row}:C{end_row}") or []   # col3=C（方案）
-    e_vals  = ws.get(f"D{start_row}:D{end_row}") or []   # col4=D（期別）
-    bb_vals = ws.get(f"{_col_letter(54)}{start_row}:{_col_letter(54)}{end_row}") or []  # BB
+    # 讀取 A:F（遮罩後6欄）
+    raw = ws.get(f"A{start_row}:F{end_row}") or []
 
-    output_a: List[List] = []   # 回寫 A 欄（原值保留）
-    q_data:   List[List] = []
-    r_data:   List[List] = []
-    s_data:   List[List] = []
+    output_rows: List[List] = []
+    q_data:      List[List] = []
+    r_data:      List[List] = []
+    s_data:      List[List] = []
 
-    def _get(lst, i, default=""):
-        return lst[i][0] if i < len(lst) and lst[i] else default
+    for row in raw:
+        while len(row) < 6:
+            row.append("")
+        # 遮罩後位置：col1=原B(空), col2=原C(日期), col3=原D(方案), col4=原E(期別), col5=原M, col6=原BB(姓名)
+        c_val = row[1]   # 日期
+        d_val = str(row[2])  # 方案描述
+        e_val = str(row[3])  # 服務期別
+        f_val = str(row[5]).strip()  # 姓名字串（原BB欄）
 
-    for i in range(num_rows):
-        c_val  = _get(c_vals, i)     # 日期
-        d_val  = _get(d_vals, i)     # 方案描述
-        e_val  = _get(e_vals, i)     # 期別
-        bb_val = _get(bb_vals, i)    # 姓名字串
-
-        # H 欄值（總獎金）
-        d_str = str(d_val)
-        if "50,000" in d_str or "50000" in d_str:
+        # H 欄
+        if "50,000" in d_val or "50000" in d_val:
             h = 800
-        elif "20,000" in d_str or "20000" in d_str:
+        elif "20,000" in d_val or "20000" in d_val:
             h = 320
         else:
-            h = ""
+            h = 0
 
-        # 拆解 BB 欄姓名
-        names = [n.strip() for n in re.split(r"\s*[Xx×Ｘ]\s*", str(bb_val)) if n.strip()]
+        # 拆解姓名（以 X/x/Ｘ/× 分隔）
+        names = [n.strip() for n in re.split(r"\s*[Xx×Ｘ]\s*", f_val) if n.strip()]
+        x_count = len(names) - 1 if len(names) > 1 else 0  # X 的個數
+
+        # G 欄：姓名數或 X+1，最小 2
+        g = max(2, len(names) if names else 1)
+
+        # 複製列數：X=0 不複製（只有1列）；X=1 複製1列（共2列）
         if not names:
-            names = [""]
+            names = [""]   # 無姓名時用空白
 
-        # X 數量 = len(names) - 1（無X不複製，X1加1列，至多3列）
-        names = names[:3]                   # 最多3人
-        g     = max(2, len(names))          # G欄，最小2
+        # R = H / G（四捨五入）
+        r_val = round(h / g) if h and g else 0
 
-        s_val = _format_date_mmdd(c_val) + str(e_val)
+        # S = TEXT(C,"MM/DD") & E
+        s_val = _format_date_mmdd(c_val) + e_val
 
         for name in names:
-            r_val = round(h / g) if h != "" else ""
+            output_rows.append(list(row))   # 原列複製
             q_data.append([name])
             r_data.append([r_val])
             s_data.append([s_val])
 
-    total   = len(q_data)
+    if not output_rows:
+        return 0
+
+    total   = len(output_rows)
     new_end = start_row + total - 1
 
+    # 若展開後列數多於原始，插入額外空列
     if total > num_rows:
-        # 需要插入額外列
         ws.insert_rows([[]] * (total - num_rows), row=end_row + 1)
 
+    ws.update(f"A{start_row}:F{new_end}", output_rows, value_input_option="USER_ENTERED")
     ws.update(f"Q{start_row}:Q{new_end}", q_data, value_input_option="USER_ENTERED")
     ws.update(f"R{start_row}:R{new_end}", r_data, value_input_option="USER_ENTERED")
     ws.update(f"S{start_row}:S{new_end}", s_data, value_input_option="USER_ENTERED")
-    _log(log, f"    Q/R/S 寫入完成（展開後 {total} 列）")
+    _log(log, f"    G/H/I 拆解展開：{num_rows} 列 → {total} 列，Q/R/S 寫入完成")
     return total
 
-
-# ──────────────────────────────────────────────────────────────
-# 新人實境實習期別
-# ──────────────────────────────────────────────────────────────
 
 def run_newcomer_label(
     cleaning_file_id: str,
@@ -679,7 +678,9 @@ def _run_salary_module(
             raise ValueError(f"config 地區設定缺少 {cfg_key}（{id_cell}）")
 
         # 篩選結束列號（從 src_range 解析）
-        filter_end = src_range.split(":")[1]  # 如 "L500" → "L500"
+        # 資料範圍結尾列號（如 A2:L500 → 500）
+        filter_end = src_range.split(":")[1]  # 如 "L500"
+        filter_last_row = ''.join(c for c in filter_end if c.isdigit())  # 500
         filter_col = src_range[0]             # 篩選欄字母（"A"）
 
         if is_first_half:
@@ -692,7 +693,7 @@ def _run_salary_module(
         formula = (
             f'=FILTER('
             f'IMPORTRANGE("{src_id}","{src_sheet}!{src_range}"),'
-            f'IMPORTRANGE("{src_id}","{src_sheet}!{filter_col}2:{filter_end}")="{schedule}"'
+            f'IMPORTRANGE("{src_id}","{src_sheet}!{filter_col}2:{filter_col}{filter_last_row}")="{schedule}"'
             f')'
         )
         ws.update_cell(target_row, 1, formula)
