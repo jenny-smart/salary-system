@@ -107,10 +107,11 @@ def run_pdf(
         token           = _get_access_token()
         salary_sheet_id = ws_salary.id
 
-        # 讀取清潔訂單（B=服務日期, C=星期, E=客戶姓名, F=服務專員, G=服務時數）
-        _log(log, "    讀取清潔訂單工作表資料...")
-        ws_order   = ss.worksheet("清潔訂單")
-        order_raw  = ws_order.get(
+        # 讀取薪資表（B=服務日期, C=星期, E=客戶姓名, F=服務專員, G=服務時數）
+        # A欄=序號(index 0), B=1, C=2, D=3, E=4, F=5, G=6
+        _log(log, "    讀取薪資表資料...")
+        ws_main   = ss.worksheet("薪資表")
+        main_raw  = ws_main.get(
             "A2:G",
             value_render_option="UNFORMATTED_VALUE",
             date_time_render_option="FORMATTED_STRING"
@@ -122,13 +123,12 @@ def run_pdf(
             _log(log, f"    [{i+1}/{len(targets)}] 產出：{name}")
 
             try:
-                # 1. 清空舊明細（AC31:AF 清空，避免殘留上一人資料）
+                # 1. 清空舊明細（AC31:AF，不動 AD1/AD2）
                 ws_salary.batch_clear(["AC31:AF"])
 
-                # 2. 篩選清潔訂單中 F 欄（服務專員）包含此姓名的列
-                #    A=0, B=1, C=2, D=3, E=4, F=5, G=6
+                # 2. 篩選薪資表 F 欄（index 5）包含此姓名的列
                 detail_rows = []
-                for r in order_raw:
+                for r in main_raw:
                     while len(r) < 7:
                         r.append("")
                     f_val = str(r[5]).strip()   # F = 服務專員
@@ -153,13 +153,13 @@ def run_pdf(
                     )
                     _log(log, f"      明細寫入：{len(detail_rows)} 筆")
                 else:
-                    _log(log, f"      ⚠️ 清潔訂單中找不到含「{name}」的資料")
+                    _log(log, f"      ⚠️ 薪資表中找不到含「{name}」的資料")
 
-                # 3. 寫入 AD2 姓名（薪資單 AD2 = 姓名，觸發上方公式）
+                # 3. 寫入 AD2 姓名（不動 AD1，觸發薪資單上方公式）
                 ws_salary.update_cell(2, 30, name)   # row=2, col=30(AD)
-                time.sleep(3.0)   # 等公式計算
+                time.sleep(3.0)
 
-                # 4. 匯出範圍：AB1 到明細最後列（多留 3 列緩衝）
+                # 4. 匯出範圍：AB1 到明細最後列
                 last_export_row = 30 + len(detail_rows) + 3 if detail_rows else 40
                 _log(log, f"      匯出範圍：AB1:AH{last_export_row}")
 
