@@ -309,18 +309,21 @@ def run_allowance(
     period: str,
     is_first_half: bool,
     log: List[str],
+    region_cfg: dict = None,
 ) -> bool:
     label = "上半月" if is_first_half else "下半月"
     _log(log, f"▶ 01專員請款 {label} 開始")
     try:
         gc = get_gspread_client()
         ss = gc.open_by_key(cleaning_file_id)
-        ws_exec      = ss.worksheet("執行")
         ws_allowance = ss.worksheet("01專員請款")
 
-        yyyymm       = str(ws_exec.acell("B1").value or "").strip()
-        allowance_id = str(ws_exec.acell("C2").value or "").strip()
+        yyyymm       = period[:6]
+        cfg          = region_cfg or {}
+        allowance_id = str(cfg.get("allowance_id", "") or "").strip()
         schedule     = f"{yyyymm}-{'1' if is_first_half else '2'}"
+        if not allowance_id:
+            raise ValueError("config 地區設定缺少 allowance_id（請款 ID）")
 
         if is_first_half:
             _clear_first_half(ws_allowance, log)
@@ -366,16 +369,20 @@ def run_voucher(
     period: str,
     is_first_half: bool,
     log: List[str],
+    region_cfg: dict = None,
+    payment_file_id: str = None,
 ) -> bool:
     label = "上半月" if is_first_half else "下半月"
     _log(log, f"▶ 02儲值獎金 {label} 開始")
     try:
         gc = get_gspread_client()
         ss = gc.open_by_key(cleaning_file_id)
-        ws_exec    = ss.worksheet("執行")
         ws_voucher = ss.worksheet("02儲值獎金")
 
-        payment_id = str(ws_exec.acell("C5").value or "").strip()
+        # payment_file_id 由 salaryapp.py 透過 find_payment_file() 取得
+        payment_id = payment_file_id or ""
+        if not payment_id:
+            raise ValueError("缺少金流對帳試算表 ID（payment_file_id），請確認已傳入")
 
         if is_first_half:
             _clear_first_half(ws_voucher, log)
@@ -548,6 +555,7 @@ def run_newcomer_label(
     period: str,
     is_first_half: bool,
     log: List[str],
+    region_cfg: dict = None,
 ) -> bool:
     """
     新人實境實習期別。
@@ -560,12 +568,10 @@ def run_newcomer_label(
     try:
         gc = get_gspread_client()
         ss = gc.open_by_key(cleaning_file_id)
-        ws_exec     = ss.worksheet("執行")
         ws_salary   = ss.worksheet("薪資表")
         ws_newcomer = ss.worksheet("03新人實境")
 
-        yyyymm      = str(ws_exec.acell("B1").value or "").strip()
-        period_code = f"{yyyymm}-{'1' if is_first_half else '2'}"
+        period_code = period   # 直接用 period（如 "202604-2"）
 
         # 薪資表 L1:1 員工名單（L=col12, index 11）
         l1        = ws_salary.row_values(1)
@@ -614,6 +620,7 @@ def run_newcomer_label(
 def run_newcomer(
     cleaning_file_id: str, region: str, period: str,
     is_first_half: bool, log: List[str],
+    region_cfg: dict = None,
 ) -> bool:
     """03 新人實境。來源：新人實境!A2:L500；Q=C(idx2), R=200*K, S=TEXT(E)&G"""
     return _run_salary_module(
@@ -631,6 +638,7 @@ def run_newcomer(
 def run_intern(
     cleaning_file_id: str, region: str, period: str,
     is_first_half: bool, log: List[str],
+    region_cfg: dict = None,
 ) -> bool:
     """04 新人實習。來源：新人實習!A2:L500；Q=C(idx2), R=200*K, S=TEXT(E)&G"""
     return _run_salary_module(
@@ -648,6 +656,7 @@ def run_intern(
 def run_leader(
     cleaning_file_id: str, region: str, period: str,
     is_first_half: bool, log: List[str],
+    region_cfg: dict = None,
 ) -> bool:
     """05 組長津貼。來源：新人實習!A2:L500（同 04）；Q=H(idx7), R=J*K, S=TEXT(E)&G"""
     return _run_salary_module(
@@ -675,6 +684,7 @@ def _run_salary_module(
     src_range: str,
     q_idx: int,
     r_expr: str,
+    **kwargs,
 ) -> bool:
     """
     03/04/05 共用執行框架。
@@ -687,12 +697,17 @@ def _run_salary_module(
     try:
         gc       = get_gspread_client()
         ss       = gc.open_by_key(cleaning_file_id)
-        ws_exec  = ss.worksheet("執行")
         ws       = ss.worksheet(sheet_name)
 
-        yyyymm   = str(ws_exec.acell("B1").value or "").strip()
-        src_id   = str(ws_exec.acell(id_cell).value or "").strip()
+        yyyymm   = period[:6]
+        cfg      = kwargs.get("region_cfg") or {}
+        # id_cell 對應 config 欄位：C3 → salary_id
+        id_map   = {"C2": "allowance_id", "C3": "salary_id", "C4": "roster_id", "C5": "payment_id"}
+        cfg_key  = id_map.get(id_cell, "salary_id")
+        src_id   = str(cfg.get(cfg_key, "") or "").strip()
         schedule = f"{yyyymm}-{'1' if is_first_half else '2'}"
+        if not src_id:
+            raise ValueError(f"config 地區設定缺少 {cfg_key}（{id_cell}）")
 
         # 篩選結束列號（從 src_range 解析）
         filter_end = src_range.split(":")[1]  # 如 "L500" → "L500"
