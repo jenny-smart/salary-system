@@ -1099,19 +1099,25 @@ def _copy_salary_formulas(
 ):
     """
     從 L 欄（樣板，col 12）複製公式到 (L + old_count) 起的 diff 欄。
+    L 欄公式範例：=IF(ISNUMBER(FIND(L$1,$F2)),$G2,"")
+    - L$1 是混合參照（列固定），需連同 L$數字 一起替換欄字母
+    - $L1 是欄固定，不需替換
     下半月跳過列 2039、2043。
     """
-    SKIP = {2039, 2043} if not is_first_half else set()
-    SRC_COL   = 12    # L
+    SKIP      = {2039, 2043} if not is_first_half else set()
+    SRC_COL   = 12    # L = col 12
     START_ROW = 2
-    END_ROW   = 2044
-    num_rows  = END_ROW - START_ROW + 1
+    END_ROW   = 2048
 
-    # FORMULA：取得儲存格公式（而非顯示值）
+    # FORMULA 模式取得公式
     src_formulas = ws_salary.get(
         f"L{START_ROW}:L{END_ROW}",
         value_render_option="FORMULA"
     ) or []
+
+    _log(log, f"    L欄公式讀取：{len(src_formulas)} 列")
+
+    sheet_title = ws_salary.title
     batch = []
 
     for c in range(diff):
@@ -1123,23 +1129,28 @@ def _copy_salary_formulas(
             if actual_row in SKIP:
                 continue
             formula = row_f[0] if row_f else ""
-            if not formula:
+            if not formula or not str(formula).startswith("="):
                 continue
-            # 替換公式中「L」欄字母（前後非字母）為目標欄字母
-            new_formula = re.sub(r'(?<![A-Z])L(?=\d)', tgt_ltr, formula)
+
+            # 替換欄字母：
+            # 1. L$數字  → {tgt_ltr}$數字（如 L$1 → M$1）
+            # 2. L數字   → {tgt_ltr}數字  （如 L2  → M2）
+            # 排除 $L（欄絕對參照，不替換）
+            new_formula = re.sub(
+                r'(?<!\$)L(?=\$?\d)',
+                tgt_ltr,
+                formula
+            )
             batch.append({
-                "range": f"{tgt_ltr}{actual_row}",
+                "range": f"'{sheet_title}'!{tgt_ltr}{actual_row}",
                 "values": [[new_formula]],
             })
 
     if batch:
-        sheet_name = ws_salary.title
-        for item in batch:
-            if not item["range"].startswith("'"):
-                item["range"] = f"'{sheet_name}'!{item['range']}"
         for i in range(0, len(batch), 500):
             ws_salary.spreadsheet.values_batch_update({
                 "valueInputOption": "USER_ENTERED",
                 "data": batch[i:i + 500],
             })
+        _log(log, f"    公式複製完成：{diff} 欄，共 {len(batch)} 格")
         _log(log, f"    薪資公式複製完成（{diff} 欄，{len(batch)} 格）")
