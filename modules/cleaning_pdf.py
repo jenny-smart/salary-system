@@ -105,13 +105,9 @@ def run_pdf(
 
         _log(log, f"    待產出：{len(targets)} 人")
 
-        token       = _get_access_token()
-        oauth_drive = _get_oauth_drive_service()
-        folder_id   = _get_or_create_pdf_folder(root_folder_id, period, oauth_drive)
-        _log(log, f"    Drive 資料夾準備完成")
         token = _get_access_token()
         oauth_drive, folder_id = _prepare_drive_output(root_folder_id, period, log)
-        
+
         # 讀取來源工作表
         if job_type == "PROJECT":
             src_sheet_name = "專案薪資表"
@@ -194,20 +190,11 @@ def run_pdf(
                 file_title = f"{period}_{label}_{name}.pdf"
                 result["pdfs"][file_title] = pdf_bytes
 
-                # 上傳至 Drive（OAuth）
-                existing_url = _get_cell(ws_list, target["row"], 5)  # E欄
-                drive_url    = _upload_or_update_drive(
-                    oauth_drive, folder_id, pdf_bytes, file_title, existing_url
-                )
-
-                # 回寫 D（存檔時間）、E（路徑，僅空白時寫入）、清空 H
                 now_str = datetime.datetime.now().strftime(TS_FMT)
                 updates = [
                     {"range": f"D{target['row']}", "values": [[now_str]]},
                     {"range": f"H{target['row']}", "values": [[""]]},
                 ]
-                if not existing_url:
-                    updates.append({"range": f"E{target['row']}", "values": [[drive_url]]})
                 uploaded = False
 
                 if oauth_drive and folder_id:
@@ -233,18 +220,12 @@ def run_pdf(
                         for u in updates
                     ],
                 })
-                _log(log, f"      ✅ {name} PDF 產出並上傳完成")
                 if uploaded:
                     _log(log, f"      ✅ {name} PDF 產出並上傳完成")
                 else:
                     _log(log, f"      ✅ {name} PDF 產出成功（請用下方下載按鈕儲存）")
 
             except Exception as e:
-                if hasattr(e, 'reason'):
-                    err_msg = f"HttpError {e.status_code}: {e.reason}"
-                else:
-                    err_msg = str(e) or repr(e)
-                _log(log, f"      ❌ {name} 失敗：{err_msg}")
                 _log(log, f"      ❌ {name} 失敗：{_format_error(e)}")
                 result["failed"].append(name)
 
@@ -258,9 +239,9 @@ def run_pdf(
         return result
 
     except Exception as e:
-        _log(log, f"❌ PDF產出失敗：{e}")
         _log(log, f"❌ PDF產出失敗：{_format_error(e)}")
         return result
+
 
 def _prepare_drive_output(root_folder_id: str, period: str, log: List[str]):
     """
@@ -277,7 +258,8 @@ def _prepare_drive_output(root_folder_id: str, period: str, log: List[str]):
     except Exception as e:
         _log(log, f"    ⚠️ Drive 上傳未啟用：{_format_error(e)}")
         return None, None
-        
+
+
 def _get_or_create_pdf_folder(root_id: str, period: str, drive=None) -> str:
     """取得或建立 {根目錄}/{期別}/{期別} 資料夾，回傳最內層資料夾 ID。
     drive：優先用傳入的 OAuth drive，否則用 Service Account drive。
@@ -508,6 +490,7 @@ def _get_cell(ws: gspread.Worksheet, row: int, col: int) -> str:
         return str(ws.cell(row, col).value or "").strip()
     except Exception:
         return ""
+
 
 def _format_error(error: Exception) -> str:
     """把 Google/Streamlit 例外轉成日誌可讀的訊息，避免只看到空白錯誤。"""
