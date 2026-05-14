@@ -31,6 +31,7 @@ import gspread
 import requests
 
 from modules.auth import get_gspread_client, get_drive_service
+import streamlit as st
 
 
 # ──────────────────────────────────────────────────────────────
@@ -186,7 +187,29 @@ def run_pdf(
 
                 file_title = f"{period}_{label}_{name}.pdf"
                 result["pdfs"][file_title] = pdf_bytes
-                _log(log, f"      ✅ {name} PDF 產出成功（{len(pdf_bytes):,} bytes）")
+
+                # 上傳至 Drive（OAuth）
+                existing_url = _get_cell(ws_list, target["row"], 5)  # E欄
+                drive_url    = _upload_or_update_drive(
+                    oauth_drive, folder_id, pdf_bytes, file_title, existing_url
+                )
+
+                # 回寫 D（存檔時間）、E（路徑，僅空白時寫入）、清空 H
+                now_str = datetime.datetime.now().strftime(TS_FMT)
+                updates = [
+                    {"range": f"D{target['row']}", "values": [[now_str]]},
+                    {"range": f"H{target['row']}", "values": [[""]]},
+                ]
+                if not existing_url:
+                    updates.append({"range": f"E{target['row']}", "values": [[drive_url]]})
+                ws_list.spreadsheet.values_batch_update({
+                    "valueInputOption": "USER_ENTERED",
+                    "data": [
+                        {"range": f"'{ws_list.title}'!{u['range']}", "values": u["values"]}
+                        for u in updates
+                    ],
+                })
+                _log(log, f"      ✅ {name} PDF 產出並上傳完成")
 
             except Exception as e:
                 if hasattr(e, 'reason'):
@@ -250,6 +273,79 @@ def _get_or_create_pdf_folder(root_id: str, period: str) -> str:
 # ──────────────────────────────────────────────────────────────
 # Google Sheets → PDF export
 # ──────────────────────────────────────────────────────────────
+
+
+
+# ──────────────────────────────────────────────────────────────
+# OAuth Drive 操作（用 jenny@hers.com.tw 的權限上傳/更新檔案）
+# ──────────────────────────────────────────────────────────────
+
+def _get_oauth_drive_service():
+    """
+    用 Streamlit Secrets 的 [oauth_drive] 建立 OAuth Drive 服務。
+    使用 refresh_token 自動更新 access token。
+    """
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+
+    cfg = st.secrets["oauth_drive"]
+    creds = Credentials(
+        token         = None,
+        refresh_token = cfg["refresh_token"],
+        token_uri     = cfg["token_uri"],
+        client_id     = cfg["client_id"],
+        client_secret = cfg["client_secret"],
+        scopes        = ["https://www.googleapis.com/auth/drive"],
+    )
+    # 自動 refresh
+    import google.auth.transport.requests
+    creds.refresh(google.auth.transport.requests.Request())
+    return build("drive", "v3", credentials=creds)
+
+
+def _upload_or_update_drive(
+    oauth_drive,
+    folder_id: str,
+    pdf_bytes: bytes,
+    file_name: str,
+    existing_url: str = "",
+) -> str:
+    """
+    E欄空白 → 建立新檔，回傳連結
+    E欄已有連結 → 更新原檔內容，回傳原連結
+    """
+    from googleapiclient.http import MediaIoBaseUpload
+    import io
+
+    existing_file_id = _extract_file_id(existing_url)
+    media = MediaIoBaseUpload(io.BytesIO(pdf_bytes), mimetype="application/pdf")
+
+    if existing_file_id:
+        # 更新原檔內容（不改連結）
+        oauth_drive.files().update(
+            fileId     = existing_file_id,
+            body       = {"name": file_name},
+            media_body = media,
+            supportsAllDrives = True,
+        ).execute()
+        return existing_url
+    else:
+        # 建立新檔
+        meta   = {"name": file_name, "parents": [folder_id]}
+        result = oauth_drive.files().create(
+            body       = meta,
+            media_body = media,
+            fields     = "id",
+            supportsAllDrives = True,
+        ).execute()
+        file_id = result["id"]
+        # 設為任何人可讀（方便發連結給人員）
+        oauth_drive.permissions().create(
+            fileId = file_id,
+            body   = {"type": "anyone", "role": "reader"},
+            supportsAllDrives = True,
+        ).execute()
+        return f"https://drive.google.com/file/d/{file_id}/view"
 
 def _get_access_token() -> str:
     """
