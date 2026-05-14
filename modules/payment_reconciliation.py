@@ -188,6 +188,23 @@ def copy_orders_to_template(
 
     log(f"✅ 搬運完成：{count} 筆（起始列：{start_row}，"
         f"{'上半月清空後貼入' if first_half else '下半月接續貼入'}）")
+
+    # 搬移格式（底色 + 字型 + 列高 21px）
+    # 來源：訂單工作表第 2 列起（共 count 列）
+    # 目標：範本工作表 start_row 起
+    try:
+        src_row_nums = list(range(2, 2 + count))
+        fmt_map = _fetch_row_fmts(
+            spreadsheet_id = order_file["id"],
+            sheet_title    = source_sheet.title,
+            row_nums       = src_row_nums,
+        )
+        fmts = [fmt_map.get(r) for r in src_row_nums]
+        _apply_fmts(template_sheet, start_row, fmts)
+        log(f"🔵 格式搬移完成（{count} 列，列高 21px）")
+    except Exception as e:
+        log(f"⚠️ 格式搬移失敗（資料已搬運成功）：{e}")
+
     return {"count": count, "start_row": start_row}
 
 
@@ -775,50 +792,40 @@ def copy_classified_data(
             counts[label] = 0
             continue
 
-        # ── 搬運資料（獨立 try，確保格式失敗不影響搬運）──────
         try:
             target      = ss_other.worksheet(sheet_name)
             paste_start = get_paste_row(target, first_half)
             paste_data(target, paste_start, rows)
             counts[label] = len(rows)
             log(f"✅ {label}：{len(rows)} 筆 → {sheet_name}")
-        except Exception as e:
-            st.warning(f"⚠️ {sheet_name} 資料寫入失敗：{e}")
-            log(f"❌ {label} 資料寫入失敗：{e}")
-            counts[label] = 0
-            continue   # 資料寫入失敗就不嘗試格式
 
-        # ── 搬移格式（獨立 try，格式失敗不影響已搬運的資料）──
-        try:
-            src_rows = [_sheet_row(i) for i in row_indices]
-            fmt_map  = _fetch_row_fmts(
-                spreadsheet_id = reconciliation_id,
-                sheet_title    = template_sheet.title,
-                row_nums       = src_rows,
-            )
-            fmts = [fmt_map.get(r) for r in src_rows]
-            _apply_fmts(target, paste_start, fmts)
+            # 搬移格式（底色 + 字型 + 列高 21px）
+            try:
+                src_rows = [_sheet_row(i) for i in row_indices]
+                fmt_map  = _fetch_row_fmts(
+                    spreadsheet_id = reconciliation_id,
+                    sheet_title    = template_sheet.title,
+                    row_nums       = src_rows,
+                )
+                fmts = [fmt_map.get(r) for r in src_rows]
+                _apply_fmts(target, paste_start, fmts)
+            except Exception as fe:
+                log(f"⚠️ {label} 格式搬移失敗（資料已搬運成功）：{fe}")
+
         except Exception as e:
-            log(f"⚠️ {label} 格式搬移失敗（資料已搬運成功）：{e}")
+            st.warning(f"⚠️ {sheet_name} 寫入失敗：{e}")
+            counts[label] = 0
 
     # ── 再搬清潔承攬 ──────────────────────────────────────────
     if cleaning_rows:
-        # ── 搬運資料 ────────────────────────────────────────────
         try:
             clean_sheet = ss_clean.worksheet("清潔營收明細")
             paste_start = get_paste_row(clean_sheet, first_half)
             paste_data(clean_sheet, paste_start, cleaning_rows)
             counts["清潔"] = len(cleaning_rows)
             log(f"✅ 清潔：{len(cleaning_rows)} 筆 → 清潔營收明細")
-            st.session_state[f"cleaning_count_{period}_{region_name}"] = len(cleaning_rows)
-        except Exception as e:
-            st.warning(f"⚠️ 清潔營收明細資料寫入失敗：{e}")
-            log(f"❌ 清潔資料寫入失敗：{e}")
-            counts["清潔"] = 0
-            cleaning_rows = []   # 標記失敗，跳過格式
 
-        # ── 搬移格式 ────────────────────────────────────────────
-        if cleaning_rows:
+            # 搬移格式（底色 + 字型 + 列高 21px）
             try:
                 src_rows = [_sheet_row(i) for i in cleaning_row_indices]
                 fmt_map  = _fetch_row_fmts(
@@ -828,8 +835,14 @@ def copy_classified_data(
                 )
                 fmts = [fmt_map.get(r) for r in src_rows]
                 _apply_fmts(clean_sheet, paste_start, fmts)
-            except Exception as e:
-                log(f"⚠️ 清潔格式搬移失敗（資料已搬運成功）：{e}")
+            except Exception as fe:
+                log(f"⚠️ 清潔格式搬移失敗（資料已搬運成功）：{fe}")
+
+            st.session_state[f"cleaning_count_{period}_{region_name}"] = len(cleaning_rows)
+
+        except Exception as e:
+            st.warning(f"⚠️ 清潔營收明細寫入失敗：{e}")
+            counts["清潔"] = 0
     else:
         counts["清潔"] = 0
 
