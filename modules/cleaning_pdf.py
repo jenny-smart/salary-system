@@ -252,6 +252,9 @@ def _prepare_drive_output(root_folder_id: str, period: str, log: List[str]):
     """
     try:
         drive = _get_oauth_drive_service()
+        about = drive.about().get(fields="user(emailAddress,displayName)").execute()
+        user = about.get("user", {})
+        _log(log, f"    Drive OAuth 使用者：{user.get('emailAddress') or user.get('displayName')}")
         folder_id = _get_or_create_pdf_folder(root_folder_id, period, drive)
         _log(log, "    Drive 資料夾準備完成")
         return drive, folder_id
