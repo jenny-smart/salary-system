@@ -261,6 +261,8 @@ if st.session_state.get("pdf_result"):
             del st.session_state["pdf_result"]
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
+    elif not failed:
+        del st.session_state["pdf_result"]
 
 
 # ═══════════════════════════════════════════════════════════
@@ -602,8 +604,11 @@ if run_clicked:
                             )
                             # 儲存到 session_state 供 rerun 後顯示下載按鈕
                             if isinstance(pdf_result, dict):
-                                st.session_state["pdf_result"] = pdf_result
-                                success = len(pdf_result.get("pdfs", {})) > 0
+                                if pdf_result.get("pdfs") or pdf_result.get("failed"):
+                                    st.session_state["pdf_result"] = pdf_result
+                                else:
+                                    st.session_state.pop("pdf_result", None)
+                                success = int(pdf_result.get("success_count") or len(pdf_result.get("pdfs", {}))) > 0
                             else:
                                 # 舊版 run_pdf 回傳 bool，GitHub 尚未更新
                                 success = bool(pdf_result)
