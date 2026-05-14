@@ -106,7 +106,7 @@ def run_pdf(
 
         token       = _get_access_token()
         oauth_drive = _get_oauth_drive_service()
-        folder_id   = _get_or_create_pdf_folder(root_folder_id, period)
+        folder_id   = _get_or_create_pdf_folder(root_folder_id, period, oauth_drive)
         _log(log, f"    Drive 資料夾準備完成")
 
         # 讀取來源工作表
@@ -234,9 +234,12 @@ def run_pdf(
     except Exception as e:
         _log(log, f"❌ PDF產出失敗：{e}")
         return result
-def _get_or_create_pdf_folder(root_id: str, period: str) -> str:
-    """取得或建立 {根目錄}/{期別}/{期別} 資料夾，回傳最內層資料夾 ID。"""
-    drive = get_drive_service()
+def _get_or_create_pdf_folder(root_id: str, period: str, drive=None) -> str:
+    """取得或建立 {根目錄}/{期別}/{期別} 資料夾，回傳最內層資料夾 ID。
+    drive：優先用傳入的 OAuth drive，否則用 Service Account drive。
+    """
+    if drive is None:
+        drive = get_drive_service()
 
     def _find_or_create(parent_id: str, name: str) -> str:
         q = (
