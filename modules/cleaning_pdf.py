@@ -104,7 +104,10 @@ def run_pdf(
 
         _log(log, f"    待產出：{len(targets)} 人")
 
-        token = _get_access_token()
+        token       = _get_access_token()
+        oauth_drive = _get_oauth_drive_service()
+        folder_id   = _get_or_create_pdf_folder(root_folder_id, period)
+        _log(log, f"    Drive 資料夾準備完成")
 
         # 讀取來源工作表
         if job_type == "PROJECT":
