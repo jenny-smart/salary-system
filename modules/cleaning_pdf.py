@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import datetime
 import io
+import json
 import time
 from typing import List, Optional
 
@@ -108,7 +109,9 @@ def run_pdf(
         oauth_drive = _get_oauth_drive_service()
         folder_id   = _get_or_create_pdf_folder(root_folder_id, period, oauth_drive)
         _log(log, f"    Drive 資料夾準備完成")
-
+        token = _get_access_token()
+        oauth_drive, folder_id = _prepare_drive_output(root_folder_id, period, log)
+        
         # 讀取來源工作表
         if job_type == "PROJECT":
             src_sheet_name = "專案薪資表"
@@ -205,6 +208,24 @@ def run_pdf(
                 ]
                 if not existing_url:
                     updates.append({"range": f"E{target['row']}", "values": [[drive_url]]})
+                uploaded = False
+
+                if oauth_drive and folder_id:
+                    try:
+                        # 上傳至 Drive（OAuth）。若 Drive 失敗，仍保留下載檔，不讓 PDF 產出歸零。
+                        existing_url = _get_cell(ws_list, target["row"], 5)  # E欄
+                        drive_url    = _upload_or_update_drive(
+                            oauth_drive, folder_id, pdf_bytes, file_title, existing_url
+                        )
+                        if not existing_url:
+                            updates.append({"range": f"E{target['row']}", "values": [[drive_url]]})
+                        uploaded = True
+                    except Exception as upload_error:
+                        _log(log, f"      ⚠️ Drive 上傳失敗，已保留下載檔：{_format_error(upload_error)}")
+                else:
+                    _log(log, "      ⚠️ Drive 未啟用，已保留下載檔")
+
+                # 回寫 D（產出時間）與 H（清空待產出）。E 僅在 Drive 上傳成功且原本空白時寫入。
                 ws_list.spreadsheet.values_batch_update({
                     "valueInputOption": "USER_ENTERED",
                     "data": [
@@ -213,6 +234,10 @@ def run_pdf(
                     ],
                 })
                 _log(log, f"      ✅ {name} PDF 產出並上傳完成")
+                if uploaded:
+                    _log(log, f"      ✅ {name} PDF 產出並上傳完成")
+                else:
+                    _log(log, f"      ✅ {name} PDF 產出成功（請用下方下載按鈕儲存）")
 
             except Exception as e:
                 if hasattr(e, 'reason'):
@@ -220,6 +245,7 @@ def run_pdf(
                 else:
                     err_msg = str(e) or repr(e)
                 _log(log, f"      ❌ {name} 失敗：{err_msg}")
+                _log(log, f"      ❌ {name} 失敗：{_format_error(e)}")
                 result["failed"].append(name)
 
             time.sleep(0.8)
@@ -233,7 +259,25 @@ def run_pdf(
 
     except Exception as e:
         _log(log, f"❌ PDF產出失敗：{e}")
+        _log(log, f"❌ PDF產出失敗：{_format_error(e)}")
         return result
+
+def _prepare_drive_output(root_folder_id: str, period: str, log: List[str]):
+    """
+    嘗試準備 Drive 上傳目的地。
+
+    PDF 生成本身不應依賴 Drive/OAuth；Drive 失敗時回傳 (None, None)，
+    run_pdf 仍會把 PDF bytes 放進 Streamlit 下載區。
+    """
+    try:
+        drive = _get_oauth_drive_service()
+        folder_id = _get_or_create_pdf_folder(root_folder_id, period, drive)
+        _log(log, "    Drive 資料夾準備完成")
+        return drive, folder_id
+    except Exception as e:
+        _log(log, f"    ⚠️ Drive 上傳未啟用：{_format_error(e)}")
+        return None, None
+        
 def _get_or_create_pdf_folder(root_id: str, period: str, drive=None) -> str:
     """取得或建立 {根目錄}/{期別}/{期別} 資料夾，回傳最內層資料夾 ID。
     drive：優先用傳入的 OAuth drive，否則用 Service Account drive。
@@ -406,6 +450,10 @@ def _export_pdf(
     resp = requests.get(base_url, params=params, headers=headers, timeout=60)
     if resp.status_code != 200:
         raise ValueError(f"PDF export 失敗，HTTP {resp.status_code}: {resp.text[:200]}")
+    if not resp.content.startswith(b"%PDF"):
+        content_type = resp.headers.get("content-type", "")
+        preview = resp.text[:200].replace("\n", " ")
+        raise ValueError(f"PDF export 回傳非 PDF 內容（{content_type}）：{preview}")
     return resp.content
 
 
@@ -460,6 +508,30 @@ def _get_cell(ws: gspread.Worksheet, row: int, col: int) -> str:
         return str(ws.cell(row, col).value or "").strip()
     except Exception:
         return ""
+
+def _format_error(error: Exception) -> str:
+    """把 Google/Streamlit 例外轉成日誌可讀的訊息，避免只看到空白錯誤。"""
+    if hasattr(error, "resp") and getattr(error, "resp", None):
+        status = getattr(error.resp, "status", "")
+        reason = getattr(error.resp, "reason", "")
+        content = getattr(error, "content", b"")
+        if isinstance(content, bytes):
+            content = content.decode("utf-8", errors="replace")
+        try:
+            payload = json.loads(content) if content else {}
+            message = payload.get("error", {}).get("message") or content
+        except Exception:
+            message = content
+        return f"HTTP {status} {reason} {str(message)[:300]}".strip()
+
+    if hasattr(error, "status_code"):
+        text = getattr(error, "text", "")
+        return f"HTTP {error.status_code}: {str(text)[:300]}"
+
+    message = str(error).strip()
+    if message:
+        return message
+    return repr(error)
 
 
 # ──────────────────────────────────────────────────────────────
