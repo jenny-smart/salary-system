@@ -83,7 +83,7 @@ def run_pdf(
     label = job["file_title"]
     _log(log, f"▶ PDF產出 [{label}] {region} {period} 開始")
 
-    result = {"pdfs": {}, "failed": []}
+    result = {"pdfs": {}, "uploaded": {}, "failed": [], "success_count": 0}
 
     try:
         gc = get_gspread_client()
@@ -188,7 +188,6 @@ def run_pdf(
                     raise ValueError(f"PDF 過小（{len(pdf_bytes)} bytes）")
 
                 file_title = f"{period}_{label}_{name}.pdf"
-                result["pdfs"][file_title] = pdf_bytes
 
                 now_str = datetime.datetime.now().strftime(TS_FMT)
                 updates = [
@@ -221,9 +220,12 @@ def run_pdf(
                     ],
                 })
                 if uploaded:
+                    result["uploaded"][file_title] = drive_url
                     _log(log, f"      ✅ {name} PDF 產出並上傳完成")
                 else:
+                    result["pdfs"][file_title] = pdf_bytes
                     _log(log, f"      ✅ {name} PDF 產出成功（請用下方下載按鈕儲存）")
+                result["success_count"] += 1
 
             except Exception as e:
                 _log(log, f"      ❌ {name} 失敗：{_format_error(e)}")
@@ -231,10 +233,10 @@ def run_pdf(
 
             time.sleep(0.8)
 
-        total   = len(result["pdfs"])
+        total   = result["success_count"]
         failed  = len(result["failed"])
         _log(log, f"✅ PDF產出完成：成功 {total} 份，失敗 {failed} 份")
-        if total > 0:
+        if result["pdfs"]:
             _log(log, f"    請點擊下方下載按鈕儲存 PDF")
         return result
 
@@ -252,9 +254,6 @@ def _prepare_drive_output(root_folder_id: str, period: str, log: List[str]):
     """
     try:
         drive = _get_oauth_drive_service()
-        about = drive.about().get(fields="user(emailAddress,displayName)").execute()
-        user = about.get("user", {})
-        _log(log, f"    Drive OAuth 使用者：{user.get('emailAddress') or user.get('displayName')}")
         folder_id = _get_or_create_pdf_folder(root_folder_id, period, drive)
         _log(log, "    Drive 資料夾準備完成")
         return drive, folder_id
