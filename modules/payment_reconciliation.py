@@ -193,17 +193,21 @@ def copy_orders_to_template(
     # 來源：訂單工作表第 2 列起（共 count 列）
     # 目標：範本工作表 start_row 起
     try:
+        import traceback
         src_row_nums = list(range(2, 2 + count))
+        log(f"🔵 讀取格式中（訂單工作表第 2–{1 + count} 列）...")
         fmt_map = _fetch_row_fmts(
             spreadsheet_id = order_file["id"],
             sheet_title    = source_sheet.title,
             row_nums       = src_row_nums,
         )
+        log(f"🔵 格式讀取完成，套用中...")
         fmts = [fmt_map.get(r) for r in src_row_nums]
         _apply_fmts(template_sheet, start_row, fmts)
         log(f"🔵 格式搬移完成（{count} 列，列高 21px）")
     except Exception as e:
-        log(f"⚠️ 格式搬移失敗（資料已搬運成功）：{e}")
+        log(f"⚠️ 格式搬移失敗：{e}")
+        log(f"⚠️ 詳細：{traceback.format_exc()[:300]}")
 
     return {"count": count, "start_row": start_row}
 
@@ -567,50 +571,59 @@ def _build_sheets_service():
                                            cache_discovery=False)
 
 
+def _color_or_none(c: dict | None) -> dict | None:
+    """白色或空值回傳 None，其他回傳 RGB dict。"""
+    if not c:
+        return None
+    r = c.get("red",   0.0)
+    g = c.get("green", 0.0)
+    b = c.get("blue",  0.0)
+    if abs(r - 1) < 0.01 and abs(g - 1) < 0.01 and abs(b - 1) < 0.01:
+        return None
+    return {"red": r, "green": g, "blue": b}
+
+
 def _fetch_row_fmts(spreadsheet_id: str, sheet_title: str,
                     row_nums: list[int]) -> dict[int, dict]:
     """
-    批次讀取多列的格式（背景色＋字型）。
-    row_nums: 1-based 列號清單
+    批次讀取多列格式（背景色＋字型）。
+    一次讀整個連續範圍（min~max 列），再逐列解析。
+    row_nums: 1-based 列號清單（需連續或接近連續）
     回傳: {row_num: {"bg": dict|None, "font": dict|None}}
+    錯誤直接 raise，讓呼叫端的 nested try 寫到 log。
     """
     if not row_nums:
         return {}
 
-    svc    = _build_sheets_service()
-    ranges = [f"'{sheet_title}'!A{r}:BJ{r}" for r in row_nums]
+    min_row = min(row_nums)
+    max_row = max(row_nums)
+    svc     = _build_sheets_service()
 
+    # 一次讀整段範圍，避免多 range 對應錯誤
+    result = svc.spreadsheets().get(
+        spreadsheetId   = spreadsheet_id,
+        ranges          = [f"'{sheet_title}'!A{min_row}:BJ{max_row}"],
+        fields          = "sheets.data.rowData.values.effectiveFormat",
+        includeGridData = True,
+    ).execute()
+
+    # 解析回傳結構
     try:
-        result = svc.spreadsheets().get(
-            spreadsheetId   = spreadsheet_id,
-            ranges          = ranges,
-            fields          = "sheets.data.rowData.values.effectiveFormat",
-            includeGridData = True,
-        ).execute()
-    except Exception:
+        all_row_data = (
+            result["sheets"][0]["data"][0].get("rowData", [])
+        )
+    except (IndexError, KeyError):
         return {r: {"bg": None, "font": None} for r in row_nums}
 
-    def _color_or_none(c: dict | None) -> dict | None:
-        if not c:
-            return None
-        r = c.get("red",   0.0)
-        g = c.get("green", 0.0)
-        b = c.get("blue",  0.0)
-        # 白色（誤差容許 0.01）不記錄
-        if abs(r - 1) < 0.01 and abs(g - 1) < 0.01 and abs(b - 1) < 0.01:
-            return None
-        return {"red": r, "green": g, "blue": b}
-
     fmt_map = {}
-    sheets_data = result.get("sheets", [])
-
-    for i, row_num in enumerate(row_nums):
+    for row_num in row_nums:
+        idx = row_num - min_row   # 0-based offset
         try:
-            row_data = sheets_data[i]["data"][0]["rowData"][0]["values"]
-            ef       = row_data[0].get("effectiveFormat", {})
-            bg       = _color_or_none(ef.get("backgroundColor"))
-            tf       = ef.get("textFormat", {})
-            font     = {
+            values = all_row_data[idx].get("values", [])
+            ef     = values[0].get("effectiveFormat", {}) if values else {}
+            bg     = _color_or_none(ef.get("backgroundColor"))
+            tf     = ef.get("textFormat", {})
+            font   = {
                 "fontFamily":      tf.get("fontFamily"),
                 "fontSize":        tf.get("fontSize"),
                 "bold":            tf.get("bold"),
@@ -718,14 +731,26 @@ def copy_classified_data(
     ss_rec   = open_spreadsheet(reconciliation_id)
     template = ss_rec.worksheet("範本")
 
-    # 上半月：讀全部（A2:BJ）
-    # 下半月：只讀 start_row 起的新資料，不依賴 get_all_data 的過濾邏輯
-    if template_start_row and template_start_row > 2:
-        raw = template.get(
-            f"A{template_start_row}:BJ",
+    if template_start_row and template_start_row > 2 and category_counts:
+        # 下半月：用 ④ 加工後各服務列數加總，計算精確結束列號
+        total_new = sum(category_counts.values())
+        end_row   = template_start_row + total_new - 1
+        log(f"📋 從範本第 {template_start_row} 至第 {end_row} 列，讀取 {total_new} 筆")
+        # 確保工作表有足夠列數
+        if template.row_count < end_row:
+            template.add_rows(end_row - template.row_count + 10)
+        raw  = template.get(
+            f"A{template_start_row}:BJ{end_row}",
             value_render_option="UNFORMATTED_VALUE",
         ) or []
-        # 移除尾端完全空白列
+        data = raw
+    elif template_start_row and template_start_row > 2:
+        # 下半月但無 category_counts：用工作表實際最後列
+        last = template.row_count
+        raw  = template.get(
+            f"A{template_start_row}:BJ{last}",
+            value_render_option="UNFORMATTED_VALUE",
+        ) or []
         while raw and not any(str(c).strip() for c in raw[-1]):
             raw.pop()
         data = raw
@@ -812,7 +837,9 @@ def copy_classified_data(
 
             # 搬移格式（底色 + 字型 + 列高 21px）
             try:
+                import traceback
                 src_rows = [_sheet_row(i) for i in row_indices]
+                log(f"🔵 {label} 讀取格式（{len(src_rows)} 列）...")
                 fmt_map  = _fetch_row_fmts(
                     spreadsheet_id = reconciliation_id,
                     sheet_title    = template_sheet.title,
@@ -820,8 +847,10 @@ def copy_classified_data(
                 )
                 fmts = [fmt_map.get(r) for r in src_rows]
                 _apply_fmts(target, paste_start, fmts)
+                log(f"🔵 {label} 格式搬移完成")
             except Exception as fe:
-                log(f"⚠️ {label} 格式搬移失敗（資料已搬運成功）：{fe}")
+                log(f"⚠️ {label} 格式搬移失敗：{fe}")
+                log(f"⚠️ 詳細：{traceback.format_exc()[:300]}")
 
         except Exception as e:
             st.warning(f"⚠️ {sheet_name} 寫入失敗：{e}")
@@ -838,7 +867,9 @@ def copy_classified_data(
 
             # 搬移格式（底色 + 字型 + 列高 21px）
             try:
+                import traceback
                 src_rows = [_sheet_row(i) for i in cleaning_row_indices]
+                log(f"🔵 清潔讀取格式（{len(src_rows)} 列）...")
                 fmt_map  = _fetch_row_fmts(
                     spreadsheet_id = reconciliation_id,
                     sheet_title    = template_sheet.title,
@@ -846,8 +877,10 @@ def copy_classified_data(
                 )
                 fmts = [fmt_map.get(r) for r in src_rows]
                 _apply_fmts(clean_sheet, paste_start, fmts)
+                log(f"🔵 清潔格式搬移完成")
             except Exception as fe:
-                log(f"⚠️ 清潔格式搬移失敗（資料已搬運成功）：{fe}")
+                log(f"⚠️ 清潔格式搬移失敗：{fe}")
+                log(f"⚠️ 詳細：{traceback.format_exc()[:300]}")
 
             st.session_state[f"cleaning_count_{period}_{region_name}"] = len(cleaning_rows)
 
