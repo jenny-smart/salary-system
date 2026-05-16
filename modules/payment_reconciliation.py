@@ -150,37 +150,35 @@ def _clear_sheet_content_and_format(sheet, log_fn=None):
     """
     清空工作表 A2:BJ 的內容及儲存格格式（背景色、字型）。
     列高不重設（保留工作表預設）。
+    直接用 gspread spreadsheet.batch_update()，不另建 Sheets service。
     """
     def log(msg):
         if log_fn:
             log_fn(msg)
 
-    svc = _build_sheets_service()
-    spreadsheet_id = sheet.spreadsheet.id
     sheet_id = sheet.id
 
     # 1. 清空內容
     sheet.batch_clear(["A2:BJ"])
+    log("🔵 清空內容完成（A2:BJ）")
 
-    # 2. 清空格式：用 repeatCell 將整個範圍的 userEnteredFormat 重設為空
+    # 2. 清空格式：repeatCell 把 userEnteredFormat 整個欄位重設為空物件
+    #    fields="userEnteredFormat" 代表整個 userEnteredFormat 結構都清除
     requests = [{
         "repeatCell": {
             "range": {
                 "sheetId":          sheet_id,
-                "startRowIndex":    1,        # row 2 (0-based)
-                "endRowIndex":      10000,    # 足夠大
-                "startColumnIndex": 0,        # A
-                "endColumnIndex":   62,       # BJ
+                "startRowIndex":    1,       # row 2（0-based）
+                "endRowIndex":      10000,   # 足夠大，涵蓋所有資料列
+                "startColumnIndex": 0,       # A
+                "endColumnIndex":   62,      # BJ（0-based 第 62 欄 = BJ）
             },
             "cell":   {"userEnteredFormat": {}},
             "fields": "userEnteredFormat",
         }
     }]
     try:
-        svc.spreadsheets().batchUpdate(
-            spreadsheetId=spreadsheet_id,
-            body={"requests": requests},
-        ).execute()
+        sheet.spreadsheet.batch_update({"requests": requests})
         log("🔵 清空格式完成（A2:BJ）")
     except Exception as e:
         log(f"⚠️ 清空格式失敗：{e}")
@@ -354,18 +352,26 @@ def process_template(
     # H 欄是日期格式：先嘗試轉 datetime，失敗則保留原值（字串比較）
     # M 欄是文字格式：直接轉 str 排序
     def _to_sortable_date(val):
-        """將各種日期值轉成可比較的字串 (YYYY-MM-DD)，失敗回傳原值字串。"""
+        """
+        將各種日期值轉成可排序字串 YYYY-MM-DD。
+        支援月日不補零：2026/5/1、2026/5/10 都能正確解析。
+        無法解析時回傳空字串（排最前），確保不用原字串做字典序比較。
+        """
+        import re as _re
         if pd.isna(val) or str(val).strip() == "":
             return ""
         s = str(val).strip()
-        # 嘗試常見格式
-        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%d/%m/%Y"):
-            try:
-                import datetime
-                return datetime.datetime.strptime(s, fmt).strftime("%Y-%m-%d")
-            except ValueError:
-                continue
-        return s  # 無法解析，用原字串
+        # YYYY/M/D 或 YYYY-M-D（月日可單位數）
+        m = _re.match(r"^(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})", s)
+        if m:
+            y, mo, d = m.group(1), m.group(2).zfill(2), m.group(3).zfill(2)
+            return f"{y}-{mo}-{d}"
+        # M/D/YYYY（美式）
+        m = _re.match(r"^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})", s)
+        if m:
+            mo, d, y = m.group(1).zfill(2), m.group(2).zfill(2), m.group(3)
+            return f"{y}-{mo}-{d}"
+        return ""  # 無法解析給空字串，不用字串比較
 
     col_e  = df_new[4].astype(str)
     col_h  = df_new[7].apply(_to_sortable_date)
