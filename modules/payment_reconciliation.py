@@ -1,6 +1,6 @@
 """
 modules/payment_reconciliation.py
-金流對帳模組  v2026-05c  (fix: 清空格式、B欄起始列、M欄排序、分類清空)
+金流對帳模組  v2026-05d
 
 流程：
 上半月 / 下半月：
@@ -143,67 +143,6 @@ def convert_payment_file(root_folder_id: str, period: str, region_name: str, log
 
 
 # ═══════════════════════════════════════════════════════════════
-# 共用：清空工作表內容及格式（A2:BJ）
-# ═══════════════════════════════════════════════════════════════
-
-def _clear_sheet_content_and_format(sheet, log_fn=None):
-    """
-    清空工作表 A2:BJ 的內容及儲存格格式（背景色、字型）。
-    列高不重設（保留工作表預設）。
-    直接用 gspread spreadsheet.batch_update()，不另建 Sheets service。
-    """
-    def log(msg):
-        if log_fn:
-            log_fn(msg)
-
-    sheet_id = sheet.id
-
-    # 1. 清空內容
-    sheet.batch_clear(["A2:BJ"])
-    log("🔵 清空內容完成（A2:BJ）")
-
-    # 2. 清空格式：repeatCell 把 userEnteredFormat 整個欄位重設為空物件
-    #    fields="userEnteredFormat" 代表整個 userEnteredFormat 結構都清除
-    requests = [{
-        "repeatCell": {
-            "range": {
-                "sheetId":          sheet_id,
-                "startRowIndex":    1,       # row 2（0-based）
-                "endRowIndex":      10000,   # 足夠大，涵蓋所有資料列
-                "startColumnIndex": 0,       # A
-                "endColumnIndex":   62,      # BJ（0-based 第 62 欄 = BJ）
-            },
-            "cell":   {"userEnteredFormat": {}},
-            "fields": "userEnteredFormat",
-        }
-    }]
-    try:
-        sheet.spreadsheet.batch_update({"requests": requests})
-        log("🔵 清空格式完成（A2:BJ）")
-    except Exception as e:
-        log(f"⚠️ 清空格式失敗：{e}")
-
-
-# ═══════════════════════════════════════════════════════════════
-# 共用：找 B 欄最後一筆非空白列的下一列（下半月起始列）
-# ═══════════════════════════════════════════════════════════════
-
-def _get_b_col_next_row(sheet) -> int:
-    """
-    掃描 B 欄，回傳最後一筆非空白列的「下一列」列號（1-based）。
-    若 B2 起全部空白，回傳 2（等同上半月）。
-    """
-    b_vals = sheet.col_values(2)  # B 欄，index 從 1 開始，b_vals[0]=B1
-    last_non_empty = 1            # 至少有標題列
-    for i, v in enumerate(b_vals):
-        if str(v).strip():
-            last_non_empty = i + 1  # 1-based
-    if last_non_empty <= 1:
-        return 2  # 沒有資料，從第 2 列開始
-    return last_non_empty + 1
-
-
-# ═══════════════════════════════════════════════════════════════
 # ③ 訂單搬運到範本
 # ═══════════════════════════════════════════════════════════════
 
@@ -212,10 +151,8 @@ def copy_orders_to_template(
 ) -> dict:
     """
     來源：{期別}訂單-{地區}（Google Sheet 第一個工作表，A2:BJ）
-          包含內容及格式一併搬運。
     目標：{期別}金流對帳-{地區} 的「範本」工作表
-    上半月：清空 A2:BJ 內容及格式，再貼入 A2。
-    下半月：從範本 B 欄最後一筆非空白列的下一列貼入。
+    上半月：清空再貼；下半月：接在最後一筆後面
     回傳：{"count": 筆數, "start_row": 起始列號}
     """
     def log(msg):
@@ -246,33 +183,25 @@ def copy_orders_to_template(
     log(f"📋 讀取 {len(data)} 筆資料")
 
     first_half = is_first_half(period)
+    start_row  = _get_period_paste_row(template_sheet, first_half, log_fn=log)
+    count      = paste_data(template_sheet, start_row, data)
 
-    if first_half:
-        # ── 上半月：先清空內容及格式，從 A2 貼入 ──
-        log("🔵 上半月：清空範本 A2:BJ 內容及格式...")
-        _clear_sheet_content_and_format(template_sheet, log_fn)
-        start_row = 2
-        log(f"🔵 從第 {start_row} 列貼入")
-    else:
-        # ── 下半月：從 B 欄最後一筆非空白列下一列貼入 ──
-        start_row = _get_b_col_next_row(template_sheet)
-        log(f"🔵 下半月：從第 {start_row} 列（B欄最後非空白列+1）接續貼入")
+    log(f"✅ 搬運完成：{count} 筆（起始列：{start_row}，"
+        f"{'上半月清空後貼入' if first_half else '下半月接續貼入'}）")
 
-    count = paste_data(template_sheet, start_row, data)
-
-    log(f"✅ 內容搬運完成：{count} 筆（起始列：{start_row}）")
-
-    # ── 搬移格式（底色 + 字型 + 列高 21px）──────────────────
+    # 搬移格式（底色 + 字型 + 列高 21px）
+    # 來源：訂單工作表第 2 列起（共 count 列）
+    # 目標：範本工作表 start_row 起
     try:
         import traceback
         src_row_nums = list(range(2, 2 + count))
         log(f"🔵 讀取格式中（訂單工作表第 2–{1 + count} 列）...")
         fmt_map = _fetch_row_fmts(
-            spreadsheet_id=order_file["id"],
-            sheet_title=source_sheet.title,
-            row_nums=src_row_nums,
+            spreadsheet_id = order_file["id"],
+            sheet_title    = source_sheet.title,
+            row_nums       = src_row_nums,
         )
-        log("🔵 格式讀取完成，套用中...")
+        log(f"🔵 格式讀取完成，套用中...")
         fmts = [fmt_map.get(r) for r in src_row_nums]
         _apply_fmts(template_sheet, start_row, fmts)
         log(f"🔵 格式搬移完成（{count} 列，列高 21px）")
@@ -286,6 +215,23 @@ def copy_orders_to_template(
 # ═══════════════════════════════════════════════════════════════
 # ④ 範本加工
 # ═══════════════════════════════════════════════════════════════
+
+def _sort_key(value):
+    """
+    排序用 key：
+    1. 空值排最後
+    2. 可轉數字者用數字排序
+    3. 其他用去頭尾空白後的文字排序
+    """
+    s = "" if value is None or pd.isna(value) else str(value).strip()
+    if not s:
+        return (2, "")
+    s_num = s.replace(",", "")
+    try:
+        return (0, float(s_num))
+    except ValueError:
+        return (1, s)
+
 
 ABNORMAL_KEYWORDS = ["異動", "加時", "減時", "請假", "補做", "遲到", "薪資", "未服務", "加洗", "未洗", "加收", "退款"]
 EXPANDABLE_TYPES  = ["水洗", "家電", "座椅", "收納", "地毯", "其他"]
@@ -306,7 +252,6 @@ def process_template(
 ) -> dict:
     """
     範本加工：只針對 start_row 起的資料列做加工。
-    排序鍵：E欄(col 4) → H欄(col 7, 日期) → M欄(col 12, 文字)。
     Double check：加工前主單數 = 加工後主單數（B欄不含-1/-2）。
     """
     def log(msg):
@@ -348,49 +293,21 @@ def process_template(
 
     df_new = pd.DataFrame(new_rows)
 
-    # ── 1. 排序：E(col4) → H(col7, 日期) → M(col12, 文字) ──
-    # H 欄是日期格式：先嘗試轉 datetime，失敗則保留原值（字串比較）
-    # M 欄是文字格式：直接轉 str 排序
-    def _to_sortable_date(val):
-        """
-        將各種日期值轉成可排序字串 YYYY-MM-DD。
-        支援月日不補零：2026/5/1、2026/5/10 都能正確解析。
-        無法解析時回傳空字串（排最前），確保不用原字串做字典序比較。
-        """
-        import re as _re
-        if pd.isna(val) or str(val).strip() == "":
-            return ""
-        s = str(val).strip()
-        # YYYY/M/D 或 YYYY-M-D（月日可單位數）
-        m = _re.match(r"^(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})", s)
-        if m:
-            y, mo, d = m.group(1), m.group(2).zfill(2), m.group(3).zfill(2)
-            return f"{y}-{mo}-{d}"
-        # M/D/YYYY（美式）
-        m = _re.match(r"^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})", s)
-        if m:
-            mo, d, y = m.group(1).zfill(2), m.group(2).zfill(2), m.group(3)
-            return f"{y}-{mo}-{d}"
-        return ""  # 無法解析給空字串，不用字串比較
+    # 1. 排序：E → H → M
+    # 先 trim 空白；可轉數字者用數字排序，否則用文字排序，避免 M 欄看似未排序。
+    for col_idx in [4, 7, 12]:
+        df_new[f"__sort_{col_idx}"] = df_new[col_idx].apply(_sort_key)
 
-    col_e  = df_new[4].astype(str)
-    col_h  = df_new[7].apply(_to_sortable_date)
-    col_m  = df_new[12].astype(str)
-
-    sort_key_df = pd.DataFrame({
-        "e": col_e,
-        "h": col_h,
-        "m": col_m,
-    })
-    sorted_idx = sort_key_df.sort_values(
-        by=["e", "h", "m"], ascending=True
-    ).index
-
-    df_new     = df_new.loc[sorted_idx].reset_index(drop=True)
+    df_new = (
+        df_new
+        .sort_values(by=["__sort_4", "__sort_7", "__sort_12"], ascending=True)
+        .drop(columns=["__sort_4", "__sort_7", "__sort_12"])
+        .reset_index(drop=True)
+    )
     sort_count = len(df_new)
-    log(f"🔵 排序完成（E→H→M）：{sort_count} 筆")
+    log(f"🔵 排序完成：{sort_count} 筆（E → H → M）")
 
-    # ── 2. 異常標記 ───────────────────────────────────────────
+    # 2. 異常標記
     mark_count = 0
     for idx, row in df_new.iterrows():
         ap       = str(row[41]) if pd.notna(row[41]) else ""
@@ -401,19 +318,19 @@ def process_template(
             mark_count += 1
     log(f"🔵 異常標記：{mark_count} 筆")
 
-    # ── 3. 水洗類別去重 ───────────────────────────────────────
+    # 3. 水洗類別去重
     for idx, row in df_new.iterrows():
         e_text = str(row[4])
         if "3水洗：" in e_text:
             df_new.at[idx, 4] = _dedupe_wash_text(e_text)
 
-    # ── 4. 儲值金標記 ─────────────────────────────────────────
+    # 4. 儲值金標記
     for idx, row in df_new.iterrows():
         e_text = str(row[4])
         if "VIP券" in e_text or "儲值金" in e_text:
             df_new.at[idx, 0] = "儲值金"
 
-    # ── 5. F/G 欄拆解 ─────────────────────────────────────────
+    # 5. F/G 欄拆解
     log("🔵 F/G 欄服務項目拆解中...")
     expanded_new, expand_count, warnings, category_counts, new_row_indices = _expand_fg_rows(df_new)
     for w in warnings:
@@ -680,6 +597,63 @@ def _build_sheets_service():
                                            cache_discovery=False)
 
 
+def _clear_a2_bj_contents_and_formats(sheet, log_fn=None) -> None:
+    """
+    清空 A2:BJ 的內容與格式。
+    注意：Google Sheets API 的 repeatCell 清格式需用 batch_update；
+    gspread 的 batch_clear 只清內容，不會清格式。
+    """
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    max_rows = max(sheet.row_count, 2)
+
+    # 1) 清內容
+    sheet.batch_clear([f"A2:BJ{max_rows}"])
+
+    # 2) 清格式：A2:BJ 最後列
+    requests = [{
+        "repeatCell": {
+            "range": {
+                "sheetId": sheet.id,
+                "startRowIndex": 1,       # 第 2 列，0-based
+                "endRowIndex": max_rows,
+                "startColumnIndex": 0,    # A
+                "endColumnIndex": 62,     # BJ
+            },
+            "cell": {"userEnteredFormat": {}},
+            "fields": "userEnteredFormat",
+        }
+    }]
+    sheet.spreadsheet.batch_update({"requests": requests})
+    log("🧹 已清空 A2:BJ 的內容與格式")
+
+
+def _get_append_row_by_col_b(sheet) -> int:
+    """
+    依 B 欄最後一個非空白列，回傳下一列作為貼入起始列。
+    若 B 欄沒有資料，回傳 2。
+    """
+    vals = sheet.get("B2:B") or []
+    last_offset = -1
+    for i, row in enumerate(vals):
+        if row and str(row[0]).strip():
+            last_offset = i
+    return 2 if last_offset < 0 else 2 + last_offset + 1
+
+
+def _get_period_paste_row(sheet, first_half: bool, log_fn=None) -> int:
+    """
+    上半月：清空 A2:BJ 內容與格式後，從第 2 列貼入。
+    下半月：依 B 欄最後非空白列的下一列貼入。
+    """
+    if first_half:
+        _clear_a2_bj_contents_and_formats(sheet, log_fn=log_fn)
+        return 2
+    return _get_append_row_by_col_b(sheet)
+
+
 def _color_or_none(c: dict | None) -> dict | None:
     """白色或空值回傳 None，其他回傳 RGB dict。"""
     if not c:
@@ -692,14 +666,59 @@ def _color_or_none(c: dict | None) -> dict | None:
     return {"red": r, "green": g, "blue": b}
 
 
+def _cell_format_from_effective(ef: dict | None) -> dict:
+    """
+    將 effectiveFormat 轉成可寫入 userEnteredFormat 的格式。
+    目前搬運 A:BJ 逐格常用格式：
+    - 背景色
+    - 字型 / 字級 / 粗體 / 斜體 / 字色
+    - 水平 / 垂直對齊
+    - 換行
+    - 數字格式
+    """
+    ef = ef or {}
+    out = {}
+
+    bg = _color_or_none(ef.get("backgroundColor"))
+    if bg:
+        out["backgroundColor"] = bg
+
+    tf = ef.get("textFormat") or {}
+    text_format = {}
+    for key in ["fontFamily", "fontSize", "bold", "italic", "strikethrough", "underline"]:
+        if tf.get(key) is not None:
+            text_format[key] = tf.get(key)
+
+    fg = _color_or_none(tf.get("foregroundColor"))
+    if fg:
+        text_format["foregroundColor"] = fg
+
+    if text_format:
+        out["textFormat"] = text_format
+
+    for key in ["horizontalAlignment", "verticalAlignment", "wrapStrategy"]:
+        if ef.get(key) is not None:
+            out[key] = ef.get(key)
+
+    if ef.get("numberFormat"):
+        out["numberFormat"] = ef.get("numberFormat")
+
+    if ef.get("textRotation"):
+        out["textRotation"] = ef.get("textRotation")
+
+    return out
+
+
 def _fetch_row_fmts(spreadsheet_id: str, sheet_title: str,
                     row_nums: list[int]) -> dict[int, dict]:
     """
-    批次讀取多列格式（背景色＋字型）。
-    一次讀整個連續範圍（min~max 列），再逐列解析。
-    row_nums: 1-based 列號清單（需連續或接近連續）
-    回傳: {row_num: {"bg": dict|None, "font": dict|None}}
-    錯誤直接 raise，讓呼叫端的 nested try 寫到 log。
+    批次讀取多列 A:BJ 逐格格式。
+    回傳：
+      {
+        row_num: {
+          "cells": [A欄格式, B欄格式, ..., BJ欄格式]
+        }
+      }
     """
     if not row_nums:
         return {}
@@ -716,87 +735,78 @@ def _fetch_row_fmts(spreadsheet_id: str, sheet_title: str,
     ).execute()
 
     try:
-        all_row_data = (
-            result["sheets"][0]["data"][0].get("rowData", [])
-        )
+        all_row_data = result["sheets"][0]["data"][0].get("rowData", [])
     except (IndexError, KeyError):
-        return {r: {"bg": None, "font": None} for r in row_nums}
+        return {r: {"cells": [{} for _ in range(62)]} for r in row_nums}
 
     fmt_map = {}
     for row_num in row_nums:
-        idx = row_num - min_row   # 0-based offset
+        idx = row_num - min_row
+        cells = []
         try:
             values = all_row_data[idx].get("values", [])
-            ef     = values[0].get("effectiveFormat", {}) if values else {}
-            bg     = _color_or_none(ef.get("backgroundColor"))
-            tf     = ef.get("textFormat", {})
-            font   = {
-                "fontFamily":      tf.get("fontFamily"),
-                "fontSize":        tf.get("fontSize"),
-                "bold":            tf.get("bold"),
-                "italic":          tf.get("italic"),
-                "foregroundColor": _color_or_none(tf.get("foregroundColor")),
-            } if tf else None
-            fmt_map[row_num] = {"bg": bg, "font": font}
         except (IndexError, KeyError, TypeError):
-            fmt_map[row_num] = {"bg": None, "font": None}
+            values = []
+
+        for col_idx in range(62):
+            try:
+                ef = values[col_idx].get("effectiveFormat", {}) if col_idx < len(values) else {}
+            except (KeyError, TypeError):
+                ef = {}
+            cells.append(_cell_format_from_effective(ef))
+
+        fmt_map[row_num] = {"cells": cells}
 
     return fmt_map
 
 
 def _apply_fmts(target_sheet, paste_start: int, fmts: list[dict | None]):
     """
-    套用格式到目標工作表。
-    每列：背景色 + 字型（各自只在有值時寫入）+ 列高 21px。
+    套用 A:BJ 逐格格式到目標工作表，並將列高固定為 21px。
     """
     if not fmts:
         return
 
     requests = []
     for i, fmt in enumerate(fmts):
-        row_num  = paste_start + i
-        fmt      = fmt or {}
-        cell_fmt = {}
-        fields   = []
+        row_num = paste_start + i
+        cells = (fmt or {}).get("cells") or [{} for _ in range(62)]
 
-        bg = fmt.get("bg")
-        if bg:
-            cell_fmt["backgroundColor"] = bg
-            fields.append("userEnteredFormat.backgroundColor")
+        for col_idx, cell_fmt in enumerate(cells[:62]):
+            if not cell_fmt:
+                continue
 
-        font = fmt.get("font") or {}
-        tf   = {}
-        if font.get("fontFamily"):
-            tf["fontFamily"] = font["fontFamily"]
-        if font.get("fontSize") is not None:
-            tf["fontSize"] = font["fontSize"]
-        if font.get("bold") is not None:
-            tf["bold"] = font["bold"]
-        if font.get("italic") is not None:
-            tf["italic"] = font["italic"]
-        fg = font.get("foregroundColor")
-        if fg:
-            tf["foregroundColor"] = fg
-        if tf:
-            cell_fmt["textFormat"] = tf
-            fields.append("userEnteredFormat.textFormat")
+            fields = []
+            for key in [
+                "backgroundColor",
+                "textFormat",
+                "horizontalAlignment",
+                "verticalAlignment",
+                "wrapStrategy",
+                "numberFormat",
+                "textRotation",
+            ]:
+                if key in cell_fmt:
+                    fields.append(f"userEnteredFormat.{key}")
 
-        if cell_fmt and fields:
+            if not fields:
+                continue
+
             requests.append({
                 "repeatCell": {
                     "range": {
                         "sheetId":          target_sheet.id,
                         "startRowIndex":    row_num - 1,
                         "endRowIndex":      row_num,
-                        "startColumnIndex": 0,
-                        "endColumnIndex":   62,
+                        "startColumnIndex": col_idx,
+                        "endColumnIndex":   col_idx + 1,
                     },
                     "cell":   {"userEnteredFormat": cell_fmt},
                     "fields": ",".join(fields),
                 }
             })
 
-        # 列高固定 21px（不論有無格式都設定）
+        # 列高固定 21px
         requests.append({
             "updateDimensionProperties": {
                 "range": {
@@ -823,10 +833,6 @@ def copy_classified_data(
     """
     分類搬運：只分類 template_start_row 起的新資料。
     搬運時同步搬移底色、字型，並設定目標列高 21px。
-
-    上半月：先清空各目標工作表 A2:BJ 內容及格式，再從 A2 貼入。
-    下半月：各目標工作表從 B 欄最後一筆非空白列的下一列接續貼入。
-
     1. 先分其他承攬（水洗/收納/家電/座椅/地毯）
     2. 再分清潔承攬
     3. 無法分類的資料跳出警告
@@ -842,13 +848,12 @@ def copy_classified_data(
     ss_rec   = open_spreadsheet(reconciliation_id)
     template = ss_rec.worksheet("範本")
 
-    first_half = is_first_half(period)
-
-    # ── 讀取待分類資料（來自範本加工後）──────────────────────
     if template_start_row and template_start_row > 2 and category_counts:
+        # 下半月：用 ④ 加工後各服務列數加總，計算精確結束列號
         total_new = sum(category_counts.values())
         end_row   = template_start_row + total_new - 1
         log(f"📋 從範本第 {template_start_row} 至第 {end_row} 列，讀取 {total_new} 筆")
+        # 確保工作表有足夠列數
         if template.row_count < end_row:
             template.add_rows(end_row - template.row_count + 10)
         raw  = template.get(
@@ -857,6 +862,7 @@ def copy_classified_data(
         ) or []
         data = raw
     elif template_start_row and template_start_row > 2:
+        # 下半月但無 category_counts：用工作表實際最後列
         last = template.row_count
         raw  = template.get(
             f"A{template_start_row}:BJ{last}",
@@ -913,17 +919,18 @@ def copy_classified_data(
             else:
                 log(f"🔵 Double check [{cat}]：{actual} 列 ✅")
 
+    first_half     = is_first_half(period)
     template_sheet = ss_rec.worksheet("範本")
     ss_clean       = open_spreadsheet(cleaning_id)
     ss_other       = open_spreadsheet(other_id)
     counts         = {}
 
-    # ── 共用：計算來源列號（對應範本工作表）──────────────────
+    # ── 共用：計算來源列號 ────────────────────────────────────
     def _sheet_row(orig_idx: int) -> int:
         """
         data 中的 0-based index → 範本工作表 1-based 列號。
-        下半月：data 從 template_start_row 開始讀，index 0 = template_start_row。
-        上半月：data 從第 2 列開始，index 0 = 第 2 列。
+        下半月：data 從 template_start_row 開始讀，所以 index 0 = template_start_row。
+        上半月：data 從第 2 列開始，所以 index 0 = 第 2 列。
         """
         if template_start_row and template_start_row > 2:
             return template_start_row + orig_idx
@@ -939,18 +946,8 @@ def copy_classified_data(
             continue
 
         try:
-            target = ss_other.worksheet(sheet_name)
-
-            if first_half:
-                # 上半月：清空內容及格式，從 A2 貼入
-                log(f"🔵 {label} 上半月：清空 {sheet_name} A2:BJ 內容及格式...")
-                _clear_sheet_content_and_format(target, log_fn)
-                paste_start = 2
-            else:
-                # 下半月：從 B 欄最後一筆非空白列下一列貼入
-                paste_start = _get_b_col_next_row(target)
-                log(f"🔵 {label} 下半月：從第 {paste_start} 列接續貼入（{sheet_name}）")
-
+            target      = ss_other.worksheet(sheet_name)
+            paste_start = _get_period_paste_row(target, first_half, log_fn=log)
             paste_data(target, paste_start, rows)
             counts[label] = len(rows)
             log(f"✅ {label}：{len(rows)} 筆 → {sheet_name}")
@@ -961,9 +958,9 @@ def copy_classified_data(
                 src_rows = [_sheet_row(i) for i in row_indices]
                 log(f"🔵 {label} 讀取格式（{len(src_rows)} 列）...")
                 fmt_map  = _fetch_row_fmts(
-                    spreadsheet_id=reconciliation_id,
-                    sheet_title=template_sheet.title,
-                    row_nums=src_rows,
+                    spreadsheet_id = reconciliation_id,
+                    sheet_title    = template_sheet.title,
+                    row_nums       = src_rows,
                 )
                 fmts = [fmt_map.get(r) for r in src_rows]
                 _apply_fmts(target, paste_start, fmts)
@@ -980,17 +977,7 @@ def copy_classified_data(
     if cleaning_rows:
         try:
             clean_sheet = ss_clean.worksheet("清潔營收明細")
-
-            if first_half:
-                # 上半月：清空內容及格式，從 A2 貼入
-                log("🔵 清潔 上半月：清空 清潔營收明細 A2:BJ 內容及格式...")
-                _clear_sheet_content_and_format(clean_sheet, log_fn)
-                paste_start = 2
-            else:
-                # 下半月：從 B 欄最後一筆非空白列下一列貼入
-                paste_start = _get_b_col_next_row(clean_sheet)
-                log(f"🔵 清潔 下半月：從第 {paste_start} 列接續貼入（清潔營收明細）")
-
+            paste_start = _get_period_paste_row(clean_sheet, first_half, log_fn=log)
             paste_data(clean_sheet, paste_start, cleaning_rows)
             counts["清潔"] = len(cleaning_rows)
             log(f"✅ 清潔：{len(cleaning_rows)} 筆 → 清潔營收明細")
@@ -1001,9 +988,9 @@ def copy_classified_data(
                 src_rows = [_sheet_row(i) for i in cleaning_row_indices]
                 log(f"🔵 清潔讀取格式（{len(src_rows)} 列）...")
                 fmt_map  = _fetch_row_fmts(
-                    spreadsheet_id=reconciliation_id,
-                    sheet_title=template_sheet.title,
-                    row_nums=src_rows,
+                    spreadsheet_id = reconciliation_id,
+                    sheet_title    = template_sheet.title,
+                    row_nums       = src_rows,
                 )
                 fmts = [fmt_map.get(r) for r in src_rows]
                 _apply_fmts(clean_sheet, paste_start, fmts)
