@@ -68,18 +68,331 @@ st.markdown("""
 
 
 # ═══════════════════════════════════════════════════════════
-# █ 區塊1：設定檔讀寫
+# █ 區塊1：設定讀寫（永久化：Google Sheet 優先，config.yaml 僅作備援）
 # ═══════════════════════════════════════════════════════════
+# 目的：地區設定一旦儲存後，不會因為更新程式、重新部署、container 重啟而遺失。
+# 儲存位置優先順序：
+#   1) st.secrets["CONFIG_SHEET_ID"] 或環境變數 CONFIG_SHEET_ID 指定的 Google Sheet
+#   2) Google Drive 內名為「Lemon Clean 系統設定」的 Google Sheet
+#   3) 若找不到則自動建立「Lemon Clean 系統設定」
+#   4) config.yaml 僅作本機備援，不再是主要儲存來源
 CONFIG_PATH = "config.yaml"
+CONFIG_SHEET_NAME = "Lemon Clean 系統設定"
+REGION_SHEET_NAME = "地區設定"
+SCHEDULE_SHEET_NAME = "排程設定"
+REGION_HEADERS = ["name", "root_folder_id", "allowance_id", "salary_id", "roster_id"]
+SCHEDULE_HEADERS = ["key", "value"]
+
+
+def _safe_secret(key: str, default=None):
+    """安全讀取 Streamlit secrets；本機未設定 secrets 時不噴錯。"""
+    try:
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
+
+def _load_yaml_backup() -> dict:
+    """讀取本機 config.yaml 備援；檔案不存在或格式錯誤時回傳預設值。"""
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+            if not isinstance(data, dict):
+                return {"regions": [], "schedule": {}}
+            data.setdefault("regions", [])
+            data.setdefault("schedule", {})
+            return data
+    except FileNotFoundError:
+        return {"regions": [], "schedule": {}}
+    except Exception:
+        return {"regions": [], "schedule": {}}
+
+
+def _save_yaml_backup(cfg: dict):
+    """保留本機備份；即使失敗也不能影響主流程。"""
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
+    except Exception:
+        pass
+
+
+def _build_sheets_service():
+    """建立 Google Sheets API v4 client。"""
+    import googleapiclient.discovery
+    import google.auth.transport.requests
+    from modules.auth import get_credentials
+
+    creds = get_credentials()
+    if not getattr(creds, "token", None) or not creds.valid:
+        try:
+            creds.refresh(google.auth.transport.requests.Request())
+        except Exception:
+            pass
+    return googleapiclient.discovery.build(
+        "sheets", "v4", credentials=creds, cache_discovery=False
+    )
+
+
+def _get_config_sheet_id_from_local_or_secret(local_cfg: dict) -> str | None:
+    """優先使用 secrets / env / yaml 指定的設定表 ID。"""
+    import os
+
+    candidates = [
+        _safe_secret("CONFIG_SHEET_ID"),
+        _safe_secret("config_sheet_id"),
+        os.environ.get("CONFIG_SHEET_ID"),
+        local_cfg.get("config_sheet_id"),
+        local_cfg.get("settings_spreadsheet_id"),
+    ]
+    for val in candidates:
+        val = str(val).strip() if val else ""
+        if val:
+            return val
+    return None
+
+
+def _find_or_create_config_spreadsheet(local_cfg: dict) -> str:
+    """
+    找到或建立永久設定 Google Sheet。
+    若沒有在 secrets 指定 ID，會用名稱搜尋 Drive；找不到才自動建立。
+    """
+    from modules.auth import get_drive_service
+
+    specified_id = _get_config_sheet_id_from_local_or_secret(local_cfg)
+    if specified_id:
+        return specified_id
+
+    drive = get_drive_service()
+    safe_name = CONFIG_SHEET_NAME.replace("'", "\\'")
+    q = (
+        "mimeType='application/vnd.google-apps.spreadsheet' "
+        f"and name='{safe_name}' and trashed=false"
+    )
+    result = drive.files().list(
+        q=q,
+        fields="files(id,name,modifiedTime)",
+        pageSize=10,
+        orderBy="modifiedTime desc",
+        includeItemsFromAllDrives=True,
+        supportsAllDrives=True,
+    ).execute()
+    files = result.get("files", [])
+    if files:
+        return files[0]["id"]
+
+    created = drive.files().create(
+        body={
+            "name": CONFIG_SHEET_NAME,
+            "mimeType": "application/vnd.google-apps.spreadsheet",
+        },
+        fields="id",
+        supportsAllDrives=True,
+    ).execute()
+    return created["id"]
+
+
+def _ensure_config_sheets(spreadsheet_id: str):
+    """確保設定表內有「地區設定」與「排程設定」兩個工作表與表頭。"""
+    svc = _build_sheets_service()
+    meta = svc.spreadsheets().get(
+        spreadsheetId=spreadsheet_id,
+        fields="sheets.properties(sheetId,title)",
+    ).execute()
+    titles = [s["properties"]["title"] for s in meta.get("sheets", [])]
+
+    requests = []
+    if REGION_SHEET_NAME not in titles:
+        requests.append({"addSheet": {"properties": {"title": REGION_SHEET_NAME}}})
+    if SCHEDULE_SHEET_NAME not in titles:
+        requests.append({"addSheet": {"properties": {"title": SCHEDULE_SHEET_NAME}}})
+    if requests:
+        svc.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": requests},
+        ).execute()
+
+    def _ensure_header(sheet_name: str, headers: list[str]):
+        got = svc.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{sheet_name}'!A1:Z1",
+        ).execute().get("values", [])
+        first_row = got[0] if got else []
+        if first_row[:len(headers)] != headers:
+            svc.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range=f"'{sheet_name}'!A1",
+                valueInputOption="RAW",
+                body={"values": [headers]},
+            ).execute()
+
+    _ensure_header(REGION_SHEET_NAME, REGION_HEADERS)
+    _ensure_header(SCHEDULE_SHEET_NAME, SCHEDULE_HEADERS)
+
+
+def _parse_schedule_value(key: str, value: str):
+    text = str(value).strip()
+    if key in ("enabled", "all_regions"):
+        return text.lower() in ("true", "1", "yes", "y", "是", "啟用")
+    if key == "days":
+        return [int(x.strip()) for x in text.split(",") if x.strip()]
+    return text
+
+
+def _serialize_schedule_value(value):
+    if isinstance(value, list):
+        return ",".join(str(v) for v in value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return "" if value is None else str(value)
+
+
+def _read_config_from_sheet(spreadsheet_id: str) -> dict:
+    """從 Google Sheet 讀取設定。"""
+    svc = _build_sheets_service()
+    _ensure_config_sheets(spreadsheet_id)
+
+    region_values = svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{REGION_SHEET_NAME}'!A2:E",
+    ).execute().get("values", [])
+
+    regions = []
+    for row in region_values:
+        row = row + [""] * (len(REGION_HEADERS) - len(row))
+        name = str(row[0]).strip()
+        if not name:
+            continue
+        regions.append({
+            "name": name,
+            "root_folder_id": str(row[1]).strip(),
+            "allowance_id": str(row[2]).strip(),
+            "salary_id": str(row[3]).strip(),
+            "roster_id": str(row[4]).strip(),
+        })
+
+    schedule_values = svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{SCHEDULE_SHEET_NAME}'!A2:B",
+    ).execute().get("values", [])
+
+    schedule = {}
+    for row in schedule_values:
+        if not row:
+            continue
+        key = str(row[0]).strip()
+        value = row[1] if len(row) > 1 else ""
+        if key:
+            try:
+                schedule[key] = _parse_schedule_value(key, value)
+            except Exception:
+                schedule[key] = value
+
+    if not schedule:
+        schedule = {
+            "enabled": False,
+            "days": [10, 25],
+            "time": "09:00",
+            "timezone": "Asia/Taipei",
+            "task": "建立期別資料夾與檔案",
+            "all_regions": True,
+        }
+
+    return {
+        "config_sheet_id": spreadsheet_id,
+        "regions": regions,
+        "schedule": schedule,
+    }
+
+
+def _write_config_to_sheet(spreadsheet_id: str, cfg: dict):
+    """將地區與排程設定寫回 Google Sheet。"""
+    svc = _build_sheets_service()
+    _ensure_config_sheets(spreadsheet_id)
+
+    regions = cfg.get("regions", []) or []
+    region_rows = [REGION_HEADERS]
+    for r in regions:
+        region_rows.append([
+            r.get("name", ""),
+            r.get("root_folder_id", ""),
+            r.get("allowance_id", ""),
+            r.get("salary_id", ""),
+            r.get("roster_id", ""),
+        ])
+
+    schedule = cfg.get("schedule", {}) or {}
+    schedule_rows = [SCHEDULE_HEADERS]
+    for key in ["enabled", "days", "time", "timezone", "task", "all_regions"]:
+        if key in schedule:
+            schedule_rows.append([key, _serialize_schedule_value(schedule.get(key))])
+    for key, value in schedule.items():
+        if key not in ["enabled", "days", "time", "timezone", "task", "all_regions"]:
+            schedule_rows.append([key, _serialize_schedule_value(value)])
+
+    svc.spreadsheets().values().clear(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{REGION_SHEET_NAME}'!A:E",
+        body={},
+    ).execute()
+    svc.spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{REGION_SHEET_NAME}'!A1",
+        valueInputOption="RAW",
+        body={"values": region_rows},
+    ).execute()
+
+    svc.spreadsheets().values().clear(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{SCHEDULE_SHEET_NAME}'!A:B",
+        body={},
+    ).execute()
+    svc.spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{SCHEDULE_SHEET_NAME}'!A1",
+        valueInputOption="RAW",
+        body={"values": schedule_rows},
+    ).execute()
+
 
 def load_config():
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    """
+    載入設定：Google Sheet 優先。
+    若 Google Sheet 是空的且本機 config.yaml 有舊設定，會自動匯入一次。
+    """
+    local_cfg = _load_yaml_backup()
+    try:
+        sheet_id = _find_or_create_config_spreadsheet(local_cfg)
+        sheet_cfg = _read_config_from_sheet(sheet_id)
+
+        # 首次導入：永久設定表尚無地區，但本機 config.yaml 有地區時，自動搬到 Google Sheet。
+        if not sheet_cfg.get("regions") and local_cfg.get("regions"):
+            local_cfg["config_sheet_id"] = sheet_id
+            _write_config_to_sheet(sheet_id, local_cfg)
+            sheet_cfg = _read_config_from_sheet(sheet_id)
+
+        sheet_cfg.setdefault("regions", [])
+        sheet_cfg.setdefault("schedule", {})
+        _save_yaml_backup(sheet_cfg)
+        return sheet_cfg
+    except Exception as e:
+        st.warning(f"⚠️ 永久設定表讀取失敗，暫用 config.yaml：{e}")
+        local_cfg.setdefault("regions", [])
+        local_cfg.setdefault("schedule", {})
+        return local_cfg
+
 
 def save_config(cfg):
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
+    """儲存設定：優先寫入 Google Sheet，再留一份 config.yaml 備援。"""
+    try:
+        sheet_id = cfg.get("config_sheet_id") or _find_or_create_config_spreadsheet(cfg)
+        cfg["config_sheet_id"] = sheet_id
+        _write_config_to_sheet(sheet_id, cfg)
+    except Exception as e:
+        st.warning(f"⚠️ 永久設定表寫入失敗，僅寫入 config.yaml：{e}")
+    _save_yaml_backup(cfg)
     st.cache_data.clear()
+
 
 config  = load_config()
 regions = config.get("regions", [])
