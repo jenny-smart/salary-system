@@ -293,19 +293,33 @@ def process_template(
 
     df_new = pd.DataFrame(new_rows)
 
-    # 1. 排序：E → H → M
-    # 先 trim 空白；可轉數字者用數字排序，否則用文字排序，避免 M 欄看似未排序。
-    for col_idx in [4, 7, 12]:
-        df_new[f"__sort_{col_idx}"] = df_new[col_idx].apply(_sort_key)
+    # 1. 排序：E → H日期 → M文字
+    df_new = pd.DataFrame(new_rows)
 
-    df_new = (
-        df_new
-        .sort_values(by=["__sort_4", "__sort_7", "__sort_12"], ascending=True)
-        .drop(columns=["__sort_4", "__sort_7", "__sort_12"])
-        .reset_index(drop=True)
+    # 補滿欄位
+    df_new = df_new.reindex(columns=range(max_cols), fill_value="")
+
+    # 建立排序輔助欄
+    df_new["_sort_E"] = df_new[4].astype(str).str.strip()
+    df_new["_sort_H"] = pd.to_datetime(
+        df_new[7].astype(str).str.strip(),
+        errors="coerce"
     )
+    df_new["_sort_M"] = df_new[12].astype(str).str.strip()
+
+    # H欄無法轉日期的放最後
+    df_new = df_new.sort_values(
+        by=["_sort_E", "_sort_H", "_sort_M"],
+        ascending=[True, True, True],
+        na_position="last",
+        kind="mergesort"
+    ).reset_index(drop=True)
+
+    # 移除排序輔助欄
+    df_new = df_new.drop(columns=["_sort_E", "_sort_H", "_sort_M"])
+
     sort_count = len(df_new)
-    log(f"🔵 排序完成：{sort_count} 筆（E → H → M）")
+    log(f"🔵 排序完成：{sort_count} 筆（E → H日期 → M文字）")
 
     # 2. 異常標記
     mark_count = 0
