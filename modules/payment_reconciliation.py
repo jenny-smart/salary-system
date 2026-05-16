@@ -1,6 +1,6 @@
 """
 modules/payment_reconciliation.py
-金流對帳模組  v2026-05d
+金流對帳模組  v2026-05e
 
 流程：
 上半月 / 下半月：
@@ -19,6 +19,9 @@ modules/payment_reconciliation.py
 from __future__ import annotations
 
 import re
+import copy
+import unicodedata
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
@@ -216,21 +219,35 @@ def copy_orders_to_template(
 # ④ 範本加工
 # ═══════════════════════════════════════════════════════════════
 
-def _sort_key(value):
+def _text_sort_key(value):
     """
-    排序用 key：
-    1. 空值排最後
-    2. 可轉數字者用數字排序
-    3. 其他用去頭尾空白後的文字排序
+    文字排序 key：
+    - 全半形正規化 NFKC
+    - 全形空白轉半形空白
+    - 去頭尾空白
+    - 英文大小寫不敏感
     """
-    s = "" if value is None or pd.isna(value) else str(value).strip()
-    if not s:
-        return (2, "")
-    s_num = s.replace(",", "")
-    try:
-        return (0, float(s_num))
-    except ValueError:
-        return (1, s)
+    if value is None or pd.isna(value):
+        return ""
+    text = unicodedata.normalize("NFKC", str(value))
+    text = text.replace("\u3000", " ").strip()
+    return text.casefold()
+
+
+def _date_sort_key(value):
+    """
+    H 欄日期排序 key：可接受 2026/5/1、2026/05/01、2026-5-1。
+    無法轉日期者排最後。
+    """
+    if value is None or pd.isna(value):
+        return pd.Timestamp.max
+    text = unicodedata.normalize("NFKC", str(value)).replace("\u3000", " ").strip()
+    if not text:
+        return pd.Timestamp.max
+    dt = pd.to_datetime(text, errors="coerce")
+    if pd.isna(dt):
+        return pd.Timestamp.max
+    return dt
 
 
 ABNORMAL_KEYWORDS = ["異動", "加時", "減時", "請假", "補做", "遲到", "薪資", "未服務", "加洗", "未洗", "加收", "退款"]
@@ -252,7 +269,13 @@ def process_template(
 ) -> dict:
     """
     範本加工：只針對 start_row 起的資料列做加工。
-    Double check：加工前主單數 = 加工後主單數（B欄不含-1/-2）。
+
+    修正版重點：
+    1. 排序為 E → H日期 → M文字。
+    2. 排序時「資料列 + A:BJ 逐格格式」綁在一起排序。
+    3. F/G 拆解新增列會繼承母列格式。
+    4. 寫回時先清空 A2:BJ 內容與格式，再寫回資料與原格式。
+    5. 最後再套加工產生的底色：橘色異常列、淺綠色拆解新增列。
     """
     def log(msg):
         if log_fn:
@@ -269,6 +292,20 @@ def process_template(
     max_cols = 62
     all_data = [row + [""] * (max_cols - len(row)) for row in all_data]
 
+    # 加工前先抓取目前範本 A:BJ 的逐格格式，之後會跟著資料列一起排序。
+    all_row_nums = list(range(2, 2 + len(all_data)))
+    try:
+        fmt_map = _fetch_row_fmts(
+            spreadsheet_id = reconciliation_id,
+            sheet_title    = sheet.title,
+            row_nums       = all_row_nums,
+        )
+        all_fmts = [fmt_map.get(r, {"cells": [{} for _ in range(max_cols)]}) for r in all_row_nums]
+        log(f"🔵 已讀取範本格式：{len(all_fmts)} 列（A:BJ 逐格格式）")
+    except Exception as e:
+        log(f"⚠️ 範本格式讀取失敗，將只加工資料：{e}")
+        all_fmts = [{"cells": [{} for _ in range(max_cols)]} for _ in all_data]
+
     if start_row is None or start_row <= 2:
         process_start_idx = 0
         log(f"🔵 上半月模式：加工全部 {len(all_data)} 筆")
@@ -281,72 +318,64 @@ def process_template(
             f"加工 {len(all_data) - process_start_idx} 筆新資料")
 
     old_rows = all_data[:process_start_idx]
+    old_fmts = all_fmts[:process_start_idx]
     new_rows = all_data[process_start_idx:]
+    new_fmts = all_fmts[process_start_idx:]
 
     # ── 加工前主單數 ──────────────────────────────────────────
-    before_main      = _count_main_by_service(new_rows)
+    before_main       = _count_main_by_service(new_rows)
     main_count_before = sum(before_main.values())
     log(f"🔵 加工前主單數：{main_count_before} 筆 "
         f"（清潔:{before_main['清潔']} 水洗:{before_main['水洗']} "
         f"家電:{before_main['家電']} 收納:{before_main['收納']} "
         f"座椅:{before_main['座椅']} 地毯:{before_main['地毯']}）")
 
-    df_new = pd.DataFrame(new_rows)
-
-    # 1. 排序：E → H日期 → M文字
-    df_new = pd.DataFrame(new_rows)
-
-    # 補滿欄位
-    df_new = df_new.reindex(columns=range(max_cols), fill_value="")
-
-    # 建立排序輔助欄
-    df_new["_sort_E"] = df_new[4].astype(str).str.strip()
-    df_new["_sort_H"] = pd.to_datetime(
-        df_new[7].astype(str).str.strip(),
-        errors="coerce"
+    # 1. 排序：資料列 + 格式列一起排序，避免底色 / 字型錯位。
+    rows_with_fmt = [
+        {"row": row, "fmt": fmt, "orig_index": idx}
+        for idx, (row, fmt) in enumerate(zip(new_rows, new_fmts))
+    ]
+    rows_with_fmt.sort(
+        key=lambda x: (
+            _text_sort_key(x["row"][4] if len(x["row"]) > 4 else ""),   # E 購買項目
+            _date_sort_key(x["row"][7] if len(x["row"]) > 7 else ""),   # H 服務日期
+            _text_sort_key(x["row"][12] if len(x["row"]) > 12 else ""), # M 客戶姓名
+            x["orig_index"],                                             # 穩定排序保底
+        )
     )
-    df_new["_sort_M"] = df_new[12].astype(str).str.strip()
+    sorted_rows = [x["row"] for x in rows_with_fmt]
+    sorted_fmts = [x["fmt"] for x in rows_with_fmt]
+    sort_count = len(sorted_rows)
+    log(f"🔵 排序完成：{sort_count} 筆（E → H日期 → M文字；格式跟著原列排序）")
 
-    # H欄無法轉日期的放最後
-    df_new = df_new.sort_values(
-        by=["_sort_E", "_sort_H", "_sort_M"],
-        ascending=[True, True, True],
-        na_position="last",
-        kind="mergesort"
-    ).reset_index(drop=True)
-
-    # 移除排序輔助欄
-    df_new = df_new.drop(columns=["_sort_E", "_sort_H", "_sort_M"])
-
-    sort_count = len(df_new)
-    log(f"🔵 排序完成：{sort_count} 筆（E → H日期 → M文字）")
-
-    # 2. 異常標記
+    # 2. 異常標記：只改資料，原格式仍保留；最後再套橘色底。
     mark_count = 0
-    for idx, row in df_new.iterrows():
-        ap       = str(row[41]) if pd.notna(row[41]) else ""
-        ay       = str(row[50]) if pd.notna(row[50]) else ""
+    for idx, row in enumerate(sorted_rows):
+        ap       = str(row[41]) if len(row) > 41 and row[41] is not None else ""
+        ay       = str(row[50]) if len(row) > 50 and row[50] is not None else ""
         combined = (ap + " " + ay).strip()
         if any(kw in combined for kw in ABNORMAL_KEYWORDS):
-            df_new.at[idx, 10] = combined
+            row[10] = combined
             mark_count += 1
     log(f"🔵 異常標記：{mark_count} 筆")
 
     # 3. 水洗類別去重
-    for idx, row in df_new.iterrows():
-        e_text = str(row[4])
+    for row in sorted_rows:
+        e_text = str(row[4]) if len(row) > 4 else ""
         if "3水洗：" in e_text:
-            df_new.at[idx, 4] = _dedupe_wash_text(e_text)
+            row[4] = _dedupe_wash_text(e_text)
 
     # 4. 儲值金標記
-    for idx, row in df_new.iterrows():
-        e_text = str(row[4])
+    for row in sorted_rows:
+        e_text = str(row[4]) if len(row) > 4 else ""
         if "VIP券" in e_text or "儲值金" in e_text:
-            df_new.at[idx, 0] = "儲值金"
+            row[0] = "儲值金"
 
-    # 5. F/G 欄拆解
+    # 5. F/G 欄拆解：新增列繼承母列格式。
     log("🔵 F/G 欄服務項目拆解中...")
-    expanded_new, expand_count, warnings, category_counts, new_row_indices = _expand_fg_rows(df_new)
+    expanded_new, expanded_fmts, expand_count, warnings, category_counts, new_row_indices = (
+        _expand_fg_rows_with_fmts(sorted_rows, sorted_fmts)
+    )
     for w in warnings:
         log(f"⚠️ {w}")
     log(f"🔵 拆解完成：新增 {expand_count} 列")
@@ -375,22 +404,27 @@ def process_template(
 
     # ── 寫回範本 ──────────────────────────────────────────────
     final_data = old_rows + expanded_new
+    final_fmts = old_fmts + expanded_fmts
     total_rows = len(final_data)
 
-    sheet.batch_clear([f"A2:BJ{total_rows + expand_count + 10}"])
+    # 先清空 A2:BJ 的內容與格式，避免排序 / 拆解後殘留舊格式。
+    _clear_a2_bj_contents_and_formats(sheet, log_fn=log)
+
     if final_data:
         sheet.update("A2", final_data, value_input_option="USER_ENTERED")
+        _apply_fmts(sheet, 2, final_fmts)
+        log(f"🔵 已寫回資料與原列格式：{len(final_data)} 列")
 
     ss_rec          = sheet.spreadsheet
     format_requests = []
 
-    # 橘色底（K欄有值）
+    # 橘色底（K欄有值）：在原格式寫回後才套用，讓加工底色覆蓋原底色。
     if mark_count > 0:
         try:
             orange_bg = {"red": 1.0, "green": 0.6, "blue": 0.2}
-            all_k = sheet.get("K2:K")
+            all_k = sheet.get(f"K2:K{total_rows + 1}")
             for i, row_val in enumerate(all_k):
-                if row_val and row_val[0].strip():
+                if row_val and str(row_val[0]).strip():
                     row_num = i + 2
                     format_requests.append({
                         "repeatCell": {
@@ -406,7 +440,7 @@ def process_template(
         except Exception as e:
             log(f"⚠️ 橘色標記失敗：{e}")
 
-    # 淺綠色底（拆解新增列）
+    # 淺綠色底（拆解新增列）：在原格式寫回後才套用，讓加工底色覆蓋原底色。
     if new_row_indices:
         try:
             green_bg = {"red": 0.85, "green": 0.96, "blue": 0.85}
@@ -575,6 +609,75 @@ def _expand_fg_rows(df: pd.DataFrame) -> tuple[list, int, list, dict, list]:
                 category_counts[category] = category_counts.get(category, 0) + len(items)
 
     return output, expand_count, warnings, category_counts, new_row_indices
+
+
+def _expand_fg_rows_with_fmts(rows: list[list], fmts: list[dict | None]) -> tuple[list, list, int, list, dict, list]:
+    """
+    F/G 欄拆解，並讓格式跟著資料列：
+    - 原列保留原格式
+    - 拆解新增列繼承母列格式
+    回傳：expanded_rows, expanded_fmts, expand_count, warnings, category_counts, new_row_indices
+    """
+    output_rows      = []
+    output_fmts      = []
+    expand_count     = 0
+    warnings         = []
+    category_counts  = {}
+    new_row_indices  = []
+
+    for row, fmt in zip(rows, fmts):
+        row = list(row)
+        parent_fmt = copy.deepcopy(fmt or {"cells": [{} for _ in range(62)]})
+
+        e_text   = str(row[4]) if len(row) > 4 else ""
+        f_text   = str(row[5]) if len(row) > 5 else ""
+        order_id = str(row[1]) if len(row) > 1 else ""
+
+        is_expandable = any(t in e_text for t in EXPANDABLE_TYPES)
+        if not is_expandable or not f_text.strip():
+            output_rows.append(row)
+            output_fmts.append(parent_fmt)
+            continue
+
+        items = _parse_service_items(f_text)
+        if not items:
+            output_rows.append(row)
+            output_fmts.append(parent_fmt)
+            continue
+
+        category = next((cat for cat in EXPANDABLE_TYPES if cat in e_text), None)
+
+        if len(items) == 1:
+            item    = items[0]
+            new_row = row.copy()
+            new_row[5] = item["name"]
+            new_row[6] = item["qty"]
+            if not item["has_qty"]:
+                warnings.append(f"訂單 {order_id}：F欄無數量（X後無數字），請確認")
+            output_rows.append(new_row)
+            output_fmts.append(copy.deepcopy(parent_fmt))
+            if category:
+                category_counts[category] = category_counts.get(category, 0) + 1
+        else:
+            for i, item in enumerate(items):
+                new_row    = row.copy()
+                new_row[5] = item["name"]
+                new_row[6] = item["qty"]
+                if i > 0:
+                    new_row[1] = f"{order_id}-{i}"
+                    expand_count += 1
+                    new_row_indices.append(len(output_rows))
+                    for col_idx in range(24, 28):
+                        if col_idx < len(new_row):
+                            new_row[col_idx] = ""
+                if not item["has_qty"]:
+                    warnings.append(f"訂單 {order_id} 項目「{item['name']}」：無數量，請確認")
+                output_rows.append(new_row)
+                output_fmts.append(copy.deepcopy(parent_fmt))
+            if category:
+                category_counts[category] = category_counts.get(category, 0) + len(items)
+
+    return output_rows, output_fmts, expand_count, warnings, category_counts, new_row_indices
 
 
 # ═══════════════════════════════════════════════════════════════
