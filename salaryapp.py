@@ -155,7 +155,11 @@ def _get_config_sheet_id_from_local_or_secret(local_cfg: dict) -> str | None:
 def _find_or_create_config_spreadsheet(local_cfg: dict) -> str:
     """
     找到或建立永久設定 Google Sheet。
-    若沒有在 secrets 指定 ID，會用名稱搜尋 Drive；找不到才自動建立。
+
+    重要：若已經在 secrets / env / config.yaml 指定 CONFIG_SHEET_ID，
+    會直接使用該 ID，不再掃描 Drive。
+    這樣可避免 Service Account / 使用者 Drive 空間滿時，
+    drive.files().list() 因 storageQuotaExceeded 直接 403。
     """
     from modules.auth import get_drive_service
 
@@ -169,27 +173,47 @@ def _find_or_create_config_spreadsheet(local_cfg: dict) -> str:
         "mimeType='application/vnd.google-apps.spreadsheet' "
         f"and name='{safe_name}' and trashed=false"
     )
-    result = drive.files().list(
-        q=q,
-        fields="files(id,name,modifiedTime)",
-        pageSize=10,
-        orderBy="modifiedTime desc",
-        includeItemsFromAllDrives=True,
-        supportsAllDrives=True,
-    ).execute()
-    files = result.get("files", [])
-    if files:
-        return files[0]["id"]
 
-    created = drive.files().create(
-        body={
-            "name": CONFIG_SHEET_NAME,
-            "mimeType": "application/vnd.google-apps.spreadsheet",
-        },
-        fields="id",
-        supportsAllDrives=True,
-    ).execute()
-    return created["id"]
+    try:
+        result = drive.files().list(
+            q=q,
+            fields="files(id,name,modifiedTime)",
+            pageSize=10,
+            orderBy="modifiedTime desc",
+            includeItemsFromAllDrives=True,
+            supportsAllDrives=True,
+        ).execute()
+        files = result.get("files", [])
+        if files:
+            return files[0]["id"]
+    except Exception as e:
+        msg = str(e)
+        if "storageQuotaExceeded" in msg or "storage quota" in msg.lower():
+            raise RuntimeError(
+                "Google Drive 儲存空間已滿，無法搜尋永久設定表。"
+                "請先在 Streamlit secrets 或環境變數設定 CONFIG_SHEET_ID，"
+                "或清理 Service Account / 使用者 Drive 空間後重試。"
+            ) from e
+        raise
+
+    try:
+        created = drive.files().create(
+            body={
+                "name": CONFIG_SHEET_NAME,
+                "mimeType": "application/vnd.google-apps.spreadsheet",
+            },
+            fields="id",
+            supportsAllDrives=True,
+        ).execute()
+        return created["id"]
+    except Exception as e:
+        msg = str(e)
+        if "storageQuotaExceeded" in msg or "storage quota" in msg.lower():
+            raise RuntimeError(
+                "Google Drive 儲存空間已滿，無法建立永久設定表。"
+                "請清理 Drive 空間，或先手動建立設定表並設定 CONFIG_SHEET_ID。"
+            ) from e
+        raise
 
 
 def _ensure_config_sheets(spreadsheet_id: str):
