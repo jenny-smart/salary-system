@@ -72,10 +72,13 @@ st.markdown("""
 # ═══════════════════════════════════════════════════════════
 # 目的：地區設定一旦儲存後，不會因為更新程式、重新部署、container 重啟而遺失。
 # 儲存位置優先順序：
-#   1) st.secrets["CONFIG_SHEET_ID"] 或環境變數 CONFIG_SHEET_ID 指定的 Google Sheet
-#   2) Google Drive 內名為「Lemon Clean 系統設定」的 Google Sheet
-#   3) 若找不到則自動建立「Lemon Clean 系統設定」
-#   4) config.yaml 僅作本機備援，不再是主要儲存來源
+#   1) config.yaml 的 master_sheet_id（目前主控表 LemonSalarySystem）
+#   2) st.secrets["CONFIG_SHEET_ID"] 或環境變數 CONFIG_SHEET_ID 指定的 Google Sheet
+#   3) config.yaml 的 config_sheet_id / settings_spreadsheet_id（舊版相容）
+#   4) config.yaml 僅作本機備援
+# 注意：
+#   不再自動搜尋 / 建立「Lemon Clean 系統設定」。
+#   新增、編輯、刪除地區仍透過畫面操作，儲存時寫回主控表。
 CONFIG_PATH = "config.yaml"
 CONFIG_SHEET_NAME = "Lemon Clean 系統設定"
 REGION_SHEET_NAME = "地區設定"
@@ -135,15 +138,24 @@ def _build_sheets_service():
 
 
 def _get_config_sheet_id_from_local_or_secret(local_cfg: dict) -> str | None:
-    """優先使用 secrets / env / yaml 指定的設定表 ID。"""
+    """
+    優先使用主控表 ID。
+
+    你的 config.yaml 目前使用：
+        master_sheet_id: "..."
+
+    因此這裡必須先讀 master_sheet_id，否則程式會以為沒有指定永久設定表，
+    接著走到搜尋 / 建立 Google Sheet 的舊流程，導致 Drive 空間已滿時一直警告。
+    """
     import os
 
     candidates = [
-        _safe_secret("CONFIG_SHEET_ID"),
+        local_cfg.get("master_sheet_id"),          # 新版：主控表 LemonSalarySystem
+        _safe_secret("CONFIG_SHEET_ID"),           # Streamlit secrets 相容
         _safe_secret("config_sheet_id"),
-        os.environ.get("CONFIG_SHEET_ID"),
-        local_cfg.get("config_sheet_id"),
-        local_cfg.get("settings_spreadsheet_id"),
+        os.environ.get("CONFIG_SHEET_ID"),         # 環境變數相容
+        local_cfg.get("config_sheet_id"),          # 舊版相容
+        local_cfg.get("settings_spreadsheet_id"),  # 舊版相容
     ]
     for val in candidates:
         val = str(val).strip() if val else ""
@@ -154,67 +166,24 @@ def _get_config_sheet_id_from_local_or_secret(local_cfg: dict) -> str | None:
 
 def _find_or_create_config_spreadsheet(local_cfg: dict) -> str:
     """
-    找到或建立永久設定 Google Sheet。
+    取得永久設定 Google Sheet ID。
 
-    重要：若已經在 secrets / env / config.yaml 指定 CONFIG_SHEET_ID，
-    會直接使用該 ID，不再掃描 Drive。
-    這樣可避免 Service Account / 使用者 Drive 空間滿時，
-    drive.files().list() 因 storageQuotaExceeded 直接 403。
+    修正版：
+    - 不再自動搜尋 Drive
+    - 不再自動建立「Lemon Clean 系統設定」
+    - 只使用 config.yaml / secrets / env 明確指定的主控表 ID
+
+    新增、編輯、刪除地區仍然透過畫面完成；
+    save_config() 會把結果寫回這張主控表。
     """
-    from modules.auth import get_drive_service
-
     specified_id = _get_config_sheet_id_from_local_or_secret(local_cfg)
     if specified_id:
         return specified_id
 
-    drive = get_drive_service()
-    safe_name = CONFIG_SHEET_NAME.replace("'", "\\'")
-    q = (
-        "mimeType='application/vnd.google-apps.spreadsheet' "
-        f"and name='{safe_name}' and trashed=false"
+    raise RuntimeError(
+        "找不到主控表 ID。請在 config.yaml 設定 master_sheet_id，"
+        "或在 Streamlit secrets / 環境變數設定 CONFIG_SHEET_ID。"
     )
-
-    try:
-        result = drive.files().list(
-            q=q,
-            fields="files(id,name,modifiedTime)",
-            pageSize=10,
-            orderBy="modifiedTime desc",
-            includeItemsFromAllDrives=True,
-            supportsAllDrives=True,
-        ).execute()
-        files = result.get("files", [])
-        if files:
-            return files[0]["id"]
-    except Exception as e:
-        msg = str(e)
-        if "storageQuotaExceeded" in msg or "storage quota" in msg.lower():
-            raise RuntimeError(
-                "Google Drive 儲存空間已滿，無法搜尋永久設定表。"
-                "請先在 Streamlit secrets 或環境變數設定 CONFIG_SHEET_ID，"
-                "或清理 Service Account / 使用者 Drive 空間後重試。"
-            ) from e
-        raise
-
-    try:
-        created = drive.files().create(
-            body={
-                "name": CONFIG_SHEET_NAME,
-                "mimeType": "application/vnd.google-apps.spreadsheet",
-            },
-            fields="id",
-            supportsAllDrives=True,
-        ).execute()
-        return created["id"]
-    except Exception as e:
-        msg = str(e)
-        if "storageQuotaExceeded" in msg or "storage quota" in msg.lower():
-            raise RuntimeError(
-                "Google Drive 儲存空間已滿，無法建立永久設定表。"
-                "請清理 Drive 空間，或先手動建立設定表並設定 CONFIG_SHEET_ID。"
-            ) from e
-        raise
-
 
 def _ensure_config_sheets(spreadsheet_id: str):
     """確保設定表內有「地區設定」與「排程設定」兩個工作表與表頭。"""
