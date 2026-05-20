@@ -6,7 +6,35 @@
 # 主控試算表（LemonSalarySystem）
 master_sheet_id: "1GdW3FSZ0s3TGeYiNx3JtYvED_RRfJjiFYwLFeYHZ1hA"
 
-regions: []
+regions:
+  新北:
+    root_folder_id: ""
+    billing_sheet_id: ""
+    salary_sheet_id: "1AvoUGIFCxa..."
+    roster_sheet_id: "1hsmwhA36..."
+  台北:
+    root_folder_id: "1kJTGZYpgXBPlyR4SjRKoP0-sK30MhAfW"
+    billing_sheet_id: ""
+    salary_sheet_id: "1AvoUGlFCxaKsPOPavgBmqHoyn-_t4c0I82bIth7SvRQ"
+    roster_sheet_id: "1hsmwhA36I0BPXQ8d6OYGGn8R_SETQe4vTR_FB5Sp8Uc"
+  台中:
+    root_folder_id: "1peMrCBDFJ2-sSKUzuc0X5p0Mc3g0VPrG"
+    billing_sheet_id: ""
+    salary_sheet_id: "1q4-S4cbSPXklNfE380_e7lrHYMaQ7Y_0ZGmgTeWfGfI"
+    roster_sheet_id: "1MKadGGTkIefcbPpEVCEPo0SS_wnqsmZSfqjcdhxg6Gk"
+  桃園:
+    root_folder_id: "18Patt1SGG_6CWCqSaNgYNoDC4O0p5Vpm"
+    billing_sheet_id: "1Icd5lTTJTCLvHh5posD_QJXvYA561lvgVZwecN-H1AQ"
+    salary_sheet_id: "1Icd5lTTJTCLvHh5posD_QJXvYA561lvgVZwecN-H1AQ"
+    roster_sheet_id: "1Icd5lTTJTCLvHh5posD_QJXvYA561lvgVZwecN-H1AQ"
+  台中:
+    root_folder_id: "1rnCtWrw3AUvn1PCj1NKsLtbM5UrWKuiI"
+    billing_sheet_id: "10I4Qvm4S-vsDUxGhFZgWKfBUvLiDHA6UrVICECug8mE"
+    salary_sheet_id: "10I4Qvm4S-vsDUxGhFZgWKfBUvLiDHA6UrVICECug8mE"
+    roster_sheet_id: "10I4Qvm4S-vsDUxGhFZgWKfBUvLiDHA6UrVICECug8mE"
+
+
+
 
 # 排程設定（由介面管理，請勿手動修改）
 schedule:
