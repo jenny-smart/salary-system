@@ -1,0 +1,43 @@
+{
+  "days": [
+    10,
+    20
+  ],
+  "time_hhmm": "05:30",
+  "enabled": true,
+  "run_all_regions": true,
+  "timezone": "Asia/Taipei",
+  "last_run_key": null,
+  "regions": [
+    {
+      "region_name": "台北",
+      "root_folder_id": "請填台北根資料夾ID",
+      "enabled": true
+    },
+    {
+      "region_name": "台中",
+      "root_folder_id": "請填台中根資料夾ID",
+      "enabled": true
+    },
+    {
+      "region_name": "新北",
+      "root_folder_id": "請填新北根資料夾ID",
+      "enabled": true
+    },
+    {
+      "region_name": "桃園",
+      "root_folder_id": "請填桃園根資料夾ID",
+      "enabled": true
+    },
+    {
+      "region_name": "新竹",
+      "root_folder_id": "請填新竹根資料夾ID",
+      "enabled": true
+    },
+    {
+      "region_name": "高雄",
+      "root_folder_id": "請填高雄根資料夾ID",
+      "enabled": true
+    }
+  ]
+}
