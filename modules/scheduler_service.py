@@ -2,20 +2,19 @@
 modules/scheduler_service.py
 期別資料夾與檔案排程服務  v2026-05
 
-設計原則：
-- 地區設定、排程設定統一從 config.yaml 讀取
-  （config.yaml 由 Streamlit 介面存檔後自動寫入，主控 Google Sheet 同步備援）
-- 排程執行邏輯與手動按鈕完全一致：
-    create_period() → record_batch()（打卡）→ 寄 email 通知
-- 不依賴 schedule_config.json，避免兩份設定不同步
+執行環境：
+  - GitHub Actions（推薦）：credentials 從環境變數讀取
+  - 本機測試：credentials 從 Streamlit secrets / token.json 讀取
 
-執行方式：
-  launchd daemon（推薦）：
-    python -m modules.scheduler_service --daemon
-  單次檢查（cron 備援）：
-    python -m modules.scheduler_service --run-once
-  強制立刻執行（測試）：
-    python -m modules.scheduler_service --force
+設計原則：
+  - 地區設定、排程設定統一從 config.yaml 讀取
+  - 排程邏輯與手動按鈕完全一致：create_period() → record_batch()
+  - email 通知用 Gmail API（OAuth），不需要 SMTP 設定
+
+CLI 用法：
+  --run-once  單次檢查，符合排程日才執行（GitHub Actions 用）
+  --force     忽略排程日，立刻執行（測試用）
+  --daemon    常駐執行，每 30 秒檢查一次（本機 launchd 用）
 """
 
 from __future__ import annotations
@@ -42,7 +41,7 @@ CONFIG_PATH      = Path("config.yaml")
 
 
 # ═══════════════════════════════════════════════════════════
-# 工具函式
+# 工具
 # ═══════════════════════════════════════════════════════════
 
 def _now(tz_name: str = DEFAULT_TZ) -> datetime:
@@ -54,34 +53,65 @@ def _now(tz_name: str = DEFAULT_TZ) -> datetime:
 def _write_log(path: Path, msg: str, tz_name: str = DEFAULT_TZ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     ts = _now(tz_name).strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{ts}] {msg}"
     with path.open("a", encoding="utf-8") as f:
-        f.write(f"[{ts}] {msg}\n")
+        f.write(line + "\n")
+    print(line, flush=True)   # GitHub Actions log 同步顯示
 
 
 # ═══════════════════════════════════════════════════════════
-# 設定讀取（純 config.yaml）
+# Credentials（優先從環境變數，其次走原本的 modules.auth）
+# ═══════════════════════════════════════════════════════════
+
+def _build_credentials():
+    """
+    GitHub Actions 執行時，credentials 來自環境變數：
+      OAUTH_CLIENT_ID / OAUTH_CLIENT_SECRET / OAUTH_REFRESH_TOKEN
+
+    本機執行時，走原本的 modules.auth.get_credentials()。
+    """
+    client_id     = os.environ.get("OAUTH_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("OAUTH_CLIENT_SECRET", "").strip()
+    refresh_token = os.environ.get("OAUTH_REFRESH_TOKEN", "").strip()
+
+    if client_id and client_secret and refresh_token:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+
+        creds = Credentials(
+            token         = None,
+            refresh_token = refresh_token,
+            client_id     = client_id,
+            client_secret = client_secret,
+            token_uri     = "https://oauth2.googleapis.com/token",
+            scopes        = [
+                "https://www.googleapis.com/auth/drive",
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/gmail.send",
+            ],
+        )
+        creds.refresh(Request())
+        return creds
+
+    # 本機：走原本的 auth 模組
+    from modules.auth import get_credentials
+    return get_credentials()
+
+
+# ═══════════════════════════════════════════════════════════
+# 設定讀取
 # ═══════════════════════════════════════════════════════════
 
 def load_config(path: Path = CONFIG_PATH) -> dict:
     """
     讀取 config.yaml。
-    Streamlit 介面「儲存排程設定」或「儲存地區」後會自動更新這個檔案。
-    排程執行前每次重新讀取，確保拿到最新設定。
-
-    config.yaml 結構（相關欄位）：
-      regions:
-        - name: 新北
-          root_folder_id: "..."
-          allowance_id: "..."
-          salary_id: "..."
-          roster_id: "..."
-      schedule:
-        enabled: true
-        days: [10, 25]
-        time: "05:30"
-        timezone: "Asia/Taipei"
-        all_regions: true
-      notify_email: "you@example.com"
+    schedule 區塊結構：
+      enabled: true
+      days: [10, 25]
+      time: "05:30"
+      timezone: "Asia/Taipei"
+      all_regions: true
+    notify_email: "you@example.com"
     """
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -97,23 +127,15 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
 # 排程判斷
 # ═══════════════════════════════════════════════════════════
 
-def _run_key(now_dt: datetime, time_hhmm: str) -> str:
-    return f"{now_dt.strftime('%Y-%m-%d')} {time_hhmm}"
-
-
 def should_run_now(cfg: dict, now_dt: datetime | None = None) -> tuple[bool, str]:
-    """
-    判斷現在是否應該執行。
-    回傳 (是否執行, run_key)。
-    """
-    sched    = cfg.get("schedule", {})
-    tz_name  = sched.get("timezone", DEFAULT_TZ)
-    now_dt   = now_dt or _now(tz_name)
-    hhmm     = now_dt.strftime("%H:%M")
-    key      = _run_key(now_dt, sched.get("time", "05:30"))
+    sched   = cfg.get("schedule", {})
+    tz_name = sched.get("timezone", DEFAULT_TZ)
+    now_dt  = now_dt or _now(tz_name)
+    hhmm    = now_dt.strftime("%H:%M")
+    run_key = f"{now_dt.strftime('%Y-%m-%d')} {sched.get('time', '05:30')}"
 
     if not sched.get("enabled", False):
-        return False, key
+        return False, run_key
 
     days = sched.get("days", [])
     if isinstance(days, str):
@@ -121,16 +143,17 @@ def should_run_now(cfg: dict, now_dt: datetime | None = None) -> tuple[bool, str
     days = [int(d) for d in days]
 
     if now_dt.day not in days:
-        return False, key
+        return False, run_key
 
-    if hhmm != str(sched.get("time", "05:30")).strip():
-        return False, key
+    # GitHub Actions：只比對小時（cron 不保證精確到分鐘）
+    cfg_hh = str(sched.get("time", "05:30")).strip()[:2]
+    if hhmm[:2] != cfg_hh:
+        return False, run_key
 
-    return True, key
+    return True, run_key
 
 
 def _acquire_lock(run_key: str) -> bool:
-    """同一個 run_key 只執行一次，避免每分鐘 cron 重複觸發。"""
     if LOCK_PATH.exists():
         if LOCK_PATH.read_text(encoding="utf-8").strip() == run_key:
             return False
@@ -139,12 +162,6 @@ def _acquire_lock(run_key: str) -> bool:
 
 
 def _calc_period(now_dt: datetime) -> str:
-    """
-    依日期產生期別（與 get_auto_period 邏輯一致）：
-      1–15 日 → YYYYMM上
-      16 日後  → YYYYMM下
-    若 period_utils 可用則直接呼叫，否則備援自算。
-    """
     try:
         from modules.period_utils import get_auto_period
         return get_auto_period()
@@ -157,15 +174,7 @@ def _calc_period(now_dt: datetime) -> str:
 # 核心執行：create_period + 打卡
 # ═══════════════════════════════════════════════════════════
 
-def _run_region(
-    region: dict,
-    period: str,
-    log_fn,
-) -> bool:
-    """
-    對單一地區執行 create_period 並打卡。
-    與手動按鈕「① 建立期別資料夾與檔案（排程）」邏輯完全一致。
-    """
+def _run_region(region: dict, period: str, log_fn, creds) -> bool:
     name    = region.get("name", "未知")
     root_id = region.get("root_folder_id", "")
 
@@ -174,18 +183,16 @@ def _run_region(
         return False
 
     def _log(msg):
-        log_fn(f"[{name}] {msg}")
+        log_fn(f"  [{name}] {msg}")
 
     try:
         from modules.payment_reconciliation import create_period
-        _log(f"🔄 呼叫 GAS 建立期別：{period}")
         result    = create_period(root_id, period, name, _log)
         copied    = result.get("copied", 0)
         file_ids  = result.get("fileIds", {})
         folder_id = result.get("folderId")
         _log(f"✅ 建立完成，複製 {copied} 個檔案")
 
-        # 打卡（同手動邏輯）
         try:
             from modules.master_sheet import record_batch
             record_batch(name, period, [
@@ -206,26 +213,18 @@ def _run_region(
         return False
 
 
-def run_create_period(
-    *,
-    cfg: dict,
-    period: str,
-    log_path: Path = DEFAULT_LOG_PATH,
-    extra_log_fn=None,
-) -> dict:
-    """
-    對所有啟用地區執行建立期別。
-    回傳 {地區名: {"ok": bool, "logs": [...]}} 。
-    """
-    sched       = cfg.get("schedule", {})
-    all_flag    = sched.get("all_regions", True)
-    regions     = cfg.get("regions", []) if all_flag else []
+def _execute(cfg: dict, period: str, log_path: Path) -> dict:
+    sched    = cfg.get("schedule", {})
+    all_flag = sched.get("all_regions", True)
+    regions  = cfg.get("regions", []) if all_flag else []
 
     if not regions:
-        raise RuntimeError("沒有可執行的地區（請確認 config.yaml regions 已設定）")
+        raise RuntimeError("沒有可執行的地區，請確認 config.yaml regions 已設定")
 
+    creds   = _build_credentials()
     results = {}
-    all_logs = []
+
+    _write_log(log_path, f"═══ 開始執行：period={period}，地區數={len(regions)} ═══")
 
     for region in regions:
         name = region.get("name", "未知")
@@ -234,22 +233,23 @@ def run_create_period(
         def _log(msg, _logs=logs):
             _logs.append(msg)
             _write_log(log_path, msg)
-            if extra_log_fn:
-                extra_log_fn(msg)
 
-        ok = _run_region(region, period, _log)
+        ok = _run_region(region, period, _log, creds)
         results[name] = {"ok": ok, "logs": logs}
-        all_logs.extend(logs)
 
     return results
 
 
 # ═══════════════════════════════════════════════════════════
-# email 通知
+# email 通知（Gmail API，不需要 SMTP）
 # ═══════════════════════════════════════════════════════════
 
 def _send_notify(cfg: dict, period: str, results: dict, log_path: Path):
-    notify_email = cfg.get("notify_email", "").strip()
+    # 收件人：優先從環境變數（GitHub Secrets），其次 config.yaml
+    notify_email = (
+        os.environ.get("NOTIFY_EMAIL", "").strip()
+        or cfg.get("notify_email", "").strip()
+    )
     if not notify_email:
         _write_log(log_path, "notify_email 未設定，略過寄信")
         return
@@ -258,46 +258,40 @@ def _send_notify(cfg: dict, period: str, results: dict, log_path: Path):
     fail_list = [n for n, r in results.items() if not r["ok"]]
     all_logs  = [l for r in results.values() for l in r["logs"]]
 
+    subject = (
+        f"⚠️ [{period}] 排程部分失敗：{', '.join(fail_list)}"
+        if fail_list else
+        f"✅ [{period}] 排程完成：{', '.join(ok_list)}"
+    )
+
+    tz_name = cfg.get("schedule", {}).get("timezone", DEFAULT_TZ)
+    now_str = _now(tz_name).strftime("%Y-%m-%d %H:%M:%S")
+    body    = "\n".join([
+        "Lemon Clean 排程通知",
+        f"執行時間：{now_str}",
+        f"期別：{period}",
+        "",
+        f"✅ 成功：{', '.join(ok_list) or '無'}",
+        f"❌ 失敗：{', '.join(fail_list) or '無'}",
+        "",
+        "── 執行日誌 ──────────────────────────",
+    ] + (all_logs or ["（無日誌）"]))
+
     try:
         import base64
         from email.mime.text import MIMEText
         import googleapiclient.discovery
-        import google.auth.transport.requests
-        from modules.auth import get_credentials
 
-        creds = get_credentials()
-        if not getattr(creds, "token", None) or not creds.valid:
-            creds.refresh(google.auth.transport.requests.Request())
-        svc = googleapiclient.discovery.build(
+        creds = _build_credentials()
+        svc   = googleapiclient.discovery.build(
             "gmail", "v1", credentials=creds, cache_discovery=False
         )
-
-        subject = (
-            f"⚠️ [{period}] 排程部分失敗：{', '.join(fail_list)}"
-            if fail_list else
-            f"✅ [{period}] 排程完成：{', '.join(ok_list)}"
-        )
-
-        tz_name  = cfg.get("schedule", {}).get("timezone", DEFAULT_TZ)
-        now_str  = _now(tz_name).strftime("%Y-%m-%d %H:%M:%S")
-        body_lines = [
-            "Lemon Clean 排程通知",
-            f"執行時間：{now_str}",
-            f"期別：{period}",
-            "",
-            f"✅ 成功：{', '.join(ok_list) or '無'}",
-            f"❌ 失敗：{', '.join(fail_list) or '無'}",
-            "",
-            "── 執行日誌 ──────────────────────────",
-        ] + (all_logs or ["（無日誌）"])
-
-        msg = MIMEText("\n".join(body_lines), "plain", "utf-8")
+        msg = MIMEText(body, "plain", "utf-8")
         msg["to"]      = notify_email
         msg["subject"] = subject
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         svc.users().messages().send(userId="me", body={"raw": raw}).execute()
         _write_log(log_path, f"✅ 通知信已寄出 → {notify_email}")
-
     except Exception as e:
         _write_log(log_path, f"⚠️ 寄信失敗：{e}\n{traceback.format_exc()}")
 
@@ -306,15 +300,7 @@ def _send_notify(cfg: dict, period: str, results: dict, log_path: Path):
 # 主流程
 # ═══════════════════════════════════════════════════════════
 
-def run_once_if_due(
-    *,
-    log_path: Path = DEFAULT_LOG_PATH,
-    force: bool = False,
-) -> dict | None:
-    """
-    每次呼叫重新讀 config.yaml，判斷是否到排程時間。
-    force=True 時忽略日期時間，直接執行（用於測試）。
-    """
+def run_once_if_due(*, log_path: Path = DEFAULT_LOG_PATH, force: bool = False) -> dict | None:
     cfg    = load_config()
     sched  = cfg.get("schedule", {})
     tz_name = sched.get("timezone", DEFAULT_TZ)
@@ -323,6 +309,7 @@ def run_once_if_due(
     run, run_key = should_run_now(cfg, now_dt)
 
     if not force and not run:
+        _write_log(log_path, f"今天（{now_dt.day}日 {now_dt.strftime('%H:%M')}）不在排程條件，略過")
         return None
 
     if not force and not _acquire_lock(run_key):
@@ -330,10 +317,8 @@ def run_once_if_due(
         return None
 
     period = _calc_period(now_dt)
-    _write_log(log_path, f"═══ 排程觸發：period={period} ═══")
-
     try:
-        results = run_create_period(cfg=cfg, period=period, log_path=log_path)
+        results = _execute(cfg, period, log_path)
     except Exception as e:
         _write_log(log_path, f"❌ 排程失敗：{e}\n{traceback.format_exc()}")
         return None
@@ -342,67 +327,54 @@ def run_once_if_due(
     return results
 
 
-def start_scheduler_once(
-    *,
-    log_path: Path = DEFAULT_LOG_PATH,
-    interval_seconds: int = 30,
-) -> None:
-    """
-    給 Streamlit app 啟動時呼叫的背景執行緒版本。
-    注意：Streamlit Cloud 可能休眠，launchd daemon 模式更可靠。
-    """
+def start_scheduler_once(*, log_path: Path = DEFAULT_LOG_PATH, interval_seconds: int = 30):
+    """Streamlit app 啟動時呼叫的背景執行緒版本（本機備用）。"""
     import threading
-
     marker = "_PERIOD_SCHEDULER_THREAD_STARTED"
     if os.environ.get(marker) == "1":
         return
     os.environ[marker] = "1"
 
     def _loop():
-        _write_log(log_path, "背景排程器已啟動（threading）")
+        _write_log(log_path, "背景排程器已啟動")
         while True:
             try:
                 run_once_if_due(log_path=log_path)
             except Exception as e:
-                _write_log(log_path, f"背景排程器錯誤：{e}\n{traceback.format_exc()}")
+                _write_log(log_path, f"錯誤：{e}\n{traceback.format_exc()}")
             time.sleep(interval_seconds)
 
     threading.Thread(target=_loop, daemon=True).start()
 
 
 # ═══════════════════════════════════════════════════════════
-# CLI 進入點
+# CLI
 # ═══════════════════════════════════════════════════════════
 
-def main() -> None:
+def main():
     parser = argparse.ArgumentParser(description="Lemon Clean 期別排程服務")
-    parser.add_argument("--log",      default=str(DEFAULT_LOG_PATH), help="log 輸出路徑")
-    parser.add_argument("--run-once", action="store_true", help="單次檢查，符合排程才執行")
-    parser.add_argument("--force",    action="store_true", help="忽略日期時間，立即執行一次（測試用）")
-    parser.add_argument("--daemon",   action="store_true", help="常駐執行，每 30 秒檢查一次（launchd 用）")
+    parser.add_argument("--log",      default=str(DEFAULT_LOG_PATH))
+    parser.add_argument("--run-once", action="store_true", help="單次檢查（GitHub Actions 用）")
+    parser.add_argument("--force",    action="store_true", help="立刻執行，忽略排程日（測試用）")
+    parser.add_argument("--daemon",   action="store_true", help="常駐執行，每 30 秒檢查（本機備用）")
     args = parser.parse_args()
 
     log_path = Path(args.log)
 
     if args.force:
         run_once_if_due(log_path=log_path, force=True)
-        return
-
-    if args.run_once:
+    elif args.run_once:
         run_once_if_due(log_path=log_path, force=False)
-        return
-
-    if args.daemon:
-        _write_log(log_path, "Lemon Clean Scheduler daemon 啟動")
+    elif args.daemon:
+        _write_log(log_path, "daemon 啟動")
         while True:
             try:
-                run_once_if_due(log_path=log_path, force=False)
+                run_once_if_due(log_path=log_path)
             except Exception as e:
                 _write_log(log_path, f"daemon 錯誤：{e}\n{traceback.format_exc()}")
             time.sleep(30)
-        return
-
-    parser.print_help()
+    else:
+        parser.print_help()
 
 
 if __name__ == "__main__":
