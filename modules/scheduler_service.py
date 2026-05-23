@@ -1,373 +1,404 @@
 """
 modules/scheduler_service.py
-期別資料夾與檔案排程服務
+期別資料夾與檔案排程服務  v2026-05
 
-用途：
-- 排程時間到時，直接呼叫手動建立期別使用的 create_period()
-- 手動與排程共用同一套建立邏輯，避免兩套流程不一致
-- 支援 Streamlit 背景排程，也支援 CLI / cron / systemd 執行
+設計原則：
+- 地區設定、排程設定統一從 config.yaml 讀取
+  （config.yaml 由 Streamlit 介面存檔後自動寫入，主控 Google Sheet 同步備援）
+- 排程執行邏輯與手動按鈕完全一致：
+    create_period() → record_batch()（打卡）→ 寄 email 通知
+- 不依賴 schedule_config.json，避免兩份設定不同步
 
-重要：
-1. Streamlit Cloud / Render / Railway 若會休眠，背景排程可能不會在 05:30 被喚醒。
-   最穩定做法是用 cron 或 systemd 定時執行：
-      python -m modules.scheduler_service --run-once
-2. 若部署環境是長駐 VPS，則可在 Streamlit app 啟動時呼叫 start_scheduler_once()。
+執行方式：
+  launchd daemon（推薦）：
+    python -m modules.scheduler_service --daemon
+  單次檢查（cron 備援）：
+    python -m modules.scheduler_service --run-once
+  強制立刻執行（測試）：
+    python -m modules.scheduler_service --force
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
+import sys
 import time
 import traceback
-from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterable
 
 try:
     from zoneinfo import ZoneInfo
-except Exception:  # pragma: no cover
+except ImportError:
     ZoneInfo = None
 
-# 直接引用手動建立期別的同一個函式
-from modules.payment_reconciliation import create_period
+import yaml
+
+DEFAULT_TZ       = "Asia/Taipei"
+DEFAULT_LOG_PATH = Path("logs/scheduler.log")
+LOCK_PATH        = Path(".period_scheduler.lock")
+CONFIG_PATH      = Path("config.yaml")
 
 
-DEFAULT_TZ = "Asia/Taipei"
-DEFAULT_CONFIG_PATH = Path("schedule_config.json")
-DEFAULT_LOG_PATH = Path("schedule_run_log.txt")
-LOCK_PATH = Path(".period_scheduler.lock")
-
-
-@dataclass
-class RegionConfig:
-    """單一地區設定。root_folder_id 必須是該地區 Google Drive 根資料夾 ID。"""
-    region_name: str
-    root_folder_id: str
-    enabled: bool = True
-
-
-@dataclass
-class ScheduleConfig:
-    """
-    排程設定。
-
-    days:
-      例：["10", "20"] 或 [10, 20]
-      10 號通常產生 YYYYMM-1
-      20 號通常產生 YYYYMM-2
-
-    time_hhmm:
-      台北時間 HH:MM，例如 "05:30"
-
-    run_all_regions:
-      True 時會跑 regions 內所有 enabled 地區。
-      False 時仍會依 regions enabled 判斷，方便保留單區模式。
-
-    enabled:
-      False 時排程不會執行。
-    """
-    days: list[int]
-    time_hhmm: str
-    regions: list[RegionConfig]
-    enabled: bool = True
-    run_all_regions: bool = True
-    timezone: str = DEFAULT_TZ
-    last_run_key: str | None = None
-
+# ═══════════════════════════════════════════════════════════
+# 工具函式
+# ═══════════════════════════════════════════════════════════
 
 def _now(tz_name: str = DEFAULT_TZ) -> datetime:
-    if ZoneInfo is None:
-        return datetime.now()
-    return datetime.now(ZoneInfo(tz_name))
+    if ZoneInfo is not None:
+        return datetime.now(ZoneInfo(tz_name))
+    return datetime.now()
 
 
-def _normalize_days(days: Iterable[int | str]) -> list[int]:
-    result: list[int] = []
-    for d in days:
-        if isinstance(d, str):
-            d = d.strip()
-            if not d:
-                continue
-            result.append(int(d))
-        else:
-            result.append(int(d))
-    return sorted(set(result))
-
-
-def parse_days_text(days_text: str) -> list[int]:
-    """
-    將 UI 輸入的「10,20」轉成 [10, 20]。
-    """
-    return _normalize_days(days_text.replace("，", ",").split(","))
-
-
-def calc_period(now_dt: datetime | None = None, day: int | None = None) -> str:
-    """
-    依日期產生期別：
-    - 每月 10 日：YYYYMM-1
-    - 每月 20 日：YYYYMM-2
-    - 若你設定其他日期：1-15 日歸 -1，16 日後歸 -2
-    """
-    now_dt = now_dt or _now()
-    d = int(day or now_dt.day)
-    suffix = "1" if d <= 15 else "2"
-    return f"{now_dt.year}{now_dt.month:02d}-{suffix}"
-
-
-def _write_log(log_path: Path, msg: str, tz_name: str = DEFAULT_TZ) -> None:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+def _write_log(path: Path, msg: str, tz_name: str = DEFAULT_TZ) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     ts = _now(tz_name).strftime("%Y-%m-%d %H:%M:%S")
-    with log_path.open("a", encoding="utf-8") as f:
+    with path.open("a", encoding="utf-8") as f:
         f.write(f"[{ts}] {msg}\n")
 
 
-def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> ScheduleConfig:
-    path = Path(path)
-    data = json.loads(path.read_text(encoding="utf-8"))
+# ═══════════════════════════════════════════════════════════
+# 設定讀取（純 config.yaml）
+# ═══════════════════════════════════════════════════════════
 
-    regions = [
-        RegionConfig(
-            region_name=r["region_name"],
-            root_folder_id=r["root_folder_id"],
-            enabled=bool(r.get("enabled", True)),
-        )
-        for r in data.get("regions", [])
-    ]
-
-    return ScheduleConfig(
-        days=_normalize_days(data.get("days", [10, 20])),
-        time_hhmm=str(data.get("time_hhmm", "05:30")),
-        regions=regions,
-        enabled=bool(data.get("enabled", True)),
-        run_all_regions=bool(data.get("run_all_regions", True)),
-        timezone=str(data.get("timezone", DEFAULT_TZ)),
-        last_run_key=data.get("last_run_key"),
-    )
-
-
-def save_config(config: ScheduleConfig, path: str | Path = DEFAULT_CONFIG_PATH) -> None:
-    path = Path(path)
-    payload = asdict(config)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def save_config_from_ui(
-    *,
-    days_text: str,
-    time_hhmm: str,
-    regions: list[dict],
-    enabled: bool,
-    run_all_regions: bool,
-    path: str | Path = DEFAULT_CONFIG_PATH,
-    timezone: str = DEFAULT_TZ,
-) -> ScheduleConfig:
+def load_config(path: Path = CONFIG_PATH) -> dict:
     """
-    給 Streamlit UI 使用的儲存函式。
+    讀取 config.yaml。
+    Streamlit 介面「儲存排程設定」或「儲存地區」後會自動更新這個檔案。
+    排程執行前每次重新讀取，確保拿到最新設定。
 
-    regions 格式：
-    [
-      {"region_name": "台北", "root_folder_id": "...", "enabled": True},
-      ...
-    ]
+    config.yaml 結構（相關欄位）：
+      regions:
+        - name: 新北
+          root_folder_id: "..."
+          allowance_id: "..."
+          salary_id: "..."
+          roster_id: "..."
+      schedule:
+        enabled: true
+        days: [10, 25]
+        time: "05:30"
+        timezone: "Asia/Taipei"
+        all_regions: true
+      notify_email: "you@example.com"
     """
-    config = ScheduleConfig(
-        days=parse_days_text(days_text),
-        time_hhmm=time_hhmm.strip(),
-        regions=[
-            RegionConfig(
-                region_name=r["region_name"],
-                root_folder_id=r["root_folder_id"],
-                enabled=bool(r.get("enabled", True)),
-            )
-            for r in regions
-        ],
-        enabled=enabled,
-        run_all_regions=run_all_regions,
-        timezone=timezone,
-    )
-    save_config(config, path)
-    return config
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        cfg = {}
+    cfg.setdefault("regions",  [])
+    cfg.setdefault("schedule", {})
+    return cfg
 
 
-def _acquire_daily_lock(run_key: str) -> bool:
+# ═══════════════════════════════════════════════════════════
+# 排程判斷
+# ═══════════════════════════════════════════════════════════
+
+def _run_key(now_dt: datetime, time_hhmm: str) -> str:
+    return f"{now_dt.strftime('%Y-%m-%d')} {time_hhmm}"
+
+
+def should_run_now(cfg: dict, now_dt: datetime | None = None) -> tuple[bool, str]:
     """
-    避免同一分鐘 / 同一天重複執行。
-    回傳 True 表示本次可以執行。
+    判斷現在是否應該執行。
+    回傳 (是否執行, run_key)。
     """
+    sched    = cfg.get("schedule", {})
+    tz_name  = sched.get("timezone", DEFAULT_TZ)
+    now_dt   = now_dt or _now(tz_name)
+    hhmm     = now_dt.strftime("%H:%M")
+    key      = _run_key(now_dt, sched.get("time", "05:30"))
+
+    if not sched.get("enabled", False):
+        return False, key
+
+    days = sched.get("days", [])
+    if isinstance(days, str):
+        days = [int(d.strip()) for d in days.split(",") if d.strip()]
+    days = [int(d) for d in days]
+
+    if now_dt.day not in days:
+        return False, key
+
+    if hhmm != str(sched.get("time", "05:30")).strip():
+        return False, key
+
+    return True, key
+
+
+def _acquire_lock(run_key: str) -> bool:
+    """同一個 run_key 只執行一次，避免每分鐘 cron 重複觸發。"""
     if LOCK_PATH.exists():
-        old = LOCK_PATH.read_text(encoding="utf-8").strip()
-        if old == run_key:
+        if LOCK_PATH.read_text(encoding="utf-8").strip() == run_key:
             return False
     LOCK_PATH.write_text(run_key, encoding="utf-8")
     return True
 
 
-def should_run_now(config: ScheduleConfig, now_dt: datetime | None = None) -> tuple[bool, str]:
+def _calc_period(now_dt: datetime) -> str:
     """
-    判斷目前是否符合排程。
-    回傳：(是否執行, run_key)
+    依日期產生期別（與 get_auto_period 邏輯一致）：
+      1–15 日 → YYYYMM上
+      16 日後  → YYYYMM下
+    若 period_utils 可用則直接呼叫，否則備援自算。
     """
-    now_dt = now_dt or _now(config.timezone)
-    hhmm = now_dt.strftime("%H:%M")
-    run_key = f"{now_dt.strftime('%Y-%m-%d')} {config.time_hhmm}"
-
-    if not config.enabled:
-        return False, run_key
-    if now_dt.day not in config.days:
-        return False, run_key
-    if hhmm != config.time_hhmm:
-        return False, run_key
-    if config.last_run_key == run_key:
-        return False, run_key
-
-    return True, run_key
+    try:
+        from modules.period_utils import get_auto_period
+        return get_auto_period()
+    except Exception:
+        suffix = "上" if now_dt.day <= 15 else "下"
+        return f"{now_dt.year}{now_dt.month:02d}{suffix}"
 
 
-def run_create_period_for_regions(
-    *,
-    config: ScheduleConfig,
+# ═══════════════════════════════════════════════════════════
+# 核心執行：create_period + 打卡
+# ═══════════════════════════════════════════════════════════
+
+def _run_region(
+    region: dict,
     period: str,
-    log_path: str | Path = DEFAULT_LOG_PATH,
-    log_fn: Callable[[str], None] | None = None,
+    log_fn,
+) -> bool:
+    """
+    對單一地區執行 create_period 並打卡。
+    與手動按鈕「① 建立期別資料夾與檔案（排程）」邏輯完全一致。
+    """
+    name    = region.get("name", "未知")
+    root_id = region.get("root_folder_id", "")
+
+    if not root_id:
+        log_fn(f"⚠️ 【{name}】root_folder_id 未設定，略過")
+        return False
+
+    def _log(msg):
+        log_fn(f"[{name}] {msg}")
+
+    try:
+        from modules.payment_reconciliation import create_period
+        _log(f"🔄 呼叫 GAS 建立期別：{period}")
+        result    = create_period(root_id, period, name, _log)
+        copied    = result.get("copied", 0)
+        file_ids  = result.get("fileIds", {})
+        folder_id = result.get("folderId")
+        _log(f"✅ 建立完成，複製 {copied} 個檔案")
+
+        # 打卡（同手動邏輯）
+        try:
+            from modules.master_sheet import record_batch
+            record_batch(name, period, [
+                {"task_key": "排程期別資料夾",   "count": folder_id},
+                {"task_key": "排程期別金流對帳", "count": file_ids.get("金流對帳")},
+                {"task_key": "排程期別清潔承攬", "count": file_ids.get("清潔承攬")},
+                {"task_key": "排程期別其他承攬", "count": file_ids.get("其他承攬")},
+                {"task_key": "排程期別元大帳戶", "count": file_ids.get("元大帳戶")},
+            ])
+            _log("🔵 打卡完成")
+        except Exception as e:
+            _log(f"⚠️ 打卡失敗：{e}")
+
+        return True
+
+    except Exception as e:
+        _log(f"❌ 失敗：{e}\n{traceback.format_exc()}")
+        return False
+
+
+def run_create_period(
+    *,
+    cfg: dict,
+    period: str,
+    log_path: Path = DEFAULT_LOG_PATH,
+    extra_log_fn=None,
 ) -> dict:
     """
-    真正執行建立期別。
-    這裡會呼叫 payment_reconciliation.create_period()，
-    也就是和手動按鈕同一套 GAS createPeriod 流程。
+    對所有啟用地區執行建立期別。
+    回傳 {地區名: {"ok": bool, "logs": [...]}} 。
     """
-    log_path = Path(log_path)
+    sched       = cfg.get("schedule", {})
+    all_flag    = sched.get("all_regions", True)
+    regions     = cfg.get("regions", []) if all_flag else []
 
-    def log(msg: str) -> None:
-        if log_fn:
-            log_fn(msg)
-        _write_log(log_path, msg, config.timezone)
+    if not regions:
+        raise RuntimeError("沒有可執行的地區（請確認 config.yaml regions 已設定）")
 
-    results: dict[str, dict] = {}
-    enabled_regions = [r for r in config.regions if r.enabled]
+    results = {}
+    all_logs = []
 
-    if not enabled_regions:
-        raise RuntimeError("沒有任何啟用地區，請檢查 schedule_config.json 的 regions。")
+    for region in regions:
+        name = region.get("name", "未知")
+        logs = []
 
-    log(f"🚀 排程開始：period={period}，地區數={len(enabled_regions)}")
+        def _log(msg, _logs=logs):
+            _logs.append(msg)
+            _write_log(log_path, msg)
+            if extra_log_fn:
+                extra_log_fn(msg)
 
-    for r in enabled_regions:
-        try:
-            log(f"🔄 建立期別開始：{r.region_name} / {period}")
-            result = create_period(
-                root_folder_id=r.root_folder_id,
-                period=period,
-                region_name=r.region_name,
-                log_fn=log,
-            )
-            results[r.region_name] = {"success": True, "result": result}
-            log(f"✅ 建立期別完成：{r.region_name} / {period}")
-        except Exception as e:
-            results[r.region_name] = {"success": False, "error": str(e)}
-            log(f"❌ 建立期別失敗：{r.region_name} / {period} / {e}")
-            log(traceback.format_exc())
+        ok = _run_region(region, period, _log)
+        results[name] = {"ok": ok, "logs": logs}
+        all_logs.extend(logs)
 
-    log(f"🏁 排程結束：period={period}")
     return results
 
 
+# ═══════════════════════════════════════════════════════════
+# email 通知
+# ═══════════════════════════════════════════════════════════
+
+def _send_notify(cfg: dict, period: str, results: dict, log_path: Path):
+    notify_email = cfg.get("notify_email", "").strip()
+    if not notify_email:
+        _write_log(log_path, "notify_email 未設定，略過寄信")
+        return
+
+    ok_list   = [n for n, r in results.items() if r["ok"]]
+    fail_list = [n for n, r in results.items() if not r["ok"]]
+    all_logs  = [l for r in results.values() for l in r["logs"]]
+
+    try:
+        import base64
+        from email.mime.text import MIMEText
+        import googleapiclient.discovery
+        import google.auth.transport.requests
+        from modules.auth import get_credentials
+
+        creds = get_credentials()
+        if not getattr(creds, "token", None) or not creds.valid:
+            creds.refresh(google.auth.transport.requests.Request())
+        svc = googleapiclient.discovery.build(
+            "gmail", "v1", credentials=creds, cache_discovery=False
+        )
+
+        subject = (
+            f"⚠️ [{period}] 排程部分失敗：{', '.join(fail_list)}"
+            if fail_list else
+            f"✅ [{period}] 排程完成：{', '.join(ok_list)}"
+        )
+
+        tz_name  = cfg.get("schedule", {}).get("timezone", DEFAULT_TZ)
+        now_str  = _now(tz_name).strftime("%Y-%m-%d %H:%M:%S")
+        body_lines = [
+            "Lemon Clean 排程通知",
+            f"執行時間：{now_str}",
+            f"期別：{period}",
+            "",
+            f"✅ 成功：{', '.join(ok_list) or '無'}",
+            f"❌ 失敗：{', '.join(fail_list) or '無'}",
+            "",
+            "── 執行日誌 ──────────────────────────",
+        ] + (all_logs or ["（無日誌）"])
+
+        msg = MIMEText("\n".join(body_lines), "plain", "utf-8")
+        msg["to"]      = notify_email
+        msg["subject"] = subject
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+        _write_log(log_path, f"✅ 通知信已寄出 → {notify_email}")
+
+    except Exception as e:
+        _write_log(log_path, f"⚠️ 寄信失敗：{e}\n{traceback.format_exc()}")
+
+
+# ═══════════════════════════════════════════════════════════
+# 主流程
+# ═══════════════════════════════════════════════════════════
+
 def run_once_if_due(
     *,
-    config_path: str | Path = DEFAULT_CONFIG_PATH,
-    log_path: str | Path = DEFAULT_LOG_PATH,
+    log_path: Path = DEFAULT_LOG_PATH,
     force: bool = False,
 ) -> dict | None:
     """
-    執行一次檢查：
-    - 若目前符合日期與時間，就建立期別
-    - 若 force=True，忽略日期時間，直接執行
-
-    cron 建議每分鐘呼叫一次：
-      * * * * * cd /path/to/app && python -m modules.scheduler_service --run-once
+    每次呼叫重新讀 config.yaml，判斷是否到排程時間。
+    force=True 時忽略日期時間，直接執行（用於測試）。
     """
-    config_path = Path(config_path)
-    config = load_config(config_path)
-    now_dt = _now(config.timezone)
-    run, run_key = should_run_now(config, now_dt)
+    cfg    = load_config()
+    sched  = cfg.get("schedule", {})
+    tz_name = sched.get("timezone", DEFAULT_TZ)
+    now_dt = _now(tz_name)
+
+    run, run_key = should_run_now(cfg, now_dt)
 
     if not force and not run:
         return None
 
-    if not force and not _acquire_daily_lock(run_key):
-        _write_log(Path(log_path), f"略過重複執行：{run_key}", config.timezone)
+    if not force and not _acquire_lock(run_key):
+        _write_log(log_path, f"略過重複執行：{run_key}")
         return None
 
-    period = calc_period(now_dt, now_dt.day)
-    results = run_create_period_for_regions(
-        config=config,
-        period=period,
-        log_path=log_path,
-    )
+    period = _calc_period(now_dt)
+    _write_log(log_path, f"═══ 排程觸發：period={period} ═══")
 
-    config.last_run_key = run_key
-    save_config(config, config_path)
+    try:
+        results = run_create_period(cfg=cfg, period=period, log_path=log_path)
+    except Exception as e:
+        _write_log(log_path, f"❌ 排程失敗：{e}\n{traceback.format_exc()}")
+        return None
 
+    _send_notify(cfg, period, results, log_path)
     return results
 
 
 def start_scheduler_once(
     *,
-    config_path: str | Path = DEFAULT_CONFIG_PATH,
-    log_path: str | Path = DEFAULT_LOG_PATH,
+    log_path: Path = DEFAULT_LOG_PATH,
     interval_seconds: int = 30,
 ) -> None:
     """
-    給 Streamlit app 啟動時呼叫。
-    注意：只有在 Python process 長駐時才可靠。
+    給 Streamlit app 啟動時呼叫的背景執行緒版本。
+    注意：Streamlit Cloud 可能休眠，launchd daemon 模式更可靠。
     """
     import threading
 
     marker = "_PERIOD_SCHEDULER_THREAD_STARTED"
     if os.environ.get(marker) == "1":
         return
-
     os.environ[marker] = "1"
 
-    def loop() -> None:
-        _write_log(Path(log_path), "背景排程器已啟動", DEFAULT_TZ)
+    def _loop():
+        _write_log(log_path, "背景排程器已啟動（threading）")
         while True:
             try:
-                run_once_if_due(config_path=config_path, log_path=log_path)
+                run_once_if_due(log_path=log_path)
             except Exception as e:
-                _write_log(Path(log_path), f"背景排程器錯誤：{e}", DEFAULT_TZ)
-                _write_log(Path(log_path), traceback.format_exc(), DEFAULT_TZ)
+                _write_log(log_path, f"背景排程器錯誤：{e}\n{traceback.format_exc()}")
             time.sleep(interval_seconds)
 
-    t = threading.Thread(target=loop, daemon=True)
-    t.start()
+    threading.Thread(target=_loop, daemon=True).start()
 
+
+# ═══════════════════════════════════════════════════════════
+# CLI 進入點
+# ═══════════════════════════════════════════════════════════
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
-    parser.add_argument("--log", default=str(DEFAULT_LOG_PATH))
-    parser.add_argument("--run-once", action="store_true", help="只檢查一次，符合排程才執行。")
-    parser.add_argument("--force", action="store_true", help="忽略日期時間，立即執行一次。")
-    parser.add_argument("--daemon", action="store_true", help="常駐執行，每 30 秒檢查一次。")
+    parser = argparse.ArgumentParser(description="Lemon Clean 期別排程服務")
+    parser.add_argument("--log",      default=str(DEFAULT_LOG_PATH), help="log 輸出路徑")
+    parser.add_argument("--run-once", action="store_true", help="單次檢查，符合排程才執行")
+    parser.add_argument("--force",    action="store_true", help="忽略日期時間，立即執行一次（測試用）")
+    parser.add_argument("--daemon",   action="store_true", help="常駐執行，每 30 秒檢查一次（launchd 用）")
     args = parser.parse_args()
 
+    log_path = Path(args.log)
+
     if args.force:
-        run_once_if_due(config_path=args.config, log_path=args.log, force=True)
+        run_once_if_due(log_path=log_path, force=True)
         return
 
     if args.run_once:
-        run_once_if_due(config_path=args.config, log_path=args.log, force=False)
+        run_once_if_due(log_path=log_path, force=False)
         return
 
     if args.daemon:
+        _write_log(log_path, "Lemon Clean Scheduler daemon 啟動")
         while True:
             try:
-                run_once_if_due(config_path=args.config, log_path=args.log, force=False)
+                run_once_if_due(log_path=log_path, force=False)
             except Exception as e:
-                _write_log(Path(args.log), f"daemon 錯誤：{e}")
-                _write_log(Path(args.log), traceback.format_exc())
+                _write_log(log_path, f"daemon 錯誤：{e}\n{traceback.format_exc()}")
             time.sleep(30)
         return
 
