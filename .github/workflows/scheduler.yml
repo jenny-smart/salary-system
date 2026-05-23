@@ -1,0 +1,75 @@
+# .github/workflows/scheduler.yml
+#
+# Lemon Clean 期別資料夾自動排程
+#
+# 觸發時機：
+#   - 每天台北時間 05:30 自動執行（GitHub cron 用 UTC，05:30 CST = 21:30 UTC 前一天）
+#   - 也可以在 GitHub Actions 頁面手動觸發（workflow_dispatch）
+#
+# 執行內容：
+#   python -m modules.scheduler_service --run-once
+#   → 讀 config.yaml 判斷今天是否排程日，是才真正執行
+#
+# GitHub Secrets 需要設定（Settings → Secrets → Actions）：
+#   OAUTH_CLIENT_ID      → Streamlit secrets [oauth_drive] client_id
+#   OAUTH_CLIENT_SECRET  → Streamlit secrets [oauth_drive] client_secret
+#   OAUTH_REFRESH_TOKEN  → Streamlit secrets [oauth_drive] refresh_token
+#   NOTIFY_EMAIL         → 收通知的 email
+
+name: Lemon Clean 期別排程
+
+on:
+  schedule:
+    # 每天 UTC 21:30 = 台北時間 05:30
+    - cron: "30 21 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "強制執行（忽略排程日判斷，測試用）"
+        required: false
+        default: "false"
+
+jobs:
+  run-scheduler:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Write credentials to env
+        env:
+          OAUTH_CLIENT_ID:     ${{ secrets.OAUTH_CLIENT_ID }}
+          OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
+          OAUTH_REFRESH_TOKEN: ${{ secrets.OAUTH_REFRESH_TOKEN }}
+          NOTIFY_EMAIL:        ${{ secrets.NOTIFY_EMAIL }}
+        run: |
+          echo "OAUTH_CLIENT_ID=$OAUTH_CLIENT_ID"         >> $GITHUB_ENV
+          echo "OAUTH_CLIENT_SECRET=$OAUTH_CLIENT_SECRET" >> $GITHUB_ENV
+          echo "OAUTH_REFRESH_TOKEN=$OAUTH_REFRESH_TOKEN" >> $GITHUB_ENV
+          echo "NOTIFY_EMAIL=$NOTIFY_EMAIL"               >> $GITHUB_ENV
+
+      - name: Run scheduler
+        env:
+          OAUTH_CLIENT_ID:     ${{ secrets.OAUTH_CLIENT_ID }}
+          OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
+          OAUTH_REFRESH_TOKEN: ${{ secrets.OAUTH_REFRESH_TOKEN }}
+          NOTIFY_EMAIL:        ${{ secrets.NOTIFY_EMAIL }}
+          FORCE_RUN:           ${{ github.event.inputs.force }}
+        run: |
+          if [ "$FORCE_RUN" = "true" ]; then
+            python -m modules.scheduler_service --force
+          else
+            python -m modules.scheduler_service --run-once
+          fi
