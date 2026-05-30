@@ -20,8 +20,7 @@ name: Lemon Clean 期別排程
 
 on:
   schedule:
-    # 每天 UTC 21:30 = 台北時間 05:30
-    - cron: "30 21 * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       force:
