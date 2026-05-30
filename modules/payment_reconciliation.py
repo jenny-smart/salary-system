@@ -393,14 +393,14 @@ def process_template(
         key=lambda x: (
             _text_sort_key(x["row"][4] if len(x["row"]) > 4 else ""),   # E 購買項目
             _date_sort_key(x["row"][7] if len(x["row"]) > 7 else ""),   # H 服務日期
-            _stroke_sort_key(x["row"][12] if len(x["row"]) > 12 else ""), # M 客戶姓名：中文筆劃排序
+            _text_sort_key(x["row"][12] if len(x["row"]) > 12 else ""),   # M 客戶姓名：文字排序（對齊 GAS localeCompare）
             x["orig_index"],                                             # 穩定排序保底
         )
     )
     sorted_rows = [x["row"] for x in rows_with_fmt]
     sorted_fmts = [x["fmt"] for x in rows_with_fmt]
     sort_count = len(sorted_rows)
-    log(f"🔵 排序完成：{sort_count} 筆（E → H日期 → M客戶姓名筆劃；格式跟著原列排序）")
+    log(f"🔵 排序完成：{sort_count} 筆（E → H日期 → M客戶姓名文字排序；格式跟著原列排序）")
 
     # 2. 異常標記：只改資料，原格式仍保留；最後再套橘色底。
     mark_count = 0
