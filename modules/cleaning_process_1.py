@@ -701,8 +701,8 @@ def _adj_import_salary_k_r(
 ):
     formula = (
         f'=ARRAYFORMULA(IF(S3:S="",,FILTER('
-        f'IMPORTRANGE("{salary_id}","{yyyymm}專員調薪!K3:R"),'
-        f'IMPORTRANGE("{salary_id}","{yyyymm}專員調薪!B3:B")=S3:S)))'
+        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!K3:R"),'
+        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!B3:B")=S3:S)))'
     )
     ws_adjust.update_cell(3, 25, formula)  # Y3 = row 3, col 25
     _log(log, "    Y3 IMPORTRANGE 已寫入（調薪 K:R）")
@@ -719,8 +719,8 @@ def _adj_import_salary_aa_af(
 ):
     formula = (
         f'=ARRAYFORMULA(IF(S3:S="",,FILTER('
-        f'IMPORTRANGE("{salary_id}","{yyyymm}專員調薪!AA3:AF"),'
-        f'IMPORTRANGE("{salary_id}","{yyyymm}專員調薪!B3:B")=S3:S)))'
+        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!AA3:AF"),'
+        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!B3:B")=S3:S)))'
     )
     ws_adjust.update_cell(3, 33, formula)  # AG3 = row 3, col 33
     _log(log, "    AG3 IMPORTRANGE 已寫入（調薪 AA:AF）")
