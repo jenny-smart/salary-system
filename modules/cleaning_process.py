@@ -671,9 +671,9 @@ def _adj_import_salary_k_r(
     log: List[str],
 ):
     formula = (
-        f'=ARRAYFORMULA(IF(S3:S="",,FILTER('
+        f'=ARRAYFORMULA(IF($S3:$S="",,FILTER('
         f'IMPORTRANGE("{salary_id}","{yyyymm}專員調薪!K3:R"),'
-        f'IMPORTRANGE("{salary_id}","{yyyymm}專員調薪!B3:B")=S3:S)))'
+        f'IMPORTRANGE("{salary_id}","{yyyymm}專員調薪!B3:B")=$S3:$S)))'
     )
     ws_adjust.update_cell(3, 25, formula)  # Y3 = row 3, col 25
     _log(log, "    Y3 IMPORTRANGE 已寫入（調薪 K:R）")
@@ -689,9 +689,9 @@ def _adj_import_salary_aa_af(
     log: List[str],
 ):
     formula = (
-        f'=ARRAYFORMULA(IF(S3:S="",,FILTER('
+        f'=ARRAYFORMULA(IF($S3:$S="",,FILTER('
         f'IMPORTRANGE("{salary_id}","{yyyymm}專員調薪!AA3:AF"),'
-        f'IMPORTRANGE("{salary_id}","{yyyymm}專員調薪!B3:B")=S3:S)))'
+        f'IMPORTRANGE("{salary_id}","{yyyymm}專員調薪!B3:B")=$S3:$S)))'
     )
     ws_adjust.update_cell(3, 33, formula)  # AG3 = row 3, col 33
     _log(log, "    AG3 IMPORTRANGE 已寫入（調薪 AA:AF）")
@@ -729,7 +729,7 @@ def _adj_convert_to_values(
             break
 
     if num_rows == 0:
-        _log(log, "    ⚠️ S3:S 無有效資料")
+        _log(log, "    ⚠️ $S3:$S 無有效資料")
         return 0
 
     end_row = 2 + num_rows               # row 3 = index 2, end = 2 + num_rows
