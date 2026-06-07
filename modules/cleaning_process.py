@@ -1079,9 +1079,9 @@ def _copy_salary_formulas(
         tgt_col = SRC_COL + old_count + c
         tgt_ltr = _col_letter(tgt_col)
 
-        # 第 1 列（index = tgt_col - 1）若為空白，跳過整欄
-        name = row1[tgt_col - 1] if tgt_col - 1 < len(row1) else ""
-        if not str(name).strip():
+        # 直接讀該欄第 1 列，避免 row_values 長度不足的問題
+        name = ws_salary.cell(1, tgt_col).value
+        if not str(name or "").strip():
             _log(log, f"    跳過 {tgt_ltr} 欄（第1列無員工姓名）")
             continue
 
