@@ -665,7 +665,69 @@ def _expand_fg_rows(df: pd.DataFrame) -> tuple[list, int, list, dict, list]:
     return output, expand_count, warnings, category_counts, new_row_indices
 
 
-def _expand_fg_rows_with_fmts
+def _expand_fg_rows_with_fmts(rows, fmts):
+    # 先收集所有已存在的 id
+    existing_ids = {str(row[1]) for row in rows if len(row) > 1 and str(row[1]).strip()}
+    
+    output_rows = []
+    output_fmts = []
+    expand_count = 0
+    warnings = []
+    category_counts = {}
+    new_row_indices = []
+
+    for row, fmt in zip(rows, fmts):
+        row = list(row)
+        parent_fmt = copy.deepcopy(fmt or {"cells": [{} for _ in range(62)]})
+        order_id = str(row[1]) if len(row) > 1 else ""
+
+        # 子列直接原樣保留
+        if re.search(r"-\d+$", order_id):
+            output_rows.append(row)
+            output_fmts.append(parent_fmt)
+            continue
+
+        e_text = str(row[4]) if len(row) > 4 else ""
+        f_text = str(row[5]) if len(row) > 5 else ""
+
+        is_expandable = any(t in e_text for t in EXPANDABLE_TYPES)
+        if not is_expandable or not f_text.strip():
+            output_rows.append(row)
+            output_fmts.append(parent_fmt)
+            continue
+
+        items = _parse_service_items(f_text)
+        if not items:
+            output_rows.append(row)
+            output_fmts.append(parent_fmt)
+            continue
+
+        category = next((cat for cat in EXPANDABLE_TYPES if cat in e_text), None)
+
+        for i, item in enumerate(items):
+            new_row = row.copy()
+            new_row[5] = item["name"]
+            new_row[6] = item["qty"]
+            if i > 0:
+                child_id = f"{order_id}-{i}"
+                # 子單已存在：跳過不新增
+                if child_id in existing_ids:
+                    continue
+                new_row[1] = child_id
+                expand_count += 1
+                new_row_indices.append(len(output_rows))
+                for col_idx in range(24, 28):
+                    if col_idx < len(new_row):
+                        new_row[col_idx] = ""
+            if not item["has_qty"]:
+                warnings.append(f"訂單 {order_id} 項目「{item['name']}」：無數量，請確認")
+            output_rows.append(new_row)
+            output_fmts.append(copy.deepcopy(parent_fmt))
+
+        if category:
+            category_counts[category] = category_counts.get(category, 0) + len(items)
+
+    return output_rows, output_fmts, expand_count, warnings, category_counts, new_row_indices
 
 
 # ═══════════════════════════════════════════════════════════════
