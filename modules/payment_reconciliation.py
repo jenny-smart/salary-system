@@ -666,9 +666,23 @@ def _expand_fg_rows(df: pd.DataFrame) -> tuple[list, int, list, dict, list]:
 
 
 def _expand_fg_rows_with_fmts(rows, fmts):
-    # 先收集所有已存在的 id
     existing_ids = {str(row[1]) for row in rows if len(row) > 1 and str(row[1]).strip()}
     
+    # 先掃描所有主列，建立子單應填入的內容
+    child_item_map = {}  # {child_id: {"name": ..., "qty": ...}}
+    for row in rows:
+        order_id = str(row[1]) if len(row) > 1 else ""
+        if re.search(r"-\d+$", order_id):
+            continue
+        e_text = str(row[4]) if len(row) > 4 else ""
+        f_text = str(row[5]) if len(row) > 5 else ""
+        if not any(t in e_text for t in EXPANDABLE_TYPES) or not f_text.strip():
+            continue
+        items = _parse_service_items(f_text)
+        for i, item in enumerate(items):
+            if i > 0:
+                child_item_map[f"{order_id}-{i}"] = item
+
     output_rows = []
     output_fmts = []
     expand_count = 0
@@ -681,8 +695,12 @@ def _expand_fg_rows_with_fmts(rows, fmts):
         parent_fmt = copy.deepcopy(fmt or {"cells": [{} for _ in range(62)]})
         order_id = str(row[1]) if len(row) > 1 else ""
 
-        # 子列直接原樣保留
+        # 子列：用 child_item_map 更新 F/G，否則原樣保留
         if re.search(r"-\d+$", order_id):
+            if order_id in child_item_map:
+                item = child_item_map[order_id]
+                row[5] = item["name"]
+                row[6] = item["qty"]
             output_rows.append(row)
             output_fmts.append(parent_fmt)
             continue
@@ -710,9 +728,8 @@ def _expand_fg_rows_with_fmts(rows, fmts):
             new_row[6] = item["qty"]
             if i > 0:
                 child_id = f"{order_id}-{i}"
-                # 子單已存在：跳過不新增
                 if child_id in existing_ids:
-                    continue
+                    continue  # 已存在，子列自己跑到時會處理
                 new_row[1] = child_id
                 expand_count += 1
                 new_row_indices.append(len(output_rows))
