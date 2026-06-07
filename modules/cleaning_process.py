@@ -1015,7 +1015,6 @@ def _adj_update_salary_l1(
     is_first_half: bool,
     log: List[str],
 ):
-    # 從 00調薪 S 欄（col 19）取非空白姓名（跳過前兩列）
     s_vals    = ws_adjust.col_values(19)
     names     = [v for v in s_vals[2:] if v and str(v).strip()]
     new_count = len(names)
@@ -1024,37 +1023,86 @@ def _adj_update_salary_l1(
         _log(log, "    ⚠️ S 欄無有效姓名，跳過 L1:1 更新")
         return
 
-    # 目前 L1:1 員工數（L = col 12, index 11）
-    l1_row   = ws_salary.row_values(1)
-    old_count = sum(1 for v in l1_row[11:] if v and str(v).strip())
-    diff      = new_count - old_count
+    l1_row    = ws_salary.row_values(1)
+    # 只取 L 欄（index 11）之後有姓名的欄
+    existing_names = [v for v in l1_row[11:] if v and str(v).strip()]
+    old_count = len(existing_names)
+    existing_set = set(existing_names)
 
-    # 清空舊的 L1:1
+    # 找出真正新增的名字（不在現有名單中）
+    new_names = [n for n in names if n not in existing_set]
+    diff = len(new_names)
+
+    # 在 _adj_update_salary_l1 裡，清空舊 L1:1 之後、寫入新名單之前，
+    # 也清空 L2:L2044 之後多餘欄的公式
     if old_count > 0:
         end_ltr = _col_letter(11 + old_count)
         ws_salary.batch_clear([f"L1:{end_ltr}1"])
+        # 同時清空這些欄的公式（第 2 列到 2044 列）
+        ws_salary.batch_clear([f"L2:{end_ltr}2044"])
 
     # 寫入新名單
     end_ltr = _col_letter(11 + new_count)
     ws_salary.update(f"L1:{end_ltr}1", [names], value_input_option="RAW")
-    _log(log, f"    L1:1 更新：{old_count} → {new_count} 人（diff={diff}）")
+    _log(log, f"    L1:1 更新：{old_count} → {new_count} 人（新增 {diff} 人：{new_names}）")
 
-    # 若有新增員工，複製 L 欄樣板公式到新欄
+    # 只對真正新增的員工複製公式
     if diff > 0:
-        _copy_salary_formulas(ws_salary, old_count, diff, is_first_half, log)
+        # 新增員工在 names 裡的位置對應到薪資表的欄號
+        new_col_indices = [
+            11 + i + 1  # 1-based col，L=12，所以 names[0] 在 col 12
+            for i, n in enumerate(names)
+            if n in set(new_names)
+        ]
+        _copy_salary_formulas_by_cols(ws_salary, new_col_indices, is_first_half, log)
 
-    # 下半月有新增時，清空特定列
     if not is_first_half and diff > 0:
-        s_col   = 12 + old_count       # 新增欄起始（L=12）
-        e_col   = s_col + diff - 1
-        s_ltr   = _col_letter(s_col)
-        e_ltr   = _col_letter(e_col)
-        ws_salary.batch_clear([
-            f"{s_ltr}2039:{e_ltr}2039",
-            f"{s_ltr}2043:{e_ltr}2043",
-        ])
+        for col_num in new_col_indices:
+            ltr = _col_letter(col_num)
+            ws_salary.batch_clear([
+                f"{ltr}2039:{ltr}2039",
+                f"{ltr}2043:{ltr}2043",
+            ])
         _log(log, "    下半月：已清空新增欄位的列 2039 及 2043")
 
+def _copy_salary_formulas_by_cols(
+    ws_salary: gspread.Worksheet,
+    col_nums: list,   # 1-based 欄號清單，只複製這些欄
+    is_first_half: bool,
+    log: List[str],
+):
+    SKIP = {2039, 2043} if not is_first_half else set()
+    START_ROW = 2
+    END_ROW   = 2044
+
+    src_formulas = ws_salary.get(f"L{START_ROW}:L{END_ROW}") or []
+    batch = []
+
+    for tgt_col in col_nums:
+        tgt_ltr = _col_letter(tgt_col)
+        for i, row_f in enumerate(src_formulas):
+            actual_row = START_ROW + i
+            if actual_row in SKIP:
+                continue
+            formula = row_f[0] if row_f else ""
+            if not formula:
+                continue
+            new_formula = re.sub(r'(?<![A-Z])L(?=\d)', tgt_ltr, formula)
+            batch.append({
+                "range": f"{tgt_ltr}{actual_row}",
+                "values": [[new_formula]],
+            })
+
+    if batch:
+        sheet_name = ws_salary.title
+        for item in batch:
+            item["range"] = f"'{sheet_name}'!{item['range']}"
+        for i in range(0, len(batch), 500):
+            ws_salary.spreadsheet.values_batch_update({
+                "valueInputOption": "USER_ENTERED",
+                "data": batch[i:i + 500],
+            })
+        _log(log, f"    薪資公式複製完成（{len(col_nums)} 欄，{len(batch)} 格）")
 
 def _copy_salary_formulas(
     ws_salary: gspread.Worksheet,
