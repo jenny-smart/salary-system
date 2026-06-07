@@ -1063,22 +1063,27 @@ def _copy_salary_formulas(
     is_first_half: bool,
     log: List[str],
 ):
-    """
-    從 L 欄（樣板，col 12）複製公式到 (L + old_count) 起的 diff 欄。
-    下半月跳過列 2039、2043。
-    """
     SKIP = {2039, 2043} if not is_first_half else set()
     SRC_COL   = 12    # L
     START_ROW = 2
     END_ROW   = 2044
-    num_rows  = END_ROW - START_ROW + 1
 
     src_formulas = ws_salary.get(f"L{START_ROW}:L{END_ROW}") or []
+    
+    # 先讀第 1 列，確認目標欄是否有員工姓名
+    row1 = ws_salary.row_values(1)
+    
     batch = []
 
     for c in range(diff):
         tgt_col = SRC_COL + old_count + c
         tgt_ltr = _col_letter(tgt_col)
+
+        # 第 1 列（index = tgt_col - 1）若為空白，跳過整欄
+        name = row1[tgt_col - 1] if tgt_col - 1 < len(row1) else ""
+        if not str(name).strip():
+            _log(log, f"    跳過 {tgt_ltr} 欄（第1列無員工姓名）")
+            continue
 
         for i, row_f in enumerate(src_formulas):
             actual_row = START_ROW + i
@@ -1087,7 +1092,6 @@ def _copy_salary_formulas(
             formula = row_f[0] if row_f else ""
             if not formula:
                 continue
-            # 替換公式中「L」欄字母（前後非字母）為目標欄字母
             new_formula = re.sub(r'(?<![A-Z])L(?=\d)', tgt_ltr, formula)
             batch.append({
                 "range": f"{tgt_ltr}{actual_row}",
