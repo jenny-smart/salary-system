@@ -670,6 +670,7 @@ def _expand_fg_rows_with_fmts(rows: list[list], fmts: list[dict | None]) -> tupl
     F/G 欄拆解，並讓格式跟著資料列：
     - 原列保留原格式
     - 拆解新增列繼承母列格式
+    - 子列（B欄 id 含 -數字 結尾）直接原樣保留，不重複拆解
     回傳：expanded_rows, expanded_fmts, expand_count, warnings, category_counts, new_row_indices
     """
     output_rows      = []
@@ -683,9 +684,16 @@ def _expand_fg_rows_with_fmts(rows: list[list], fmts: list[dict | None]) -> tupl
         row = list(row)
         parent_fmt = copy.deepcopy(fmt or {"cells": [{} for _ in range(62)]})
 
+        order_id = str(row[1]) if len(row) > 1 else ""
+
+        # ✅ 子列（B欄 id 以 -數字 結尾）：直接原樣保留，不做 F/G 拆解
+        if re.search(r"-\d+$", order_id):
+            output_rows.append(row)
+            output_fmts.append(parent_fmt)
+            continue
+
         e_text   = str(row[4]) if len(row) > 4 else ""
         f_text   = str(row[5]) if len(row) > 5 else ""
-        order_id = str(row[1]) if len(row) > 1 else ""
 
         is_expandable = any(t in e_text for t in EXPANDABLE_TYPES)
         if not is_expandable or not f_text.strip():
