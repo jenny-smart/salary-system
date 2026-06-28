@@ -1,40 +1,37 @@
 # .github/workflows/scheduler.yml
 #
-# Lemon Clean 期別資料夾自動排程
+# Lemon Clean 期別排程
 #
-# 觸發時機：
-#   - GitHub Actions 每 5 分鐘喚醒一次
-#   - scheduler_service.py 會讀 config.yaml 判斷是否真的執行
-#   - 也可以在 GitHub Actions 頁面手動觸發
+# 這版不使用 GitHub cron。
+# 排程由 GAS Trigger 負責。
+# GAS 到時間後呼叫 GitHub workflow_dispatch。
 #
-# 手動觸發：
-#   force = true  → 忽略排程日判斷，立即執行
-#   period 留空  → 自動依今天日期判斷期別
-#   period 有值  → 指定期別，例如 202606-1
-#
-# GitHub Secrets 需要設定：
-#   OAUTH_CLIENT_ID
-#   OAUTH_CLIENT_SECRET
-#   OAUTH_REFRESH_TOKEN
-#   NOTIFY_EMAIL
+# 手動執行：
+#   period 留空：自動判斷目前期別
+#   period 有值：指定期別，例如 202606-2
+#   region 留空：全部地區
+#   region 有值：只跑指定地區，例如 台北
+#   action 預設：create_period
 
 name: Lemon Clean 期別排程
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
-
   workflow_dispatch:
     inputs:
-      force:
-        description: "強制執行（忽略排程日判斷，測試用）"
-        required: false
-        default: "false"
-
       period:
-        description: "指定期別，例如 202606-1；留空則自動判斷"
+        description: "指定期別，例如 202606-2；留空則自動判斷"
         required: false
         default: ""
+
+      region:
+        description: "指定地區，例如 台北；留空則全部地區"
+        required: false
+        default: ""
+
+      action:
+        description: "執行功能，例如 create_period"
+        required: false
+        default: "create_period"
 
 jobs:
   run-scheduler:
@@ -55,37 +52,28 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Write credentials to env
-        env:
-          OAUTH_CLIENT_ID:     ${{ secrets.OAUTH_CLIENT_ID }}
-          OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
-          OAUTH_REFRESH_TOKEN: ${{ secrets.OAUTH_REFRESH_TOKEN }}
-          NOTIFY_EMAIL:        ${{ secrets.NOTIFY_EMAIL }}
-        run: |
-          echo "OAUTH_CLIENT_ID=$OAUTH_CLIENT_ID"         >> $GITHUB_ENV
-          echo "OAUTH_CLIENT_SECRET=$OAUTH_CLIENT_SECRET" >> $GITHUB_ENV
-          echo "OAUTH_REFRESH_TOKEN=$OAUTH_REFRESH_TOKEN" >> $GITHUB_ENV
-          echo "NOTIFY_EMAIL=$NOTIFY_EMAIL"               >> $GITHUB_ENV
-
       - name: Run scheduler
         env:
           OAUTH_CLIENT_ID:     ${{ secrets.OAUTH_CLIENT_ID }}
           OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
           OAUTH_REFRESH_TOKEN: ${{ secrets.OAUTH_REFRESH_TOKEN }}
           NOTIFY_EMAIL:        ${{ secrets.NOTIFY_EMAIL }}
-          FORCE_RUN:           ${{ github.event.inputs.force }}
           FORCE_PERIOD:        ${{ github.event.inputs.period }}
+          FORCE_REGION:        ${{ github.event.inputs.region }}
+          FORCE_ACTION:        ${{ github.event.inputs.action }}
         run: |
-          CMD="python -m modules.scheduler_service"
+          CMD="python -m modules.scheduler_service --force"
 
           if [ -n "$FORCE_PERIOD" ]; then
             CMD="$CMD --period $FORCE_PERIOD"
           fi
 
-          if [ "$FORCE_RUN" = "true" ]; then
-            CMD="$CMD --force"
-          else
-            CMD="$CMD --run-once"
+          if [ -n "$FORCE_REGION" ]; then
+            CMD="$CMD --region $FORCE_REGION"
+          fi
+
+          if [ -n "$FORCE_ACTION" ]; then
+            CMD="$CMD --action $FORCE_ACTION"
           fi
 
           echo "Execute: $CMD"
