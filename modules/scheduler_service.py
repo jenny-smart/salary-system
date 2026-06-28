@@ -1,17 +1,18 @@
 """
 modules/scheduler_service.py
-期別資料夾與檔案排程服務 v2026-06
+Lemon Clean 期別排程執行服務 v2026-06
 
-執行環境：
-  - GitHub Actions：credentials 從環境變數讀取
-  - 本機測試：credentials 從 modules.auth.get_credentials() 讀取
+這版設計：
+  - 不再由 GitHub cron 定時檢查。
+  - 排程由 GAS Trigger 負責。
+  - GAS 到時間後呼叫 GitHub workflow_dispatch。
+  - 本程式只負責「被叫醒後執行指定 action」。
 
 CLI 用法：
-  --run-once          單次檢查，符合排程日才執行
-  --force            忽略排程日，立刻執行
-  --period 202606-1  指定期別；留空則自動判斷
-  --region 台北       指定地區；留空則依 config.yaml 設定
-  --daemon           常駐執行，每 30 秒檢查一次
+  --force                 直接執行
+  --period 202606-2       指定期別；留空則自動判斷
+  --region 台北            指定地區；留空則全部地區
+  --action create_period  指定功能；預設 create_period
 """
 
 from __future__ import annotations
@@ -33,7 +34,6 @@ import yaml
 
 DEFAULT_TZ = "Asia/Taipei"
 DEFAULT_LOG_PATH = Path("logs/scheduler.log")
-LOCK_PATH = Path(".period_scheduler.lock")
 CONFIG_PATH = Path("config.yaml")
 
 
@@ -102,53 +102,7 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
         cfg = {}
 
     cfg.setdefault("regions", {})
-    cfg.setdefault("schedule", {})
     return cfg
-
-
-# ═══════════════════════════════════════════════════════════
-# 排程判斷
-# ═══════════════════════════════════════════════════════════
-
-def should_run_now(cfg: dict, now_dt: datetime | None = None) -> tuple[bool, str]:
-    sched = cfg.get("schedule", {})
-    tz_name = sched.get("timezone", DEFAULT_TZ)
-    now_dt = now_dt or _now(tz_name)
-
-    hhmm = now_dt.strftime("%H:%M")
-    run_key = f"{now_dt.strftime('%Y-%m-%d')} {sched.get('time', '05:30')}"
-
-    if not sched.get("enabled", False):
-        return False, run_key
-
-    days = sched.get("days", [])
-
-    if isinstance(days, str):
-        days = [int(d.strip()) for d in days.split(",") if d.strip()]
-
-    days = [int(d) for d in days]
-
-    if now_dt.day not in days:
-        return False, run_key
-
-    cfg_time = str(sched.get("time", "05:30")).strip()
-    cfg_hour = cfg_time[:2]
-
-    # GitHub Actions cron 不一定準到分鐘，所以只比對小時
-    if hhmm[:2] != cfg_hour:
-        return False, run_key
-
-    return True, run_key
-
-
-def _acquire_lock(run_key: str) -> bool:
-    if LOCK_PATH.exists():
-        current = LOCK_PATH.read_text(encoding="utf-8").strip()
-        if current == run_key:
-            return False
-
-    LOCK_PATH.write_text(run_key, encoding="utf-8")
-    return True
 
 
 def _calc_period(now_dt: datetime) -> str:
@@ -156,8 +110,6 @@ def _calc_period(now_dt: datetime) -> str:
     正常規則：
       1～15 日  → 當月-1
       16～月底 → 當月-2
-
-    若 modules.period_utils.get_auto_period() 存在，優先使用原本模組。
     """
     try:
         from modules.period_utils import get_auto_period
@@ -178,14 +130,11 @@ def _execute_action(
     region_name: str,
     log_fn,
 ):
-    """
-    根據 config.yaml 的 schedule.action / schedule.task 執行對應功能。
-    """
-
     normalized = str(action or "").strip()
 
     if normalized in {
         "create_period",
+        "建立期別資料夾與檔案",
         "建立期別資料夾與檔案",
         "期別資料夾",
         "建立期別",
@@ -197,10 +146,46 @@ def _execute_action(
 
 
 # ═══════════════════════════════════════════════════════════
-# 地區執行
+# 地區處理
 # ═══════════════════════════════════════════════════════════
 
-def _run_region(region: dict, period: str, log_fn, creds) -> bool:
+def _normalize_regions(cfg: dict, action: str) -> list[dict]:
+    regions_cfg = cfg.get("regions", {})
+    regions: list[dict] = []
+
+    if isinstance(regions_cfg, dict):
+        for region_name, region_data in regions_cfg.items():
+            region = dict(region_data or {})
+            region["name"] = region_name
+            region["action"] = action
+            regions.append(region)
+
+    elif isinstance(regions_cfg, list):
+        for region_data in regions_cfg:
+            region = dict(region_data or {})
+            region.setdefault("name", "未知")
+            region["action"] = action
+            regions.append(region)
+
+    return regions
+
+
+def _filter_regions(
+    regions: list[dict],
+    force_region: str | None = None,
+) -> list[dict]:
+    if not force_region:
+        return regions
+
+    target = force_region.strip()
+
+    return [
+        r for r in regions
+        if str(r.get("name", "")).strip() == target
+    ]
+
+
+def _run_region(region: dict, period: str, log_fn) -> bool:
     name = region.get("name", "未知")
     root_id = region.get("root_folder_id", "")
     action = region.get("action", "create_period")
@@ -254,65 +239,6 @@ def _run_region(region: dict, period: str, log_fn, creds) -> bool:
         return False
 
 
-def _normalize_regions(cfg: dict, action: str) -> list[dict]:
-    regions_cfg = cfg.get("regions", {})
-    regions: list[dict] = []
-
-    if isinstance(regions_cfg, dict):
-        for region_name, region_data in regions_cfg.items():
-            region = dict(region_data or {})
-            region["name"] = region_name
-            region["action"] = action
-            regions.append(region)
-
-    elif isinstance(regions_cfg, list):
-        for region_data in regions_cfg:
-            region = dict(region_data or {})
-            region.setdefault("name", "未知")
-            region["action"] = action
-            regions.append(region)
-
-    return regions
-
-
-def _filter_regions(
-    regions: list[dict],
-    sched: dict,
-    force_region: str | None = None,
-) -> list[dict]:
-    """
-    地區選擇規則：
-      1. 若 CLI 有 --region，優先只跑該地區
-      2. 若沒有 --region，才看 config.yaml 的 all_regions / region
-    """
-
-    if force_region:
-        target = force_region.strip()
-        return [
-            r for r in regions
-            if str(r.get("name", "")).strip() == target
-        ]
-
-    all_flag = sched.get("all_regions", True)
-
-    if all_flag:
-        return regions
-
-    selected_region = (
-        sched.get("region")
-        or sched.get("selected_region")
-        or sched.get("region_name")
-    )
-
-    if not selected_region:
-        return regions
-
-    return [
-        r for r in regions
-        if str(r.get("name", "")).strip() == str(selected_region).strip()
-    ]
-
-
 # ═══════════════════════════════════════════════════════════
 # 核心執行
 # ═══════════════════════════════════════════════════════════
@@ -321,27 +247,20 @@ def _execute(
     cfg: dict,
     period: str,
     log_path: Path,
-    force_region: str | None = None,
+    action: str,
+    region: str | None = None,
 ) -> dict:
-    sched = cfg.get("schedule", {})
-
-    action = (
-        sched.get("action")
-        or sched.get("task")
-        or "create_period"
-    )
-
     regions = _normalize_regions(cfg, action)
-    regions = _filter_regions(regions, sched, force_region=force_region)
+    regions = _filter_regions(regions, force_region=region)
 
     if not regions:
         raise RuntimeError(
             "沒有可執行的地區，請確認 config.yaml regions 已設定，或確認 --region 名稱是否正確"
         )
 
-    creds = _build_credentials()
-    results = {}
+    _build_credentials()
 
+    results = {}
     region_names = ", ".join([r.get("name", "未知") for r in regions])
 
     _write_log(
@@ -349,15 +268,15 @@ def _execute(
         f"═══ 開始執行：period={period}，action={action}，地區數={len(regions)}，地區={region_names} ═══",
     )
 
-    for region in regions:
-        name = region.get("name", "未知")
+    for region_cfg in regions:
+        name = region_cfg.get("name", "未知")
         logs = []
 
         def _log(msg, _logs=logs):
             _logs.append(msg)
             _write_log(log_path, msg)
 
-        ok = _run_region(region, period, _log, creds)
+        ok = _run_region(region_cfg, period, _log)
         results[name] = {
             "ok": ok,
             "logs": logs,
@@ -390,8 +309,7 @@ def _send_notify(cfg: dict, period: str, results: dict, log_path: Path):
         else f"✅ [{period}] 排程完成：{', '.join(ok_list)}"
     )
 
-    tz_name = cfg.get("schedule", {}).get("timezone", DEFAULT_TZ)
-    now_str = _now(tz_name).strftime("%Y-%m-%d %H:%M:%S")
+    now_str = _now(DEFAULT_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
     body = "\n".join(
         [
@@ -442,32 +360,15 @@ def _send_notify(cfg: dict, period: str, results: dict, log_path: Path):
 # 主流程
 # ═══════════════════════════════════════════════════════════
 
-def run_once_if_due(
+def run_scheduler(
     *,
     log_path: Path = DEFAULT_LOG_PATH,
-    force: bool = False,
     period: str | None = None,
     region: str | None = None,
+    action: str = "create_period",
 ) -> dict | None:
     cfg = load_config()
-    sched = cfg.get("schedule", {})
-    tz_name = sched.get("timezone", DEFAULT_TZ)
-    now_dt = _now(tz_name)
-
-    # 手動指定期別 或 force=True 時，不檢查排程條件
-    if not force and not period:
-        run, run_key = should_run_now(cfg, now_dt)
-
-        if not run:
-            _write_log(
-                log_path,
-                f"今天（{now_dt.day}日 {now_dt.strftime('%H:%M')}）不在排程條件，略過",
-            )
-            return None
-
-        if not _acquire_lock(run_key):
-            _write_log(log_path, f"略過重複執行：{run_key}")
-            return None
+    now_dt = _now(DEFAULT_TZ)
 
     if period:
         selected_period = period.strip()
@@ -479,48 +380,23 @@ def run_once_if_due(
     if region:
         _write_log(log_path, f"使用指定地區：{region.strip()}")
 
+    _write_log(log_path, f"使用 action：{action}")
+
     try:
         results = _execute(
             cfg,
             selected_period,
             log_path,
-            force_region=region,
+            action=action,
+            region=region,
         )
     except Exception as e:
-        _write_log(log_path, f"❌ 排程失敗：{e}\n{traceback.format_exc()}")
+        _write_log(log_path, f"❌ 執行失敗：{e}\n{traceback.format_exc()}")
         return None
 
     _send_notify(cfg, selected_period, results, log_path)
 
     return results
-
-
-def start_scheduler_once(
-    *,
-    log_path: Path = DEFAULT_LOG_PATH,
-    interval_seconds: int = 30,
-):
-    import threading
-
-    marker = "_PERIOD_SCHEDULER_THREAD_STARTED"
-
-    if os.environ.get(marker) == "1":
-        return
-
-    os.environ[marker] = "1"
-
-    def _loop():
-        _write_log(log_path, "背景排程器已啟動")
-
-        while True:
-            try:
-                run_once_if_due(log_path=log_path)
-            except Exception as e:
-                _write_log(log_path, f"錯誤：{e}\n{traceback.format_exc()}")
-
-            time.sleep(interval_seconds)
-
-    threading.Thread(target=_loop, daemon=True).start()
 
 
 # ═══════════════════════════════════════════════════════════
@@ -537,15 +413,9 @@ def main():
     )
 
     parser.add_argument(
-        "--run-once",
-        action="store_true",
-        help="單次檢查，符合排程日才執行",
-    )
-
-    parser.add_argument(
         "--force",
         action="store_true",
-        help="立刻執行，忽略排程日",
+        help="直接執行；保留此參數是為了相容 GitHub workflow",
     )
 
     parser.add_argument(
@@ -559,13 +429,14 @@ def main():
         "--region",
         type=str,
         default="",
-        help="指定地區，例如 台北；留空則依 config.yaml 設定",
+        help="指定地區，例如 台北；留空則全部地區",
     )
 
     parser.add_argument(
-        "--daemon",
-        action="store_true",
-        help="常駐執行，每 30 秒檢查",
+        "--action",
+        type=str,
+        default="create_period",
+        help="指定功能，例如 create_period",
     )
 
     args = parser.parse_args()
@@ -573,40 +444,14 @@ def main():
     log_path = Path(args.log)
     period = args.period.strip() or None
     region = args.region.strip() or None
+    action = args.action.strip() or "create_period"
 
-    if args.force:
-        run_once_if_due(
-            log_path=log_path,
-            force=True,
-            period=period,
-            region=region,
-        )
-
-    elif args.run_once:
-        run_once_if_due(
-            log_path=log_path,
-            force=False,
-            period=period,
-            region=region,
-        )
-
-    elif args.daemon:
-        _write_log(log_path, "daemon 啟動")
-
-        while True:
-            try:
-                run_once_if_due(
-                    log_path=log_path,
-                    period=period,
-                    region=region,
-                )
-            except Exception as e:
-                _write_log(log_path, f"daemon 錯誤：{e}\n{traceback.format_exc()}")
-
-            time.sleep(30)
-
-    else:
-        parser.print_help()
+    run_scheduler(
+        log_path=log_path,
+        period=period,
+        region=region,
+        action=action,
+    )
 
 
 if __name__ == "__main__":
