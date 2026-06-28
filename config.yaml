@@ -43,4 +43,5 @@ schedule:
   time: "09:00"
   timezone: "Asia/Taipei"
   task: "建立期別資料夾與檔案"
+  action: "create_period"
   all_regions: true
