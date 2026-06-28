@@ -3,30 +3,38 @@
 # Lemon Clean 期別資料夾自動排程
 #
 # 觸發時機：
-#   - 每天台北時間 05:30 自動執行（GitHub cron 用 UTC，05:30 CST = 21:30 UTC 前一天）
-#   - 也可以在 GitHub Actions 頁面手動觸發（workflow_dispatch）
+#   - GitHub Actions 每 5 分鐘喚醒一次
+#   - scheduler_service.py 會讀 config.yaml 判斷是否真的執行
+#   - 也可以在 GitHub Actions 頁面手動觸發
 #
-# 執行內容：
-#   python -m modules.scheduler_service --run-once
-#   → 讀 config.yaml 判斷今天是否排程日，是才真正執行
+# 手動觸發：
+#   force = true  → 忽略排程日判斷，立即執行
+#   period 留空  → 自動依今天日期判斷期別
+#   period 有值  → 指定期別，例如 202606-1
 #
-# GitHub Secrets 需要設定（Settings → Secrets → Actions）：
-#   OAUTH_CLIENT_ID      → Streamlit secrets [oauth_drive] client_id
-#   OAUTH_CLIENT_SECRET  → Streamlit secrets [oauth_drive] client_secret
-#   OAUTH_REFRESH_TOKEN  → Streamlit secrets [oauth_drive] refresh_token
-#   NOTIFY_EMAIL         → 收通知的 email
+# GitHub Secrets 需要設定：
+#   OAUTH_CLIENT_ID
+#   OAUTH_CLIENT_SECRET
+#   OAUTH_REFRESH_TOKEN
+#   NOTIFY_EMAIL
 
 name: Lemon Clean 期別排程
 
 on:
   schedule:
     - cron: "*/5 * * * *"
+
   workflow_dispatch:
     inputs:
       force:
         description: "強制執行（忽略排程日判斷，測試用）"
         required: false
         default: "false"
+
+      period:
+        description: "指定期別，例如 202606-1；留空則自動判斷"
+        required: false
+        default: ""
 
 jobs:
   run-scheduler:
@@ -66,9 +74,19 @@ jobs:
           OAUTH_REFRESH_TOKEN: ${{ secrets.OAUTH_REFRESH_TOKEN }}
           NOTIFY_EMAIL:        ${{ secrets.NOTIFY_EMAIL }}
           FORCE_RUN:           ${{ github.event.inputs.force }}
+          FORCE_PERIOD:        ${{ github.event.inputs.period }}
         run: |
-          if [ "$FORCE_RUN" = "true" ]; then
-            python -m modules.scheduler_service --force
-          else
-            python -m modules.scheduler_service --run-once
+          CMD="python -m modules.scheduler_service"
+
+          if [ -n "$FORCE_PERIOD" ]; then
+            CMD="$CMD --period $FORCE_PERIOD"
           fi
+
+          if [ "$FORCE_RUN" = "true" ]; then
+            CMD="$CMD --force"
+          else
+            CMD="$CMD --run-once"
+          fi
+
+          echo "Execute: $CMD"
+          eval "$CMD"
