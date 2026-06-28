@@ -10,6 +10,7 @@ CLI 用法：
   --run-once          單次檢查，符合排程日才執行
   --force            忽略排程日，立刻執行
   --period 202606-1  指定期別；留空則自動判斷
+  --region 台北       指定地區；留空則依 config.yaml 設定
   --daemon           常駐執行，每 30 秒檢查一次
 """
 
@@ -274,7 +275,24 @@ def _normalize_regions(cfg: dict, action: str) -> list[dict]:
     return regions
 
 
-def _filter_regions_by_schedule(regions: list[dict], sched: dict) -> list[dict]:
+def _filter_regions(
+    regions: list[dict],
+    sched: dict,
+    force_region: str | None = None,
+) -> list[dict]:
+    """
+    地區選擇規則：
+      1. 若 CLI 有 --region，優先只跑該地區
+      2. 若沒有 --region，才看 config.yaml 的 all_regions / region
+    """
+
+    if force_region:
+        target = force_region.strip()
+        return [
+            r for r in regions
+            if str(r.get("name", "")).strip() == target
+        ]
+
     all_flag = sched.get("all_regions", True)
 
     if all_flag:
@@ -291,7 +309,7 @@ def _filter_regions_by_schedule(regions: list[dict], sched: dict) -> list[dict]:
 
     return [
         r for r in regions
-        if r.get("name") == selected_region
+        if str(r.get("name", "")).strip() == str(selected_region).strip()
     ]
 
 
@@ -299,7 +317,12 @@ def _filter_regions_by_schedule(regions: list[dict], sched: dict) -> list[dict]:
 # 核心執行
 # ═══════════════════════════════════════════════════════════
 
-def _execute(cfg: dict, period: str, log_path: Path) -> dict:
+def _execute(
+    cfg: dict,
+    period: str,
+    log_path: Path,
+    force_region: str | None = None,
+) -> dict:
     sched = cfg.get("schedule", {})
 
     action = (
@@ -309,17 +332,21 @@ def _execute(cfg: dict, period: str, log_path: Path) -> dict:
     )
 
     regions = _normalize_regions(cfg, action)
-    regions = _filter_regions_by_schedule(regions, sched)
+    regions = _filter_regions(regions, sched, force_region=force_region)
 
     if not regions:
-        raise RuntimeError("沒有可執行的地區，請確認 config.yaml regions 已設定")
+        raise RuntimeError(
+            "沒有可執行的地區，請確認 config.yaml regions 已設定，或確認 --region 名稱是否正確"
+        )
 
     creds = _build_credentials()
     results = {}
 
+    region_names = ", ".join([r.get("name", "未知") for r in regions])
+
     _write_log(
         log_path,
-        f"═══ 開始執行：period={period}，action={action}，地區數={len(regions)} ═══",
+        f"═══ 開始執行：period={period}，action={action}，地區數={len(regions)}，地區={region_names} ═══",
     )
 
     for region in regions:
@@ -420,24 +447,27 @@ def run_once_if_due(
     log_path: Path = DEFAULT_LOG_PATH,
     force: bool = False,
     period: str | None = None,
+    region: str | None = None,
 ) -> dict | None:
     cfg = load_config()
     sched = cfg.get("schedule", {})
     tz_name = sched.get("timezone", DEFAULT_TZ)
     now_dt = _now(tz_name)
 
-    run, run_key = should_run_now(cfg, now_dt)
+    # 手動指定期別 或 force=True 時，不檢查排程條件
+    if not force and not period:
+        run, run_key = should_run_now(cfg, now_dt)
 
-    if not force and not run:
-        _write_log(
-            log_path,
-            f"今天（{now_dt.day}日 {now_dt.strftime('%H:%M')}）不在排程條件，略過",
-        )
-        return None
+        if not run:
+            _write_log(
+                log_path,
+                f"今天（{now_dt.day}日 {now_dt.strftime('%H:%M')}）不在排程條件，略過",
+            )
+            return None
 
-    if not force and not _acquire_lock(run_key):
-        _write_log(log_path, f"略過重複執行：{run_key}")
-        return None
+        if not _acquire_lock(run_key):
+            _write_log(log_path, f"略過重複執行：{run_key}")
+            return None
 
     if period:
         selected_period = period.strip()
@@ -446,8 +476,16 @@ def run_once_if_due(
         selected_period = _calc_period(now_dt)
         _write_log(log_path, f"自動判斷期別：{selected_period}")
 
+    if region:
+        _write_log(log_path, f"使用指定地區：{region.strip()}")
+
     try:
-        results = _execute(cfg, selected_period, log_path)
+        results = _execute(
+            cfg,
+            selected_period,
+            log_path,
+            force_region=region,
+        )
     except Exception as e:
         _write_log(log_path, f"❌ 排程失敗：{e}\n{traceback.format_exc()}")
         return None
@@ -518,20 +556,30 @@ def main():
     )
 
     parser.add_argument(
+        "--region",
+        type=str,
+        default="",
+        help="指定地區，例如 台北；留空則依 config.yaml 設定",
+    )
+
+    parser.add_argument(
         "--daemon",
         action="store_true",
         help="常駐執行，每 30 秒檢查",
     )
 
     args = parser.parse_args()
+
     log_path = Path(args.log)
     period = args.period.strip() or None
+    region = args.region.strip() or None
 
     if args.force:
         run_once_if_due(
             log_path=log_path,
             force=True,
             period=period,
+            region=region,
         )
 
     elif args.run_once:
@@ -539,6 +587,7 @@ def main():
             log_path=log_path,
             force=False,
             period=period,
+            region=region,
         )
 
     elif args.daemon:
@@ -549,6 +598,7 @@ def main():
                 run_once_if_due(
                     log_path=log_path,
                     period=period,
+                    region=region,
                 )
             except Exception as e:
                 _write_log(log_path, f"daemon 錯誤：{e}\n{traceback.format_exc()}")
