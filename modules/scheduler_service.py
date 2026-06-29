@@ -177,13 +177,19 @@ def _filter_regions(
     if not force_region:
         return regions
 
-    target = force_region.strip()
+    targets = [
+        x.strip()
+        for x in str(force_region).split(",")
+        if x.strip()
+    ]
+
+    if not targets:
+        return regions
 
     return [
         r for r in regions
-        if str(r.get("name", "")).strip() == target
+        if str(r.get("name", "")).strip() in targets
     ]
-
 
 def _run_region(region: dict, period: str, log_fn) -> bool:
     name = region.get("name", "未知")
