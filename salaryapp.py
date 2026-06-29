@@ -944,45 +944,207 @@ if run_clicked:
 # ═══════════════════════════════════════════════════════════
 st.markdown('<div class="card"><div class="card-title">⏰ 排程設定</div>', unsafe_allow_html=True)
 
-schedule = config.get("schedule", {})
+def _format_days_for_input(value):
+    if isinstance(value, list):
+        return ",".join(str(d) for d in value)
+    return str(value or "10,25")
+
+def _get_gas_scheduler_url():
+    import os
+    url = str(_safe_secret("GAS_SCHEDULER_WEB_APP_URL", "") or "").strip()
+    if url:
+        return url
+    return str(os.environ.get("GAS_SCHEDULER_WEB_APP_URL", "") or "").strip()
+
+def _sync_gas_schedule_triggers():
+    import requests
+    url = _get_gas_scheduler_url()
+    if not url:
+        return {
+            "success": False,
+            "message": "尚未設定 GAS_SCHEDULER_WEB_APP_URL"
+        }
+
+    response = requests.post(
+        url,
+        params={"action": "syncTriggers"},
+        timeout=60,
+    )
+
+    try:
+        return response.json()
+    except Exception:
+        return {
+            "success": False,
+            "status_code": response.status_code,
+            "message": response.text,
+        }
+
+def _dispatch_github_now_from_gas():
+    import requests
+    url = _get_gas_scheduler_url()
+    if not url:
+        return {
+            "success": False,
+            "message": "尚未設定 GAS_SCHEDULER_WEB_APP_URL"
+        }
+
+    response = requests.post(
+        url,
+        params={"action": "dispatchNow"},
+        timeout=60,
+    )
+
+    try:
+        return response.json()
+    except Exception:
+        return {
+            "success": False,
+            "status_code": response.status_code,
+            "message": response.text,
+        }
+
+schedule = config.get("schedule", {}) or {}
+
 sc1, sc2 = st.columns(2)
 with sc1:
     st.markdown('<div class="field-label">📅 排程日期（每月幾號，逗號分隔）</div>', unsafe_allow_html=True)
     sched_days = st.text_input(
-        "日期", value=",".join(str(d) for d in schedule.get("days", [10, 25])),
-        label_visibility="collapsed", key="sched_days"
+        "日期",
+        value=_format_days_for_input(schedule.get("days", [10, 25])),
+        label_visibility="collapsed",
+        key="sched_days",
     )
 with sc2:
     st.markdown('<div class="field-label">🕘 執行時間（台北時區 HH:MM）</div>', unsafe_allow_html=True)
     sched_time = st.text_input(
-        "時間", value=schedule.get("time", "09:00"),
-        label_visibility="collapsed", key="sched_time"
+        "時間",
+        value=str(schedule.get("time", "09:00")),
+        label_visibility="collapsed",
+        key="sched_time",
     )
 
 sc3, sc4 = st.columns(2)
 with sc3:
-    sched_all     = st.checkbox("套用全部地區", value=schedule.get("all_regions", True))
+    st.markdown('<div class="field-label">🎯 排程功能</div>', unsafe_allow_html=True)
+    sched_action = st.selectbox(
+        "排程功能",
+        ["create_period"],
+        index=0,
+        label_visibility="collapsed",
+        key="sched_action",
+    )
 with sc4:
-    sched_enabled = st.checkbox("啟用排程",     value=schedule.get("enabled",     False))
+    st.markdown('<div class="field-label">📆 指定期別（可留空自動判斷）</div>', unsafe_allow_html=True)
+    sched_period = st.text_input(
+        "指定期別",
+        value=str(schedule.get("period", "") or ""),
+        placeholder="例如 202606-2；留空則自動判斷",
+        label_visibility="collapsed",
+        key="sched_period",
+    )
 
-if st.button("💾 儲存排程設定", use_container_width=True):
+sc5, sc6 = st.columns(2)
+with sc5:
+    sched_all = st.checkbox(
+        "套用全部地區",
+        value=bool(schedule.get("all_regions", True)),
+        key="sched_all_regions",
+    )
+with sc6:
+    sched_enabled = st.checkbox(
+        "啟用排程",
+        value=bool(schedule.get("enabled", False)),
+        key="sched_enabled",
+    )
+
+sched_region = ""
+if not sched_all:
+    region_names_for_schedule = [r["name"] for r in regions]
+    default_region = str(schedule.get("region", "") or "")
+    default_index = 0
+    if default_region in region_names_for_schedule:
+        default_index = region_names_for_schedule.index(default_region)
+
+    if region_names_for_schedule:
+        st.markdown('<div class="field-label">🗺️ 指定排程地區</div>', unsafe_allow_html=True)
+        sched_region = st.selectbox(
+            "指定排程地區",
+            region_names_for_schedule,
+            index=default_index,
+            label_visibility="collapsed",
+            key="sched_region",
+        )
+    else:
+        st.warning("尚未設定任何地區，無法指定單一地區。")
+
+last_run = schedule.get("last_run", "")
+last_result = schedule.get("last_result", "")
+if last_run or last_result:
+    st.caption(f"最近排程同步：{last_run or '尚無'}")
+    if last_result:
+        st.caption(f"最近結果：{last_result}")
+
+sc_btn1, sc_btn2 = st.columns(2)
+
+with sc_btn1:
+    save_schedule_clicked = st.button("💾 儲存排程設定", use_container_width=True)
+
+with sc_btn2:
+    dispatch_now_clicked = st.button("▶ 立即觸發 GitHub Actions", use_container_width=True)
+
+if save_schedule_clicked:
     try:
         days = [int(d.strip()) for d in sched_days.split(",") if d.strip()]
         if not days:
             raise ValueError("請輸入排程日期")
+        if ":" not in sched_time:
+            raise ValueError("請輸入正確時間格式，例如 17:10")
+
         config["schedule"] = {
-            "enabled":     sched_enabled,
-            "days":        days,
-            "time":        sched_time,
-            "timezone":    "Asia/Taipei",
-            "task":        "建立期別資料夾與檔案",
+            "enabled": sched_enabled,
+            "days": days,
+            "time": sched_time.strip(),
+            "timezone": "Asia/Taipei",
+            "task": "建立期別資料夾與檔案",
+            "action": sched_action,
             "all_regions": sched_all,
+            "region": "" if sched_all else sched_region,
+            "period": sched_period.strip(),
+            "last_run": schedule.get("last_run", ""),
+            "last_result": schedule.get("last_result", ""),
         }
+
         save_config(config)
         add_log(f"排程設定已儲存：每月 {days} 日 {sched_time}", "success")
-        st.success("✅ 排程設定已儲存")
+
+        sync_result = _sync_gas_schedule_triggers()
+        if sync_result.get("success"):
+            msg = sync_result.get("result", {}).get("message") or "GAS Trigger 已同步"
+            add_log(msg, "success")
+            st.success("✅ 排程設定已儲存，GAS Trigger 已同步")
+        else:
+            msg = sync_result.get("message") or str(sync_result)
+            add_log(f"GAS Trigger 同步失敗：{msg}", "warning")
+            st.warning(f"⚠️ 排程已儲存，但 GAS Trigger 同步失敗：{msg}")
+
     except Exception as e:
         st.error(f"❌ {e}")
+        add_log(f"排程設定儲存失敗：{e}", "error")
+
+if dispatch_now_clicked:
+    try:
+        dispatch_result = _dispatch_github_now_from_gas()
+        if dispatch_result.get("success"):
+            add_log("已立即觸發 GitHub Actions", "success")
+            st.success("✅ 已立即觸發 GitHub Actions")
+        else:
+            msg = dispatch_result.get("message") or str(dispatch_result)
+            add_log(f"立即觸發失敗：{msg}", "error")
+            st.error(f"❌ 立即觸發失敗：{msg}")
+    except Exception as e:
+        st.error(f"❌ {e}")
+        add_log(f"立即觸發失敗：{e}", "error")
 
 st.markdown('</div>', unsafe_allow_html=True)
 
