@@ -1,99 +1,53 @@
-# .github/workflows/scheduler.yml
-#
-# Lemon Clean 期別資料夾自動排程
-#
-# 自動排程：
-#   GitHub Actions 每 5 分鐘喚醒一次
-#   python -m modules.scheduler_service --run-once
-#   → 由 config.yaml 判斷今天是否真的執行
-#
-# 手動執行：
-#   Actions → Lemon Clean 期別排程 → Run workflow
-#   period 留空：自動判斷目前期別
-#   period 有值：指定期別，例如 202606-2
-#   region 留空：全部地區
-#   region 有值：只跑指定地區，例如 台北
-#
-# GitHub Secrets 需要設定：
-#   OAUTH_CLIENT_ID
-#   OAUTH_CLIENT_SECRET
-#   OAUTH_REFRESH_TOKEN
-#   NOTIFY_EMAIL
+# Lemon Clean 系統設定
+# 固定設定：主控試算表與各地區根目錄
+# 排程設定由主控表「排程設定」管理，GAS Trigger 負責排程
 
-name: Lemon Clean 期別排程
+master_sheet_id: "1GdW3FSZ0s3TGeYiNx3JtYvED_RRfJjiFYwLFeYHZ1hA"
 
-on:
-  schedule:
-    - cron: "*/5 * * * *"
+regions:
+  新北:
+    root_folder_id: "16VBY1_lR6z8x"
+    billing_sheet_id: "1Icd5lTTJTCLvHh5posD_QJXvYA561lvgVZwecN-H1AQ"
+    salary_sheet_id: "1Icd5lTTJTCLvHh5posD_QJXvYA561lvgVZwecN-H1AQ"
+    roster_sheet_id: "1Icd5lTTJTCLvHh5posD_QJXvYA561lvgVZwecN-H1AQ"
 
-  workflow_dispatch:
-    inputs:
-      period:
-        description: "指定期別，例如 202606-2；留空則自動判斷"
-        required: false
-        default: ""
+  台北:
+    root_folder_id: "1kJTGZYpgXBPlyR4SjRKoP0-sK30MhAfW"
+    billing_sheet_id: ""
+    salary_sheet_id: "1AvoUGlFCxaKsPOPavgBmqHoyn-_t4c0I82bIth7SvRQ"
+    roster_sheet_id: "1hsmwhA36I0BPXQ8d6OYGGn8R_SETQe4vTR_FB5Sp8Uc"
 
-      region:
-        description: "指定地區，例如 台北；留空則全部地區"
-        required: false
-        default: ""
+  台中:
+    root_folder_id: "1peMrCBDFJ2-sSKUzuc0X5p0Mc3g0VPrG"
+    billing_sheet_id: ""
+    salary_sheet_id: "1q4-S4cbSPXklNfE380_e7lrHYMaQ7Y_0ZGmgTeWfGfI"
+    roster_sheet_id: "1MKadGGTkIefcbPpEVCEPo0SS_wnqsmZSfqjcdhxg6Gk"
 
-jobs:
-  run-scheduler:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  桃園:
+    root_folder_id: "18Patt1SGG_6CWCqSaNgYNoDC4O0p5Vpm"
+    billing_sheet_id: "1Icd5lTTJTCLvHh5posD_QJXvYA561lvgVZwecN-H1AQ"
+    salary_sheet_id: "1Icd5lTTJTCLvHh5posD_QJXvYA561lvgVZwecN-H1AQ"
+    roster_sheet_id: "1Icd5lTTJTCLvHh5posD_QJXvYA561lvgVZwecN-H1AQ"
 
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+  新竹:
+    root_folder_id: "1rnCtWrw3AUvn1PCj1NKsLtbM5UrWKuiI"
+    billing_sheet_id: "10I4Qvm4S-vsDUxGhFZgWKfBUvLiDHA6UrVICECug8mE"
+    salary_sheet_id: "10I4Qvm4S-vsDUxGhFZgWKfBUvLiDHA6UrVICECug8mE"
+    roster_sheet_id: "10I4Qvm4S-vsDUxGhFZgWKfBUvLiDHA6UrVICECug8mE"
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+  高雄:
+    root_folder_id: "1nq6vgxVd1DI"
+    billing_sheet_id: "1-MI1tm48f0P"
+    salary_sheet_id: "1TNBjM5f7dpt"
+    roster_sheet_id: "1D9IZc95fr3S"
 
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+schedule:
+  enabled: true
+  days: [10, 30]
+  time: "17:10"
+  timezone: "Asia/Taipei"
+  action: "create_period"
+  task: "建立期別資料夾與檔案"
+  all_regions: true
 
-      - name: Write credentials to env
-        env:
-          OAUTH_CLIENT_ID:     ${{ secrets.OAUTH_CLIENT_ID }}
-          OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
-          OAUTH_REFRESH_TOKEN: ${{ secrets.OAUTH_REFRESH_TOKEN }}
-          NOTIFY_EMAIL:        ${{ secrets.NOTIFY_EMAIL }}
-        run: |
-          echo "OAUTH_CLIENT_ID=$OAUTH_CLIENT_ID"         >> $GITHUB_ENV
-          echo "OAUTH_CLIENT_SECRET=$OAUTH_CLIENT_SECRET" >> $GITHUB_ENV
-          echo "OAUTH_REFRESH_TOKEN=$OAUTH_REFRESH_TOKEN" >> $GITHUB_ENV
-          echo "NOTIFY_EMAIL=$NOTIFY_EMAIL"               >> $GITHUB_ENV
-
-      - name: Run scheduler
-        env:
-          OAUTH_CLIENT_ID:     ${{ secrets.OAUTH_CLIENT_ID }}
-          OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
-          OAUTH_REFRESH_TOKEN: ${{ secrets.OAUTH_REFRESH_TOKEN }}
-          NOTIFY_EMAIL:        ${{ secrets.NOTIFY_EMAIL }}
-          FORCE_PERIOD:        ${{ github.event.inputs.period }}
-          FORCE_REGION:        ${{ github.event.inputs.region }}
-          EVENT_NAME:          ${{ github.event_name }}
-        run: |
-          CMD="python -m modules.scheduler_service"
-
-          if [ -n "$FORCE_PERIOD" ]; then
-            CMD="$CMD --period $FORCE_PERIOD"
-          fi
-
-          if [ -n "$FORCE_REGION" ]; then
-            CMD="$CMD --region $FORCE_REGION"
-          fi
-
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            CMD="$CMD --force"
-          else
-            CMD="$CMD --run-once"
-          fi
-
-          echo "Execute: $CMD"
-          eval "$CMD"
+notify_email: ""
