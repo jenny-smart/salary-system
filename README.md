@@ -55,3 +55,30 @@ python -m modules.scheduler_service --force
 ## 注意
 
 `schedule_config.json` 的 root_folder_id 必須換成各地區真實 Google Drive 根資料夾 ID。
+
+
+Scheduler V2 覆蓋檔案
+
+覆蓋位置：
+1. .github/workflows/scheduler.yml
+2. modules/scheduler_service.py
+3. opapp.py
+4. GAS/ScheduleTrigger.gs 的內容貼到主控試算表綁定 Apps Script
+
+需要設定：
+- GitHub Secrets:
+  OAUTH_CLIENT_ID
+  OAUTH_CLIENT_SECRET
+  OAUTH_REFRESH_TOKEN
+  NOTIFY_EMAIL
+
+- Apps Script Script Properties:
+  GITHUB_TOKEN
+  GITHUB_OWNER = jenny-smart
+  GITHUB_REPO = salary-system
+  GITHUB_WORKFLOW = scheduler.yml
+  GITHUB_REF = main
+
+- Streamlit secrets 或環境變數:
+  GAS_SCHEDULER_WEB_APP_URL = GAS Web App URL
+
