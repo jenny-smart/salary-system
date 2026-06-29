@@ -41,29 +41,6 @@ def _write_log(path: Path, msg: str, tz_name: str = DEFAULT_TZ) -> None:
 
 
 def _build_credentials():
-    client_id = os.environ.get("OAUTH_CLIENT_ID", "").strip()
-    client_secret = os.environ.get("OAUTH_CLIENT_SECRET", "").strip()
-    refresh_token = os.environ.get("OAUTH_REFRESH_TOKEN", "").strip()
-
-    if client_id and client_secret and refresh_token:
-        from google.oauth2.credentials import Credentials
-        from google.auth.transport.requests import Request
-
-        creds = Credentials(
-            token=None,
-            refresh_token=refresh_token,
-            client_id=client_id,
-            client_secret=client_secret,
-            token_uri="https://oauth2.googleapis.com/token",
-            scopes=[
-                "https://www.googleapis.com/auth/drive",
-                "https://www.googleapis.com/auth/spreadsheets",
-                "https://www.googleapis.com/auth/gmail.send",
-            ],
-        )
-        creds.refresh(Request())
-        return creds
-
     from modules.auth import get_credentials
     return get_credentials()
 
