@@ -1,25 +1,12 @@
 """
 modules/scheduler_service.py
 Lemon Clean 期別排程執行服務 v2026-06
-
-這版設計：
-  - 不再由 GitHub cron 定時檢查。
-  - 排程由 GAS Trigger 負責。
-  - GAS 到時間後呼叫 GitHub workflow_dispatch。
-  - 本程式只負責「被叫醒後執行指定 action」。
-
-CLI 用法：
-  --force                 直接執行
-  --period 202606-2       指定期別；留空則自動判斷
-  --region 台北            指定地區；留空則全部地區
-  --action create_period  指定功能；預設 create_period
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import time
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -35,11 +22,8 @@ import yaml
 DEFAULT_TZ = "Asia/Taipei"
 DEFAULT_LOG_PATH = Path("logs/scheduler.log")
 CONFIG_PATH = Path("config.yaml")
+REGION_SHEET_NAME = "地區設定"
 
-
-# ═══════════════════════════════════════════════════════════
-# 基礎工具
-# ═══════════════════════════════════════════════════════════
 
 def _now(tz_name: str = DEFAULT_TZ) -> datetime:
     if ZoneInfo is not None:
@@ -51,16 +35,10 @@ def _write_log(path: Path, msg: str, tz_name: str = DEFAULT_TZ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     ts = _now(tz_name).strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
-
     with path.open("a", encoding="utf-8") as f:
         f.write(line + "\n")
-
     print(line, flush=True)
 
-
-# ═══════════════════════════════════════════════════════════
-# Credentials
-# ═══════════════════════════════════════════════════════════
 
 def _build_credentials():
     client_id = os.environ.get("OAUTH_CLIENT_ID", "").strip()
@@ -90,27 +68,79 @@ def _build_credentials():
     return get_credentials()
 
 
-# ═══════════════════════════════════════════════════════════
-# 設定讀取
-# ═══════════════════════════════════════════════════════════
+def _build_sheets_service():
+    import googleapiclient.discovery
+    creds = _build_credentials()
+    return googleapiclient.discovery.build(
+        "sheets",
+        "v4",
+        credentials=creds,
+        cache_discovery=False,
+    )
 
-def load_config(path: Path = CONFIG_PATH) -> dict:
+
+def _load_yaml(path: Path = CONFIG_PATH) -> dict:
     try:
         with open(path, "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
     except FileNotFoundError:
         cfg = {}
+    cfg.setdefault("regions", {})
+    return cfg
+
+
+def _read_regions_from_master_sheet(master_sheet_id: str) -> list[dict]:
+    svc = _build_sheets_service()
+
+    values = svc.spreadsheets().values().get(
+        spreadsheetId=master_sheet_id,
+        range=f"'{REGION_SHEET_NAME}'!A2:E",
+    ).execute().get("values", [])
+
+    regions = []
+
+    for row in values:
+        row = row + [""] * (5 - len(row))
+        name = str(row[0]).strip()
+        root_folder_id = str(row[1]).strip()
+
+        if not name:
+            continue
+
+        regions.append({
+            "name": name,
+            "root_folder_id": root_folder_id,
+            "allowance_id": str(row[2]).strip(),
+            "salary_id": str(row[3]).strip(),
+            "roster_id": str(row[4]).strip(),
+        })
+
+    return regions
+
+
+def load_config(path: Path = CONFIG_PATH) -> dict:
+    cfg = _load_yaml(path)
+
+    master_sheet_id = str(
+        cfg.get("master_sheet_id")
+        or cfg.get("config_sheet_id")
+        or os.environ.get("CONFIG_SHEET_ID", "")
+        or ""
+    ).strip()
+
+    if master_sheet_id:
+        try:
+            sheet_regions = _read_regions_from_master_sheet(master_sheet_id)
+            if sheet_regions:
+                cfg["regions"] = sheet_regions
+        except Exception as e:
+            print(f"⚠️ 主控表地區設定讀取失敗，改用 config.yaml：{e}", flush=True)
 
     cfg.setdefault("regions", {})
     return cfg
 
 
 def _calc_period(now_dt: datetime) -> str:
-    """
-    正常規則：
-      1～15 日  → 當月-1
-      16～月底 → 當月-2
-    """
     try:
         from modules.period_utils import get_auto_period
         return get_auto_period()
@@ -118,10 +148,6 @@ def _calc_period(now_dt: datetime) -> str:
         suffix = "1" if now_dt.day <= 15 else "2"
         return f"{now_dt.year}{now_dt.month:02d}-{suffix}"
 
-
-# ═══════════════════════════════════════════════════════════
-# Action 分派
-# ═══════════════════════════════════════════════════════════
 
 def _execute_action(
     action: str,
@@ -135,7 +161,6 @@ def _execute_action(
     if normalized in {
         "create_period",
         "建立期別資料夾與檔案",
-        "建立期別資料夾與檔案",
         "期別資料夾",
         "建立期別",
     }:
@@ -144,10 +169,6 @@ def _execute_action(
 
     raise ValueError(f"未知的排程 action：{action}")
 
-
-# ═══════════════════════════════════════════════════════════
-# 地區處理
-# ═══════════════════════════════════════════════════════════
 
 def _normalize_regions(cfg: dict, action: str) -> list[dict]:
     regions_cfg = cfg.get("regions", {})
@@ -179,7 +200,7 @@ def _filter_regions(
 
     targets = [
         x.strip()
-        for x in str(force_region).split(",")
+        for x in str(force_region).replace("，", ",").split(",")
         if x.strip()
     ]
 
@@ -190,6 +211,7 @@ def _filter_regions(
         r for r in regions
         if str(r.get("name", "")).strip() in targets
     ]
+
 
 def _run_region(region: dict, period: str, log_fn) -> bool:
     name = region.get("name", "未知")
@@ -245,10 +267,6 @@ def _run_region(region: dict, period: str, log_fn) -> bool:
         return False
 
 
-# ═══════════════════════════════════════════════════════════
-# 核心執行
-# ═══════════════════════════════════════════════════════════
-
 def _execute(
     cfg: dict,
     period: str,
@@ -257,11 +275,17 @@ def _execute(
     region: str | None = None,
 ) -> dict:
     regions = _normalize_regions(cfg, action)
+    all_region_names = [str(r.get("name", "")).strip() for r in regions]
+
+    _write_log(log_path, f"目前可用地區：{', '.join(all_region_names) or '無'}")
+
     regions = _filter_regions(regions, force_region=region)
 
     if not regions:
         raise RuntimeError(
-            "沒有可執行的地區，請確認 config.yaml regions 已設定，或確認 --region 名稱是否正確"
+            "沒有可執行的地區。"
+            f"指定地區={region or '全部'}；"
+            f"目前可用地區={', '.join(all_region_names) or '無'}"
         )
 
     _build_credentials()
@@ -290,10 +314,6 @@ def _execute(
 
     return results
 
-
-# ═══════════════════════════════════════════════════════════
-# Email 通知
-# ═══════════════════════════════════════════════════════════
 
 def _send_notify(cfg: dict, period: str, results: dict, log_path: Path):
     notify_email = (
@@ -362,10 +382,6 @@ def _send_notify(cfg: dict, period: str, results: dict, log_path: Path):
         _write_log(log_path, f"⚠️ 寄信失敗：{e}\n{traceback.format_exc()}")
 
 
-# ═══════════════════════════════════════════════════════════
-# 主流程
-# ═══════════════════════════════════════════════════════════
-
 def run_scheduler(
     *,
     log_path: Path = DEFAULT_LOG_PATH,
@@ -405,58 +421,22 @@ def run_scheduler(
     return results
 
 
-# ═══════════════════════════════════════════════════════════
-# CLI
-# ═══════════════════════════════════════════════════════════
-
 def main():
     parser = argparse.ArgumentParser(description="Lemon Clean 期別排程服務")
 
-    parser.add_argument(
-        "--log",
-        default=str(DEFAULT_LOG_PATH),
-        help="log 檔案路徑",
-    )
-
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="直接執行；保留此參數是為了相容 GitHub workflow",
-    )
-
-    parser.add_argument(
-        "--period",
-        type=str,
-        default="",
-        help="指定期別，例如 202606-1；留空則自動判斷",
-    )
-
-    parser.add_argument(
-        "--region",
-        type=str,
-        default="",
-        help="指定地區，例如 台北；留空則全部地區",
-    )
-
-    parser.add_argument(
-        "--action",
-        type=str,
-        default="create_period",
-        help="指定功能，例如 create_period",
-    )
+    parser.add_argument("--log", default=str(DEFAULT_LOG_PATH))
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--period", type=str, default="")
+    parser.add_argument("--region", type=str, default="")
+    parser.add_argument("--action", type=str, default="create_period")
 
     args = parser.parse_args()
 
-    log_path = Path(args.log)
-    period = args.period.strip() or None
-    region = args.region.strip() or None
-    action = args.action.strip() or "create_period"
-
     run_scheduler(
-        log_path=log_path,
-        period=period,
-        region=region,
-        action=action,
+        log_path=Path(args.log),
+        period=args.period.strip() or None,
+        region=args.region.strip() or None,
+        action=args.action.strip() or "create_period",
     )
 
 
