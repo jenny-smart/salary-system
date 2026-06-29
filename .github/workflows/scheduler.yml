@@ -1,18 +1,3 @@
-# .github/workflows/scheduler.yml
-#
-# Lemon Clean 期別排程
-#
-# 這版不使用 GitHub cron。
-# 排程由 GAS Trigger 負責。
-# GAS 到時間後呼叫 GitHub workflow_dispatch。
-#
-# 手動執行：
-#   period 留空：自動判斷目前期別
-#   period 有值：指定期別，例如 202606-2
-#   region 留空：全部地區
-#   region 有值：只跑指定地區，例如 台北
-#   action 預設：create_period
-
 name: Lemon Clean 期別排程
 
 on:
@@ -24,7 +9,7 @@ on:
         default: ""
 
       region:
-        description: "指定地區，例如 台北；留空則全部地區"
+        description: "指定地區，例如 台北；多地區用逗號，例如 新竹,桃園；留空則全部地區"
         required: false
         default: ""
 
