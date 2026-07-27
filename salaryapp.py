@@ -104,6 +104,19 @@ def _load_yaml_backup() -> dict:
                 return {"regions": [], "schedule": {}}
             data.setdefault("regions", [])
             data.setdefault("schedule", {})
+            # 舊版 config.yaml 以 {地區名稱: 設定} 儲存；UI 使用 list[dict]。
+            if isinstance(data["regions"], dict):
+                data["regions"] = [
+                    {
+                        "name": name,
+                        "root_folder_id": cfg.get("root_folder_id", ""),
+                        "allowance_id": cfg.get("allowance_id", cfg.get("billing_sheet_id", "")),
+                        "salary_id": cfg.get("salary_id", cfg.get("salary_sheet_id", "")),
+                        "roster_id": cfg.get("roster_id", cfg.get("roster_sheet_id", "")),
+                    }
+                    for name, cfg in data["regions"].items()
+                    if isinstance(cfg, dict)
+                ]
             return data
     except FileNotFoundError:
         return {"regions": [], "schedule": {}}
