@@ -6,8 +6,11 @@ Lemon Clean 期別排程執行服務 v2026-06
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import traceback
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -359,6 +362,54 @@ def _send_notify(cfg: dict, period: str, results: dict, log_path: Path):
         _write_log(log_path, f"⚠️ 寄信失敗：{e}\n{traceback.format_exc()}")
 
 
+def _send_line_message(
+    period: str,
+    results: dict,
+    log_path: Path,
+    fatal_error: str = "",
+) -> None:
+    token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
+    user_id = os.environ.get("LINE_USER_ID", "").strip()
+
+    if not token or not user_id:
+        _write_log(log_path, "LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID 未設定，略過 LINE 通知")
+        return
+
+    ok_list = [n for n, r in results.items() if r.get("ok")]
+    fail_list = [n for n, r in results.items() if not r.get("ok")]
+    status = "❌ 排程失敗" if fatal_error or fail_list else "✅ 排程完成"
+    lines = [
+        f"{status}",
+        f"期別：{period}",
+        f"時間：{_now(DEFAULT_TZ).strftime('%Y-%m-%d %H:%M:%S')}",
+        f"成功：{', '.join(ok_list) or '無'}",
+        f"失敗：{', '.join(fail_list) or ('初始化失敗' if fatal_error else '無')}",
+    ]
+    if fatal_error:
+        lines.append(f"錯誤：{fatal_error}")
+
+    request = urllib.request.Request(
+        "https://api.line.me/v2/bot/message/push",
+        data=json.dumps({
+            "to": user_id,
+            "messages": [{"type": "text", "text": "\n".join(lines)[:5000]}],
+        }).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            if response.status != 200:
+                raise RuntimeError(f"LINE API HTTP {response.status}")
+        _write_log(log_path, "✅ LINE 排程通知已送出")
+    except Exception as e:
+        _write_log(log_path, f"⚠️ LINE 通知失敗：{e}")
+
+
 def run_scheduler(
     *,
     log_path: Path = DEFAULT_LOG_PATH,
@@ -391,9 +442,11 @@ def run_scheduler(
         )
     except Exception as e:
         _write_log(log_path, f"❌ 執行失敗：{e}\n{traceback.format_exc()}")
+        _send_line_message(selected_period, {}, log_path, fatal_error=str(e))
         return None
 
     _send_notify(cfg, selected_period, results, log_path)
+    _send_line_message(selected_period, results, log_path)
 
     return results
 
@@ -409,12 +462,14 @@ def main():
 
     args = parser.parse_args()
 
-    run_scheduler(
+    results = run_scheduler(
         log_path=Path(args.log),
         period=args.period.strip() or None,
         region=args.region.strip() or None,
         action=args.action.strip() or "create_period",
     )
+    if results is None or any(not result.get("ok") for result in results.values()):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
