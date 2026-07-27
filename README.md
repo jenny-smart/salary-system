@@ -71,6 +71,8 @@ Scheduler V2 覆蓋檔案
   OAUTH_CLIENT_SECRET
   OAUTH_REFRESH_TOKEN
   NOTIFY_EMAIL
+  LINE_CHANNEL_ACCESS_TOKEN
+  LINE_USER_ID
 
 - Apps Script Script Properties:
   GITHUB_TOKEN
@@ -81,4 +83,3 @@ Scheduler V2 覆蓋檔案
 
 - Streamlit secrets 或環境變數:
   GAS_SCHEDULER_WEB_APP_URL = GAS Web App URL
-
