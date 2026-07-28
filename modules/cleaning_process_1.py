@@ -624,12 +624,12 @@ def run_adjustment(
         _log(log, "  步驟3：匯入調薪資料 Y3:AF")
         _adj_import_salary_k_r(ws_adjust, salary_id, yyyymm, log)
 
-        # ── 步驟4：匯入調薪資料 → AG3:AL ────────────────────
-        _log(log, "  步驟4：匯入調薪資料 AG3:AL")
+        # ── 步驟4：匯入調薪資料 → AS3:AX ────────────────────
+        _log(log, "  步驟4：匯入調薪資料 AS3:AX")
         _adj_import_salary_aa_af(ws_adjust, salary_id, yyyymm, log)
 
         # ── 步驟5：轉為靜態值 ────────────────────────────────
-        _log(log, "  步驟5：S3:AL 轉為靜態值")
+        _log(log, "  步驟5：S3:AX 轉為靜態值")
         num_rows = _adj_convert_to_values(ws_adjust, log)
         if num_rows == 0:
             raise ValueError("00調薪 S 欄無有效資料，請確認 IMPORTRANGE 已授權")
@@ -680,12 +680,12 @@ def _adj_import_roster(
     yyyymm: str,
     log: List[str],
 ):
-    # 先清空 S3:AP（確保舊資料不殘留）
-    ws_adjust.batch_clear(["S3:AP"])
-    _log(log, "    S3:AP 已清空")
+    # 先清空 S3:AX（確保舊資料不殘留）
+    ws_adjust.batch_clear(["S3:AX"])
+    _log(log, "    S3:AX 已清空")
 
     # 直接 IMPORTRANGE，不需要 ARRAYFORMULA+FILTER
-    formula = f'=IMPORTRANGE("{roster_id}","{yyyymm}專員名冊!B2:F")'
+    formula = f'=IMPORTRANGE("{roster_id}","{yyyymm}專員名冊!B2:F300")'
     ws_adjust.update_cell(3, 19, formula)  # S3 = row 3, col 19
     _log(log, f"    S3 IMPORTRANGE 已寫入（名冊 {yyyymm}）")
     time.sleep(5)
@@ -700,9 +700,9 @@ def _adj_import_salary_k_r(
     log: List[str],
 ):
     formula = (
-        f'=ARRAYFORMULA(IF(S3:S="",,FILTER('
-        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!K3:R"),'
-        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!B3:B")=S3:S)))'
+        f'=ARRAYFORMULA(IF(S3:S300="",,FILTER('
+        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!K3:R300"),'
+        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!B3:B300")=S3:S300)))'
     )
     ws_adjust.update_cell(3, 25, formula)  # Y3 = row 3, col 25
     _log(log, "    Y3 IMPORTRANGE 已寫入（調薪 K:R）")
@@ -718,12 +718,12 @@ def _adj_import_salary_aa_af(
     log: List[str],
 ):
     formula = (
-        f'=ARRAYFORMULA(IF(S3:S="",,FILTER('
-        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!AA3:AF"),'
-        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!B3:B")=S3:S)))'
+        f'=ARRAYFORMULA(IF(S3:S300="",,FILTER('
+        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!AA3:AF300"),'
+        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!B3:B300")=S3:S300)))'
     )
-    ws_adjust.update_cell(3, 33, formula)  # AG3 = row 3, col 33
-    _log(log, "    AG3 IMPORTRANGE 已寫入（調薪 AA:AF）")
+    ws_adjust.update_cell(3, 45, formula)  # AS3 = row 3, col 45
+    _log(log, "    AS3 IMPORTRANGE 已寫入（調薪 AA:AF）")
     time.sleep(5)
 
 
@@ -734,9 +734,9 @@ def _adj_convert_to_values(
     log: List[str],
 ) -> int:
     """
-    等待 S3 有值後，將 S3:AL 整段轉為靜態值。
+    等待 S3 有值後，將 S3:AX 整段轉為靜態值。
     回傳有效列數（S 欄非空白列數）。
-    S = col 19，AL = col 38，共 20 欄。
+    S = col 19，AX = col 50。
     """
     # 等待 S3 有值（最多 30 秒）
     deadline = time.time() + 30
@@ -762,9 +762,9 @@ def _adj_convert_to_values(
         return 0
 
     end_row = 2 + num_rows               # row 3 = index 2, end = 2 + num_rows
-    data = ws_adjust.get(f"S3:AL{end_row}") or []
-    ws_adjust.update(f"S3:AL{end_row}", data, value_input_option="RAW")
-    _log(log, f"    S3:AL 轉靜態值完成（{num_rows} 列）")
+    data = ws_adjust.get(f"S3:AX{end_row}") or []
+    ws_adjust.update(f"S3:AX{end_row}", data, value_input_option="RAW")
+    _log(log, f"    S3:AX 轉靜態值完成（{num_rows} 列）")
     return num_rows
 
 
@@ -779,7 +779,7 @@ def _adj_set_formulas_a_to_o(
     A=S, B=T（直接等於）
     C/D/E/G → VLOOKUP(A, $S:$AL, offset, FALSE)
         S:AL 欄偏移（S=1）：Z=8, AA=9, AC=11, AF=14
-    J:O（6欄）→ FILTER($AG:$AL, $S:$S=A{r})（ARRAYFORMULA 展開至 O 欄）
+    J:O（6欄）→ FILTER($AS:$AX, $S:$S=A{r})（ARRAYFORMULA 展開至 O 欄）
     """
     batch = []
     for i in range(num_rows):
@@ -796,7 +796,7 @@ def _adj_set_formulas_a_to_o(
             {"range": f"G{r}", "values": [[
                 f'=IFERROR(VLOOKUP(A{r},$S:$AL,14,FALSE),"")' ]]}, # AF
             {"range": f"J{r}", "values": [[
-                f'=IFERROR(FILTER($AG:$AL,$S:$S=A{r}),"")' ]]},    # AG:AL
+                f'=IFERROR(FILTER($AS:$AX,$S:$S=A{r}),"")' ]]},    # AS:AX
         ])
 
     # 每批 500 個以內，range 加工作表名稱
