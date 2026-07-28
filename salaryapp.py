@@ -489,8 +489,9 @@ FUNCTION_MAP = {
         "產生專案PDF",
     ],
     "📦 其他承攬": [
-        "水洗前置", "家電前置", "全部前置",
-        "水洗結算", "家電結算", "全部結算", "產出全部薪資單",
+        "水洗前置", "家電前置", "收納前置", "地毯前置", "座椅前置", "全部前置",
+        "水洗結算", "家電結算", "收納結算", "地毯結算", "座椅結算", "全部結算",
+        "產出全部薪資單",
     ],
 }
 
@@ -1007,10 +1008,51 @@ if run_clicked and execution_engine == "PYTHON":
                             success = False
 
                 # ───────────────────────────────────────────────
-                # █ 區塊8-C：其他承攬執行邏輯（待開發）
+                # █ 區塊8-C：其他承攬執行邏輯
                 # ───────────────────────────────────────────────
                 else:
-                    add_log(f"{_system} {_func} 開發中", "warning")
+                    from modules.other_contract_process import (
+                        run_other_preprocess,
+                        run_other_settlement,
+                        run_other_pdf,
+                    )
+
+                    def other_log(message):
+                        level = "success" if "✅" in message else \
+                                "error" if "❌" in message else \
+                                "warning" if "⚠️" in message else "info"
+                        add_log(message, level)
+
+                    service = None if _func.startswith(("全部", "產出全部")) else \
+                              next((s for s in ["水洗", "家電", "收納", "地毯", "座椅"]
+                                    if _func.startswith(s)), None)
+
+                    if _func.endswith("前置"):
+                        result = run_other_preprocess(
+                            root_folder_id=root_id, region=_name, period=_period,
+                            is_first_half=_is_first_half, service_type=service, log=other_log,
+                        )
+                        add_log(f"其他承攬前置完成：{result}", "success")
+                    elif _func.endswith("結算"):
+                        result = run_other_settlement(
+                            root_folder_id=root_id, region=_name, period=_period,
+                            service_type=service, log=other_log,
+                        )
+                        add_log("其他承攬結算完成", "success")
+                    elif _func == "產出全部薪資單":
+                        result = run_other_pdf(
+                            root_folder_id=root_id, region=_name, period=_period,
+                            service_type=None, log=other_log,
+                        )
+                        if result.get("pdfs") or result.get("failed"):
+                            st.session_state["pdf_result"] = result
+                        add_log(
+                            f"其他承攬 PDF：成功 {result.get('success_count', 0)}，"
+                            f"失敗 {len(result.get('failed', []))}",
+                            "success" if not result.get("failed") else "warning",
+                        )
+                    else:
+                        add_log(f"{_func} 尚未實作", "warning")
 
             except Exception as e:
                 import traceback
