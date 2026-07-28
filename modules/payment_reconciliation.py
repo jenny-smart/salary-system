@@ -198,11 +198,13 @@ def copy_orders_to_template(
     try:
         import traceback
         src_row_nums = list(range(2, 2 + count))
+        used_cols = max((len(row) for row in data), default=1)
         log(f"🔵 讀取格式中（訂單工作表第 2–{1 + count} 列）...")
         fmt_map = _fetch_row_fmts(
             spreadsheet_id = order_file["id"],
             sheet_title    = source_sheet.title,
             row_nums       = src_row_nums,
+            max_cols       = used_cols,
         )
         log(f"🔵 格式讀取完成，套用中...")
         fmts = [fmt_map.get(r) for r in src_row_nums]
@@ -893,8 +895,16 @@ def _cell_format_from_effective(ef: dict | None) -> dict:
     return out
 
 
+def _column_letter(number: int) -> str:
+    letters = ""
+    while number:
+        number, remainder = divmod(number - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
+
+
 def _fetch_row_fmts(spreadsheet_id: str, sheet_title: str,
-                    row_nums: list[int]) -> dict[int, dict]:
+                    row_nums: list[int], max_cols: int = 62) -> dict[int, dict]:
     """
     批次讀取多列 A:BJ 逐格格式。
     回傳：
@@ -907,39 +917,47 @@ def _fetch_row_fmts(spreadsheet_id: str, sheet_title: str,
     if not row_nums:
         return {}
 
-    min_row = min(row_nums)
-    max_row = max(row_nums)
-    svc     = _build_sheets_service()
-
-    result = svc.spreadsheets().get(
-        spreadsheetId   = spreadsheet_id,
-        ranges          = [f"'{sheet_title}'!A{min_row}:BJ{max_row}"],
-        fields          = "sheets.data.rowData.values.effectiveFormat",
-        includeGridData = True,
-    ).execute()
-
-    try:
-        all_row_data = result["sheets"][0]["data"][0].get("rowData", [])
-    except (IndexError, KeyError):
-        return {r: {"cells": [{} for _ in range(62)]} for r in row_nums}
-
     fmt_map = {}
-    for row_num in row_nums:
-        idx = row_num - min_row
-        cells = []
+    svc = _build_sheets_service()
+    max_cols = max(1, min(int(max_cols), 62))
+    end_col = _column_letter(max_cols)
+
+    # Highly repetitive Sheets formatting compresses beyond httplib2's safety
+    # ratio (100x). Request identity encoding and keep each response bounded.
+    sorted_rows = sorted(set(row_nums))
+    for offset in range(0, len(sorted_rows), 100):
+        chunk = sorted_rows[offset:offset + 100]
+        min_row, max_row = min(chunk), max(chunk)
+        request = svc.spreadsheets().get(
+            spreadsheetId=spreadsheet_id,
+            ranges=[f"'{sheet_title}'!A{min_row}:{end_col}{max_row}"],
+            fields="sheets.data.rowData.values.effectiveFormat",
+            includeGridData=True,
+        )
+        request.headers["Accept-Encoding"] = "identity"
+        result = request.execute()
+
         try:
-            values = all_row_data[idx].get("values", [])
-        except (IndexError, KeyError, TypeError):
-            values = []
+            all_row_data = result["sheets"][0]["data"][0].get("rowData", [])
+        except (IndexError, KeyError):
+            all_row_data = []
 
-        for col_idx in range(62):
+        for row_num in chunk:
+            idx = row_num - min_row
+            cells = []
             try:
-                ef = values[col_idx].get("effectiveFormat", {}) if col_idx < len(values) else {}
-            except (KeyError, TypeError):
-                ef = {}
-            cells.append(_cell_format_from_effective(ef))
+                values = all_row_data[idx].get("values", [])
+            except (IndexError, KeyError, TypeError):
+                values = []
 
-        fmt_map[row_num] = {"cells": cells}
+            for col_idx in range(max_cols):
+                try:
+                    ef = values[col_idx].get("effectiveFormat", {}) if col_idx < len(values) else {}
+                except (KeyError, TypeError):
+                    ef = {}
+                cells.append(_cell_format_from_effective(ef))
+
+            fmt_map[row_num] = {"cells": cells}
 
     return fmt_map
 
