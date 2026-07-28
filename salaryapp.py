@@ -361,6 +361,7 @@ def _write_config_to_sheet(spreadsheet_id: str, cfg: dict):
     ).execute()
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def load_config():
     """
     載入設定：Google Sheet 優先。
@@ -382,7 +383,10 @@ def load_config():
         _save_yaml_backup(sheet_cfg)
         return sheet_cfg
     except Exception as e:
-        st.warning(f"⚠️ 永久設定表讀取失敗，暫用 config.yaml：{e}")
+        if "429" in str(e) or "RATE_LIMIT_EXCEEDED" in str(e):
+            st.warning("⚠️ Google Sheet 讀取暫達每分鐘上限，已使用本機設定；稍後自動重試。")
+        else:
+            st.warning(f"⚠️ 永久設定表讀取失敗，暫用 config.yaml：{e}")
         local_cfg.setdefault("regions", [])
         local_cfg.setdefault("schedule", {})
         return local_cfg
@@ -1028,7 +1032,11 @@ if run_clicked and execution_engine == "PYTHON":
                             root_folder_id=root_id, region=_name, period=_period,
                             is_first_half=_is_first_half, service_type=None, log=other_log,
                         )
-                        add_log(f"其他承攬前置完成：{result}", "success")
+                        failed = [name for name, count in result.items() if count < 0]
+                        if failed:
+                            add_log(f"其他承攬前置部分失敗：{'、'.join(failed)}；請稍後重跑", "warning")
+                        else:
+                            add_log(f"其他承攬前置完成：{result}", "success")
                     elif _func == "執行全部結算":
                         result = run_other_settlement(
                             root_folder_id=root_id, region=_name, period=_period,
