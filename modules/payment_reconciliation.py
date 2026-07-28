@@ -548,7 +548,9 @@ def process_template(
         "mark_count":      mark_count,
         "expand_count":    expand_count,
         "warnings":        warnings,
-        "category_counts": category_counts,
+        # ⑤分類搬運需要的是加工後「所有服務的實際列數」；
+        # category_counts 只包含需拆解的類別，會讓讀取範圍嚴重不足。
+        "category_counts": after_rows_count,
         "before_main":     before_main,
         "after_main":      after_main,
         "after_rows":      after_rows_count,
@@ -1131,7 +1133,12 @@ def copy_classified_data(
 
     if category_counts:
         for cat, expected in category_counts.items():
-            actual = len(other_buckets.get(cat, []))
+            if cat == "清潔":
+                actual = len(cleaning_rows)
+            elif cat in other_buckets:
+                actual = len(other_buckets[cat])
+            else:
+                continue
             if actual != expected:
                 log(f"⚠️ Double check [{cat}]：④加工={expected} 列，⑤分類={actual} 列，請確認")
             else:
