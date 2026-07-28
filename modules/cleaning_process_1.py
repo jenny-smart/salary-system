@@ -718,9 +718,9 @@ def _adj_import_salary_aa_af(
     log: List[str],
 ):
     formula = (
-        f'=ARRAYFORMULA(IF(S3:S="",,FILTER('
-        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!AA3:AF"),'
-        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!B3:B")=S3:S)))'
+        f'=ARRAYFORMULA(IF(S3:S300="",,FILTER('
+        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!AA3:AF300"),'
+        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!B3:B300")=S3:S300)))'
     )
     ws_adjust.update_cell(3, 45, formula)  # AS3 = row 3, col 45
     _log(log, "    AS3 IMPORTRANGE 已寫入（調薪 AA:AF）")
