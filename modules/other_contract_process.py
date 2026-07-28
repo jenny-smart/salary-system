@@ -18,7 +18,7 @@ from typing import Callable, List
 import gspread
 
 from modules.auth import get_gspread_client, get_drive_service, get_credentials
-from modules.master_sheet import record_execution, record_batch, get_recorded_value
+from modules.master_sheet import record_execution, record_batch
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +36,9 @@ SERVICE_CONFIG = {
         "carry_rows":      [(285, 284), (279, 280)],  # 下半月 (來源→目標)
         "settlement_row":  285,                 # 結算讀取列
         "order_count_row": 40,                  # 主控試算表當期搬運筆數列號
-        "preprocess_key":  "複製水洗訂單列數",
+        "preprocess_key":  "水洗前置",
         "settlement_key":  "水洗結算",
-        "pdf_key":         "水洗PDF",
+        "pdf_key":         "水洗薪資單",
         "file_title":      "水洗承攬服務費",
         "note_cell":       "AC43", "note_row": 43,
         "detail_title_row": 45, "detail_start_row": 46,
@@ -53,9 +53,9 @@ SERVICE_CONFIG = {
         "carry_rows":      [(254, 253), (249, 250)],  # 下半月複製
         "settlement_row":  254,
         "order_count_row": 41,
-        "preprocess_key":  "複製家電訂單列數",
+        "preprocess_key":  "家電前置",
         "settlement_key":  "家電結算",
-        "pdf_key":         "家電PDF",
+        "pdf_key":         "家電薪資單",
         "file_title":      "家電承攬服務費",
         "note_cell":       "AC36", "note_row": 36,
         "detail_title_row": 37, "detail_start_row": 38,
@@ -70,9 +70,9 @@ SERVICE_CONFIG = {
         "carry_rows":      [],
         "settlement_row":  254,
         "order_count_row": 42,
-        "preprocess_key":  "複製收納訂單列數",
+        "preprocess_key":  "收納前置",
         "settlement_key":  "收納結算",
-        "pdf_key":         "收納PDF",
+        "pdf_key":         "收納薪資單",
         "file_title":      "收納承攬服務費",
         "note_cell":       "", "note_row": 0,
         "detail_title_row": 29, "detail_start_row": 30,
@@ -87,9 +87,9 @@ SERVICE_CONFIG = {
         "carry_rows":      [],
         "settlement_row":  254,
         "order_count_row": 43,
-        "preprocess_key":  "複製座椅訂單列數",
+        "preprocess_key":  "座椅前置",
         "settlement_key":  "座椅結算",
-        "pdf_key":         "座椅PDF",
+        "pdf_key":         "座椅薪資單",
         "file_title":      "座椅承攬服務費",
         "note_cell":       "", "note_row": 0,
         "detail_title_row": 29, "detail_start_row": 30,
@@ -104,9 +104,9 @@ SERVICE_CONFIG = {
         "carry_rows":      [],
         "settlement_row":  254,
         "order_count_row": 44,
-        "preprocess_key":  "複製地毯訂單列數",
+        "preprocess_key":  "地毯前置",
         "settlement_key":  "地毯結算",
-        "pdf_key":         "地毯PDF",
+        "pdf_key":         "地毯薪資單",
         "file_title":      "地毯承攬服務費",
         "note_cell":       "", "note_row": 0,
         "detail_title_row": 29, "detail_start_row": 30,
@@ -115,8 +115,6 @@ SERVICE_CONFIG = {
 }
 
 ALL_SERVICES        = ["水洗", "家電", "收納", "座椅", "地毯"]
-TASK_KEY_PRE_ALL    = "其他承攬前置作業"
-TASK_KEY_SETTLE_ALL = "其他承攬結算作業"
 PDF_LIST_SHEET      = "PDF產出"
 ORDER_COL_COUNT     = 62   # A:BJ
 TS_FMT              = "%Y/%m/%d %H:%M"
@@ -333,8 +331,6 @@ def run_other_preprocess(
         c = results.get(svc, 0)
         if c >= 0:
             batch.append({"task_key": SERVICE_CONFIG[svc]["preprocess_key"], "count": c})
-    if not service_type:
-        batch.append({"task_key": TASK_KEY_PRE_ALL, "count": None})
     record_batch(region, period, batch)
 
     log(f"\n✅ 其他承攬{half}前置作業完成")
@@ -399,27 +395,11 @@ def _process_order_data(
     if not is_first_half and not rows:
         # 有些期別檔只有本期資料，資料會直接位於第 2 列起，沒有分隔空白列。
         # 此時依金流對帳⑤打卡筆數，從營收明細尾端精確往回抓本期資料。
-        recorded = get_recorded_value(region, period, cfg["preprocess_key"])
-        if not recorded:
-            recorded = get_recorded_value(region, period, f"加工-{svc}加工列數")
-        try:
-            expected_count = int(float(str(recorded).strip())) if recorded else 0
-        except (TypeError, ValueError):
-            expected_count = 0
         last_income_row = _last_nonempty_row_b(income_ws)
-        if expected_count > 0 and last_income_row >= 2:
-            income_start = max(2, last_income_row - expected_count + 1)
-            log(
-                f"  {svc} 分段區無資料，改依本期打卡 {expected_count} 筆，"
-                f"讀取第 {income_start}–{last_income_row} 列"
-            )
-            rows, backgrounds = _read_income_rows_and_backgrounds(
-                ss.id, income_ws, income_start
-            )
-        elif last_income_row >= 2:
-            # 主控尚未留下正確筆數時，期別檔第 2 列起的連續資料仍視為本期資料。
+        if last_income_row >= 2:
+            # 期別檔只有本期資料時直接從第 2 列讀取，避免額外查主控表造成配額超限。
             income_start = 2
-            log(f"  {svc} 無可用打卡筆數，改讀取第 2–{last_income_row} 列")
+            log(f"  {svc} 分段區無資料，改讀取第 2–{last_income_row} 列")
             rows, backgrounds = _read_income_rows_and_backgrounds(
                 ss.id, income_ws, income_start
             )
@@ -529,8 +509,6 @@ def run_other_settlement(
             "task_key": SERVICE_CONFIG[svc]["settlement_key"],
             "count":    len(results.get(svc, [])),
         })
-    if not service_type:
-        batch_punch.append({"task_key": TASK_KEY_SETTLE_ALL, "count": None})
     record_batch(region, period, batch_punch)
 
     log("\n✅ 其他承攬結算作業完成")
@@ -912,10 +890,7 @@ def _upload_or_update_drive(
 
 OTHER_CONTRACT_TASK_KEYS = [
     "其他承攬",
-    "其他承攬前置作業",
-    "複製水洗訂單列數", "複製家電訂單列數", "複製收納訂單列數",
-    "複製座椅訂單列數", "複製地毯訂單列數",
-    "其他承攬結算作業",
+    "水洗前置", "家電前置", "收納前置", "座椅前置", "地毯前置",
     "水洗結算", "家電結算", "收納結算", "座椅結算", "地毯結算",
-    "水洗PDF", "家電PDF", "收納PDF", "座椅PDF", "地毯PDF",
+    "水洗薪資單", "家電薪資單", "收納薪資單", "座椅薪資單", "地毯薪資單",
 ]
