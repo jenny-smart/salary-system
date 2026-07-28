@@ -187,10 +187,26 @@ def copy_orders_to_template(
 
     first_half = is_first_half(period)
     start_row  = _get_period_paste_row(template_sheet, first_half, log_fn=log)
-    count      = paste_data(template_sheet, start_row, data)
+    count = len(data)
 
-    log(f"✅ 搬運完成：{count} 筆（起始列：{start_row}，"
-        f"{'上半月清空後貼入' if first_half else '下半月接續貼入'}）")
+    # 下半月重跑時，若目標尾端已是同一批資料，只補格式，不再重複追加。
+    retry_start = start_row - count
+    is_retry = False
+    if not first_half and retry_start >= 2:
+        existing = template_sheet.get(f"A{retry_start}:BJ{start_row - 1}")
+
+        def normalized(rows):
+            return [[str(cell) for cell in row] for row in rows]
+
+        is_retry = normalized(existing) == normalized(data)
+
+    if is_retry:
+        start_row = retry_start
+        log(f"✅ 資料先前已搬運：{count} 筆（起始列：{start_row}），本次只補格式")
+    else:
+        count = paste_data(template_sheet, start_row, data)
+        log(f"✅ 搬運完成：{count} 筆（起始列：{start_row}，"
+            f"{'上半月清空後貼入' if first_half else '下半月接續貼入'}）")
 
     # 搬移格式（底色 + 字型 + 列高 21px）
     # 來源：訂單工作表第 2 列起（共 count 列）
@@ -211,7 +227,7 @@ def copy_orders_to_template(
         _apply_fmts(template_sheet, start_row, fmts)
         log(f"🔵 格式搬移完成（{count} 列，列高 21px）")
     except Exception as e:
-        log(f"⚠️ 格式搬移失敗：{e}")
+        log(f"⚠️ 資料已完成搬運；僅格式搬移失敗：{e}")
         log(f"⚠️ 詳細：{traceback.format_exc()[:300]}")
 
     return {"count": count, "start_row": start_row}
