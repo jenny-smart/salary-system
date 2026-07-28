@@ -187,7 +187,7 @@ def run_pdf(
                 if len(pdf_bytes) < 1000:
                     raise ValueError(f"PDF 過小（{len(pdf_bytes)} bytes）")
 
-                file_title = f"{period}_{label}_{name}.pdf"
+                file_title = f"{period} 檸檬家事｜{label}_{name}.pdf"
 
                 now_str = datetime.datetime.now().strftime(TS_FMT)
                 updates = [
@@ -252,14 +252,20 @@ def _prepare_drive_output(root_folder_id: str, period: str, log: List[str]):
     PDF 生成本身不應依賴 Drive/OAuth；Drive 失敗時回傳 (None, None)，
     run_pdf 仍會把 PDF bytes 放進 Streamlit 下載區。
     """
-    try:
-        drive = _get_oauth_drive_service()
-        folder_id = _get_or_create_pdf_folder(root_folder_id, period, drive)
-        _log(log, "    Drive 資料夾準備完成")
-        return drive, folder_id
-    except Exception as e:
-        _log(log, f"    ⚠️ Drive 上傳未啟用：{_format_error(e)}")
-        return None, None
+    errors = []
+    for label, factory in [
+        ("使用者 OAuth", _get_oauth_drive_service),
+        ("服務帳戶", get_drive_service),
+    ]:
+        try:
+            drive = factory()
+            folder_id = _get_or_create_pdf_folder(root_folder_id, period, drive)
+            _log(log, f"    Drive 資料夾準備完成（{label}）")
+            return drive, folder_id
+        except Exception as e:
+            errors.append(f"{label}：{_format_error(e)}")
+    _log(log, f"    ⚠️ Drive 上傳未啟用：{'；'.join(errors)}")
+    return None, None
 
 
 def _get_or_create_pdf_folder(root_id: str, period: str, drive=None) -> str:
@@ -362,7 +368,8 @@ def _upload_or_update_drive(
             media_body = media,
             supportsAllDrives = True,
         ).execute()
-        return existing_url
+        file_id = existing_file_id
+        url = existing_url
     else:
         # 建立新檔
         meta   = {"name": file_name, "parents": [folder_id]}
@@ -373,13 +380,19 @@ def _upload_or_update_drive(
             supportsAllDrives = True,
         ).execute()
         file_id = result["id"]
-        # 設為任何人可讀（方便發連結給人員）
+        url = f"https://drive.google.com/file/d/{file_id}/view"
+
+    # 新檔與既有檔都確保為「知道連結者可讀取」。
+    try:
         oauth_drive.permissions().create(
             fileId = file_id,
             body   = {"type": "anyone", "role": "reader"},
             supportsAllDrives = True,
         ).execute()
-        return f"https://drive.google.com/file/d/{file_id}/view"
+    except Exception as e:
+        if "already" not in str(e).lower():
+            raise
+    return url
 
 def _get_access_token() -> str:
     """
