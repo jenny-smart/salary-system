@@ -12,6 +12,7 @@ import time
 import logging
 import datetime
 import requests
+import re
 from typing import Callable, List
 
 import gspread
@@ -39,6 +40,9 @@ SERVICE_CONFIG = {
         "settlement_key":  "水洗結算",
         "pdf_key":         "水洗PDF",
         "file_title":      "水洗承攬服務費",
+        "note_cell":       "AC43", "note_row": 43,
+        "detail_title_row": 45, "detail_start_row": 46,
+        "detail_title": ["", "服務日期（星期）", "客戶姓名", "服務數量", "服務項目"],
     },
     "家電": {
         "salary_table":    "家電薪資表",
@@ -46,55 +50,67 @@ SERVICE_CONFIG = {
         "order_sheet":     "家電訂單",
         "income_sheet":    "家電營收明細",
         "clear_rows":      [249, 253],          # 上半月清空
-        "carry_rows":      [(254, 253), (248, 249)],  # 下半月複製
+        "carry_rows":      [(254, 253), (249, 250)],  # 下半月複製
         "settlement_row":  254,
         "order_count_row": 41,
         "preprocess_key":  "複製家電訂單列數",
         "settlement_key":  "家電結算",
         "pdf_key":         "家電PDF",
         "file_title":      "家電承攬服務費",
+        "note_cell":       "AC36", "note_row": 36,
+        "detail_title_row": 37, "detail_start_row": 38,
+        "detail_title": ["", "服務日期（星期）", "客戶姓名", "服務數量", "服務人"],
     },
     "收納": {
         "salary_table":    "收納薪資表",
         "salary_slip":     "收納薪資單",
         "order_sheet":     "收納訂單",
         "income_sheet":    "收納營收明細",
-        "clear_rows":      [218, 222],
-        "carry_rows":      [(223, 222), (217, 218)],
-        "settlement_row":  223,
+        "clear_rows":      [],
+        "carry_rows":      [],
+        "settlement_row":  254,
         "order_count_row": 42,
         "preprocess_key":  "複製收納訂單列數",
         "settlement_key":  "收納結算",
         "pdf_key":         "收納PDF",
         "file_title":      "收納承攬服務費",
+        "note_cell":       "", "note_row": 0,
+        "detail_title_row": 29, "detail_start_row": 30,
+        "detail_title": ["", "服務日期（星期）", "客戶姓名", "服務時數", "服務項目"],
     },
     "座椅": {
         "salary_table":    "座椅薪資表",
         "salary_slip":     "座椅薪資單",
         "order_sheet":     "座椅訂單",
         "income_sheet":    "座椅營收明細",
-        "clear_rows":      [218, 222],          # 上半月清空（與收納相同）
-        "carry_rows":      [(223, 222), (217, 218)],  # 下半月複製（與收納相同）
-        "settlement_row":  223,
+        "clear_rows":      [],
+        "carry_rows":      [],
+        "settlement_row":  254,
         "order_count_row": 43,
         "preprocess_key":  "複製座椅訂單列數",
         "settlement_key":  "座椅結算",
         "pdf_key":         "座椅PDF",
         "file_title":      "座椅承攬服務費",
+        "note_cell":       "", "note_row": 0,
+        "detail_title_row": 29, "detail_start_row": 30,
+        "detail_title": ["", "服務日期（星期）", "客戶姓名", "服務數量", "服務項目"],
     },
     "地毯": {
         "salary_table":    "地毯薪資表",
         "salary_slip":     "地毯薪資單",
         "order_sheet":     "地毯訂單",
         "income_sheet":    "地毯營收明細",
-        "clear_rows":      [211, 215],
-        "carry_rows":      [(216, 215), (210, 211)],
-        "settlement_row":  216,
+        "clear_rows":      [],
+        "carry_rows":      [],
+        "settlement_row":  254,
         "order_count_row": 44,
         "preprocess_key":  "複製地毯訂單列數",
         "settlement_key":  "地毯結算",
         "pdf_key":         "地毯PDF",
         "file_title":      "地毯承攬服務費",
+        "note_cell":       "", "note_row": 0,
+        "detail_title_row": 29, "detail_start_row": 30,
+        "detail_title": ["", "服務日期（星期）", "客戶姓名", "服務數量", "服務項目"],
     },
 }
 
@@ -129,6 +145,100 @@ def _last_nonempty_row_b(ws: gspread.Worksheet) -> int:
         if str(vals[i]).strip():
             return i + 1
     return 1
+
+
+def _first_empty_row_b(ws: gspread.Worksheet, start_row: int = 2) -> int:
+    """由上往下找 B 欄第一個空白列，對齊 GAS 行為。"""
+    vals = ws.get(f"B{start_row}:B{ws.row_count}") or []
+    for offset in range(ws.row_count - start_row + 1):
+        value = vals[offset][0] if offset < len(vals) and vals[offset] else ""
+        if not str(value).strip():
+            return start_row + offset
+    return ws.row_count + 1
+
+
+def _sheets_service():
+    from googleapiclient.discovery import build
+    return build("sheets", "v4", credentials=get_credentials(), cache_discovery=False)
+
+
+def _clear_order_from(ws: gspread.Worksheet, start_row: int):
+    if start_row > ws.row_count:
+        return
+    ws.batch_clear([f"A{start_row}:BJ{ws.row_count}"])
+    ws.spreadsheet.batch_update({"requests": [{
+        "repeatCell": {
+            "range": {
+                "sheetId": ws.id,
+                "startRowIndex": start_row - 1,
+                "endRowIndex": ws.row_count,
+                "startColumnIndex": 0,
+                "endColumnIndex": ORDER_COL_COUNT,
+            },
+            "cell": {},
+            "fields": "userEnteredFormat",
+        }
+    }]})
+
+
+def _read_income_rows_and_backgrounds(
+    spreadsheet_id: str, ws: gspread.Worksheet, start_row: int
+) -> tuple[list[list], list[list[dict]]]:
+    last_row = max(ws.row_count, start_row)
+    values = ws.get(
+        f"A{start_row}:BJ{last_row}",
+        value_render_option="UNFORMATTED_VALUE",
+    ) or []
+    request = _sheets_service().spreadsheets().get(
+        spreadsheetId=spreadsheet_id,
+        ranges=[f"'{ws.title}'!A{start_row}:BJ{last_row}"],
+        includeGridData=True,
+        fields="sheets.data.rowData.values.effectiveFormat.backgroundColor",
+    )
+    request.headers["Accept-Encoding"] = "identity"
+    payload = request.execute()
+    try:
+        grid_rows = payload["sheets"][0]["data"][0].get("rowData", [])
+    except (KeyError, IndexError):
+        grid_rows = []
+
+    rows, backgrounds = [], []
+    for idx, row in enumerate(values):
+        padded = (list(row) + [""] * ORDER_COL_COUNT)[:ORDER_COL_COUNT]
+        if not any(str(cell).strip() for cell in padded):
+            continue
+        fmt_values = grid_rows[idx].get("values", []) if idx < len(grid_rows) else []
+        colors = []
+        for col in range(ORDER_COL_COUNT):
+            try:
+                color = fmt_values[col]["effectiveFormat"]["backgroundColor"]
+            except (KeyError, IndexError, TypeError):
+                color = {"red": 1, "green": 1, "blue": 1}
+            colors.append(color)
+        rows.append(padded)
+        backgrounds.append(colors)
+    return rows, backgrounds
+
+
+def _write_backgrounds(ws: gspread.Worksheet, start_row: int, backgrounds: list[list[dict]]):
+    if not backgrounds:
+        return
+    rows = [{
+        "values": [{"userEnteredFormat": {"backgroundColor": color}} for color in colors]
+    } for colors in backgrounds]
+    ws.spreadsheet.batch_update({"requests": [{
+        "updateCells": {
+            "range": {
+                "sheetId": ws.id,
+                "startRowIndex": start_row - 1,
+                "endRowIndex": start_row - 1 + len(rows),
+                "startColumnIndex": 0,
+                "endColumnIndex": ORDER_COL_COUNT,
+            },
+            "rows": rows,
+            "fields": "userEnteredFormat.backgroundColor",
+        }
+    }]})
 
 
 def _get_cell(ws: gspread.Worksheet, row: int, col: int) -> str:
@@ -181,12 +291,8 @@ def run_other_preprocess(
     其他承攬前置作業。
     service_type=None → 全部服務；傳入名稱 → 單一服務（補跑用）。
 
-    每個服務步驟：
-    1. 薪資表公式操作（上半月清空 J:O 指定列；下半月複製值）
-    2. 訂單工作表
-       - 先檢查營收明細是否有資料（B 欄非空）
-       - 有資料：上半月先清空 A2:BJ 再貼入；下半月從 B 欄最後非空下一列 append
-       - 無資料：跳過（上半月也不清空）
+    與 GAS 相同：水洗/家電處理薪資表；訂單依 B 欄第一空白列分段，
+    並同步 A:BJ 的資料與背景色。
     """
     half = "上半月" if is_first_half else "下半月"
     svcs = [service_type] if service_type else ALL_SERVICES
@@ -207,17 +313,8 @@ def run_other_preprocess(
         cfg = SERVICE_CONFIG[svc]
         log(f"\n▶ {svc}")
         try:
-            # Step 1：確認營收明細是否有資料
-            has_data = _has_income_data(other, cfg)
-            if not has_data:
-                log(f"  {svc} 營收明細空白，跳過薪資表操作與訂單搬運")
-                results[svc] = 0
-                continue
-
-            # Step 2：薪資表公式操作（有資料才執行）
-            _process_salary_formulas(other, cfg, is_first_half, svc, log)
-
-            # Step 3：訂單搬運（從主控試算表讀取本期筆數）
+            if svc in ("水洗", "家電"):
+                _process_salary_formulas(other, cfg, is_first_half, svc, log)
             count = _process_order_data(
                 other, cfg, is_first_half, svc, region, period, log
             )
@@ -286,62 +383,31 @@ def _process_order_data(
     log: Callable,
 ) -> int:
     """
-    訂單搬運：從金流對帳主控試算表讀取本期該服務的搬運列數，
-    再從營收明細取對應筆數搬入訂單工作表。
-    上半月：先清空 A2:BJ，從營收明細第一筆開始貼入。
-    下半月：從訂單 B 欄最後非空白下一列 append。
+    訂單搬運：依 GAS 的「第一空白列」規則切分上下半月。
     """
     income_ws = ss.worksheet(cfg["income_sheet"])
     order_ws  = ss.worksheet(cfg["order_sheet"])
 
-    # 從主控試算表固定列號讀取本期搬運筆數
-    # order_count_row：水洗=40, 家電=41, 收納=42, 座椅=43, 地毯=44
-    # 主控試算表結構：A欄=作業名稱，每期佔2欄（ID/筆數 + 完成時間）
-    # 用 get_recorded_value 依 task_key 讀取（底層會找對應列的 ID/筆數欄）
-    period_count_val = get_recorded_value(region, period, cfg["preprocess_key"])
-    try:
-        period_count = int(float(str(period_count_val).strip())) if period_count_val else 0
-    except (ValueError, TypeError):
-        period_count = 0
-
-    if period_count == 0:
-        log(f"  {svc} 主控試算表無搬運筆數（第 {cfg['order_count_row']} 列），跳過訂單搬運")
-        log(f"    （請先完成金流對帳⑤，確認「{cfg['preprocess_key']}」已打卡）")
-        return 0
-
-    # 從營收明細讀取資料（B 欄最後非空白往上數 period_count 列）
-    last_income_row = _last_nonempty_row_b(income_ws)
-    income_start    = max(2, last_income_row - period_count + 1)
-    log(f"  {svc} 從主控讀得本期筆數：{period_count}，營收明細第 {income_start}–{last_income_row} 列")
-
-    income_data = income_ws.get(
-        f"A{income_start}:BJ{last_income_row}",
-        value_render_option="UNFORMATTED_VALUE",
-    ) or []
-
-    if not income_data:
-        log(f"  {svc} 營收明細讀取為空，跳過")
-        return 0
-
-    # 補齊欄數
-    padded = []
-    for row in income_data:
-        padded_row = list(row) + [""] * max(0, ORDER_COL_COUNT - len(row))
-        padded.append(padded_row[:ORDER_COL_COUNT])
-
     if is_first_half:
-        order_ws.batch_clear([f"A2:BJ{order_ws.row_count}"])
-        log(f"  {svc} 訂單清空完成")
+        income_start = 2
         paste_start = 2
     else:
-        last        = _last_nonempty_row_b(order_ws)
-        paste_start = last + 1
-        log(f"  {svc} 下半月 append 起始列：{paste_start}")
+        income_start = _first_empty_row_b(income_ws, 2) + 1
+        paste_start = _first_empty_row_b(order_ws, 2)
 
-    end_row = paste_start + len(padded) - 1
-    order_ws.update(f"A{paste_start}:BJ{end_row}", padded, value_input_option="RAW")
-    log(f"  {svc} 訂單寫入第 {paste_start}–{end_row} 列（{len(padded)} 筆）")
-    return len(padded)
+    _clear_order_from(order_ws, paste_start)
+    rows, backgrounds = _read_income_rows_and_backgrounds(ss.id, income_ws, income_start)
+    if not rows:
+        log(f"  {svc} 營收明細無本期資料，略過")
+        return 0
+
+    end_row = paste_start + len(rows) - 1
+    if end_row > order_ws.row_count:
+        order_ws.add_rows(end_row - order_ws.row_count)
+    order_ws.update(f"A{paste_start}:BJ{end_row}", rows, value_input_option="RAW")
+    _write_backgrounds(order_ws, paste_start, backgrounds)
+    log(f"  {svc} 訂單寫入第 {paste_start}–{end_row} 列（{len(rows)} 筆，含背景色）")
+    return len(rows)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -532,6 +598,8 @@ def run_other_pdf(
 
         try:
             ws_slip  = other.worksheet(cfg["salary_slip"])
+            data_ws  = other.worksheet(cfg["salary_table"])
+            salary_data = data_ws.get_all_values()
             slip_gid = ws_slip.id
         except gspread.WorksheetNotFound:
             log(f"  ❌ 找不到薪資單工作表：{cfg['salary_slip']}")
@@ -546,13 +614,19 @@ def run_other_pdf(
             try:
                 # AD2 寫入姓名，等公式連動
                 ws_slip.update_cell(2, 30, name)
-                time.sleep(3.0)
+                details = _build_detail_rows(svc, salary_data, name)
+                if not details:
+                    pdf_ws.update_cell(row, 5, "⚠️ 無資料，未產出")
+                    log(f"    ⚠️ {name} 沒有服務資料，略過")
+                    continue
+                _write_salary_details(ws_slip, cfg, details)
+                time.sleep(2.0)
 
-                # 找 AB 欄最後有值的列
-                ab_vals  = ws_slip.col_values(28)
+                # 找 AB:AH 最後有值的列
+                export_vals = ws_slip.get("AB1:AH") or []
                 last_row = 1
-                for k in range(len(ab_vals) - 1, -1, -1):
-                    if str(ab_vals[k]).strip():
+                for k in range(len(export_vals) - 1, -1, -1):
+                    if any(str(v).strip() for v in export_vals[k]):
                         last_row = k + 1
                         break
                 last_row     = max(last_row, 20)
@@ -623,6 +697,63 @@ def run_other_pdf(
     if result["pdfs"]:
         log("  請點擊下方下載按鈕儲存 PDF")
     return result
+
+
+def _staff_list(value, pattern=r"[、,，\s]+") -> list[str]:
+    return [part.strip() for part in re.split(pattern, str(value or "")) if part.strip()]
+
+
+def _date_text(value, weekday) -> str:
+    text = str(value or "").strip()
+    weekday = str(weekday or "").strip()
+    for fmt in ("%Y/%m/%d", "%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            text = datetime.datetime.strptime(text, fmt).strftime("%Y/%m/%d")
+            break
+        except ValueError:
+            pass
+    return f"{text} ({weekday})"
+
+
+def _build_detail_rows(service_type: str, data: list[list], target_name: str) -> list[list]:
+    details = []
+    for row in data:
+        row = list(row) + [""] * max(0, 9 - len(row))
+        date_text = _date_text(row[1], row[2])
+        customer = str(row[3] or "").strip()
+
+        if service_type == "水洗":
+            if target_name not in _staff_list(row[6]):
+                continue
+            raw_item = re.sub(r"^\s*3\s*水洗[:：]\s*", "", str(row[4] or "")).strip()
+            label = raw_item.split("：", 1)[-1]
+            details.append(["", f"{date_text}｜{label}", customer, row[8], row[5]])
+        elif service_type == "收納":
+            if target_name not in _staff_list(row[6], r"[、,，\sXx]+"):
+                continue
+            raw_item = str(row[4] or "").strip()
+            label = raw_item.split("：", 1)[-1]
+            details.append(["", f"{date_text}｜{label}", customer, row[7], raw_item])
+        else:
+            if str(row[6] or "").strip() != target_name:
+                continue
+            item = str(row[4] or "").strip()
+            details.append(["", f"{date_text}｜{item}", customer, row[5], item])
+
+    for index, detail in enumerate(details, 1):
+        detail[0] = index
+    return details
+
+
+def _write_salary_details(ws: gspread.Worksheet, cfg: dict, details: list[list]):
+    title_row = cfg["detail_title_row"]
+    start_row = cfg["detail_start_row"]
+    ws.batch_clear([f"AB{title_row}:AF{ws.row_count}"])
+    required_last = start_row + len(details) - 1
+    if required_last > ws.row_count:
+        ws.add_rows(required_last - ws.row_count)
+    ws.update(f"AB{title_row}:AF{title_row}", [cfg["detail_title"]], value_input_option="RAW")
+    ws.update(f"AB{start_row}:AF{required_last}", details, value_input_option="USER_ENTERED")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
