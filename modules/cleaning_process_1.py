@@ -382,6 +382,11 @@ def run_preparation(
             order_start, proj_start, log
         )
         _log(log, f"  步驟4 完成：清潔訂單 {n_count} 筆，專案訂單 {p_count} 筆")
+        if n_count + p_count != len(values):
+            raise ValueError(
+                f"分流筆數不一致：營收 {len(values)}，"
+                f"清潔 {n_count}＋專案 {p_count}"
+            )
 
         # ── 步驟5：移除檸檬人 ────────────────────────────────
         _log(log, "  步驟5：移除清潔訂單 AH 欄檸檬人")
@@ -508,7 +513,9 @@ def _prep_step4_split_paste(
         is_proj = (str(y_val).strip() == "1299")
         bg      = bgs[i] if i < len(bgs) else [""] * 62
         if is_proj:
-            proj_v.append(row)
+            project_row = list(row)
+            project_row[9] = 1  # 專案薪資以場次計算，每筆（含子單）固定為 1 場
+            proj_v.append(project_row)
             proj_bg.append(bg)
         else:
             normal_v.append(row)

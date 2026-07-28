@@ -19,6 +19,7 @@ Lemon Clean 清潔承攬 — 06季獎金 / 結算作業
 from __future__ import annotations
 
 import datetime
+import time
 from typing import List, Optional
 
 import gspread
@@ -28,6 +29,8 @@ from modules.master_sheet import record_execution
 
 
 TS_FMT = "%Y/%m/%d %H:%M"
+SUMMARY_START = 4
+SUMMARY_END = 120
 
 
 def _now_ts() -> str:
@@ -108,6 +111,7 @@ def run_settlement(
         ss = gc.open_by_key(cleaning_file_id)
 
         ws_salary  = ss.worksheet("薪資表")
+        ws_proj_salary = ss.worksheet("專案薪資表")
         ws_summary = ss.worksheet("場次時數薪資總表")
         ws_pdf      = ss.worksheet("PDF產出")
         ws_proj_pdf = ss.worksheet("專案PDF產出")
@@ -116,13 +120,20 @@ def run_settlement(
         _log(log, "  步驟1：薪資表 L2048 轉值複製至 L2047")
         _step1_copy_salary_row(ws_salary, log)
 
+        # 專案人員另列於總表，D/E 改查專案薪資表。
+        project_rows = _append_project_people_to_summary(
+            ws_summary, ws_proj_salary, log
+        )
+
         # ── 步驟2：場次時數薪資總表 ───────────────────────────
         _log(log, f"  步驟2：場次時數薪資總表（{label}）")
         _step2_summary(ws_summary, is_first_half, log)
 
         # ── 步驟3：PDF產出 ─────────────────────────────────────
         _log(log, f"  步驟3：PDF產出（{label}）")
-        _step3_pdf_output(ws_summary, ws_pdf, ws_proj_pdf, is_first_half, log)
+        _step3_pdf_output(
+            ws_summary, ws_pdf, ws_proj_pdf, is_first_half, project_rows, log
+        )
 
         ts = _punch("結算作業", region, period)
         _log(log, f"✅ 結算作業 {label} 完成｜{ts}")
@@ -131,6 +142,79 @@ def run_settlement(
     except Exception as e:
         _log(log, f"❌ 結算作業失敗：{e}")
         return False
+
+
+def _append_project_people_to_summary(
+    ws_summary: gspread.Worksheet,
+    ws_project_salary: gspread.Worksheet,
+    log: List[str],
+) -> list[int]:
+    """把專案薪資表有金額的人員追加到總表 A 欄，並寫入專案 D/E 公式。"""
+    last_col = _col_letter(ws_project_salary.col_count)
+    headers = ws_project_salary.get(f"L1:{last_col}1") or [[]]
+    row_2045 = ws_project_salary.get(
+        f"L2045:{last_col}2045", value_render_option="UNFORMATTED_VALUE"
+    ) or [[]]
+    row_2046 = ws_project_salary.get(
+        f"L2046:{last_col}2046", value_render_option="UNFORMATTED_VALUE"
+    ) or [[]]
+
+    names = []
+    for idx, name in enumerate(headers[0]):
+        name = str(name).strip()
+        v1 = _to_num(row_2045[0][idx] if idx < len(row_2045[0]) else 0)
+        v2 = _to_num(row_2046[0][idx] if idx < len(row_2046[0]) else 0)
+        if name and (v1 != 0 or v2 != 0):
+            names.append(name)
+
+    if not names:
+        _log(log, "    專案薪資表無非零人員")
+        return []
+
+    # 重跑結算時先移除上次追加的專案列，避免重複。
+    existing_formulas = ws_summary.get(
+        f"A{SUMMARY_START}:E{SUMMARY_END}", value_render_option="FORMULA"
+    ) or []
+    old_project_rows = []
+    for offset, row in enumerate(existing_formulas):
+        formulas = " ".join(str(cell) for cell in row[3:5])
+        if "專案薪資表" in formulas:
+            old_project_rows.append(SUMMARY_START + offset)
+    if old_project_rows:
+        ws_summary.batch_clear([f"A{row}:G{row}" for row in old_project_rows])
+
+    existing = ws_summary.get(f"A{SUMMARY_START}:A{SUMMARY_END}") or []
+    first_empty = SUMMARY_START
+    for offset, row in enumerate(existing):
+        if row and str(row[0]).strip():
+            first_empty = SUMMARY_START + offset + 1
+        else:
+            break
+    if first_empty + len(names) - 1 > SUMMARY_END:
+        raise ValueError("場次時數薪資總表 A 欄空間不足，無法加入專案人員")
+
+    project_rows = list(range(first_empty, first_empty + len(names)))
+    data = []
+    for row_num, name in zip(project_rows, names):
+        data.extend([
+            {"range": f"'{ws_summary.title}'!A{row_num}", "values": [[name]]},
+            {"range": f"'{ws_summary.title}'!D{row_num}", "values": [[
+                f"=IF(AND(E{row_num}=0,'專案薪資單'!$AD$1=$D$1),"
+                f"HLOOKUP($A{row_num},'專案薪資表'!$1:$2046,2046,FALSE),"
+                f"HLOOKUP($A{row_num},'專案薪資表'!$1:$2046,2045,FALSE))"
+            ]]},
+            {"range": f"'{ws_summary.title}'!E{row_num}", "values": [[
+                f"=IF('專案薪資單'!$AD$1=$E$1,"
+                f"HLOOKUP($A{row_num},'專案薪資表'!$1:$2046,2046,FALSE),0)"
+            ]]},
+        ])
+    ws_summary.spreadsheet.values_batch_update({
+        "valueInputOption": "USER_ENTERED",
+        "data": data,
+    })
+    time.sleep(2)
+    _log(log, f"    總表追加專案人員：{len(names)} 人")
+    return project_rows
 
 
 # ──────────────────────────────────────────────────────────────
@@ -294,6 +378,7 @@ def _step3_pdf_output(
     ws_pdf: gspread.Worksheet,
     ws_proj_pdf: gspread.Worksheet,
     is_first_half: bool,
+    project_rows: list[int],
     log: List[str],
 ) -> None:
     """
@@ -312,13 +397,47 @@ def _step3_pdf_output(
         f"{src_col}4:{src_col}",
         value_render_option="UNFORMATTED_VALUE"
     ) or []
-    names = [r[0] for r in src_vals if r and str(r[0]).strip()]
+    names = [str(r[0]).strip() for r in src_vals if r and str(r[0]).strip()]
 
-    if not names:
+    value_col = "D" if is_first_half else "E"
+    project_names = []
+    for row_num in project_rows:
+        values = ws_summary.get(
+            f"A{row_num}:{value_col}{row_num}",
+            value_render_option="UNFORMATTED_VALUE",
+        ) or [[]]
+        row = values[0] if values else []
+        name = str(row[0]).strip() if row else ""
+        value_idx = 3 if is_first_half else 4
+        amount = _to_num(row[value_idx] if len(row) > value_idx else 0)
+        if name and amount > 0:
+            project_names.append(name)
+
+    # 合併清單中每個專案列移除一次；同人兼具一般與專案時仍會各產一份。
+    normal_names = list(names)
+    for name in project_names:
+        if name in normal_names:
+            normal_names.remove(name)
+
+    if not names and not project_names:
         _log(log, f"    {src_col}4 無資料，跳過 PDF產出寫入")
         return
 
-    n = len(names)
-    ws_pdf.update(f"B2:B{1+n}", [[name] for name in names], value_input_option="USER_ENTERED")
-    ws_pdf.update(f"H2:H{1+n}", [["Y"]] * n, value_input_option="USER_ENTERED")
-    _log(log, f"    PDF產出 B2 寫入 {n} 人，H欄=Y")
+    if normal_names:
+        n = len(normal_names)
+        ws_pdf.update(
+            f"B2:B{1+n}", [[name] for name in normal_names],
+            value_input_option="USER_ENTERED",
+        )
+        ws_pdf.update(f"H2:H{1+n}", [["Y"]] * n, value_input_option="USER_ENTERED")
+    if project_names:
+        n = len(project_names)
+        ws_proj_pdf.update(
+            f"B2:B{1+n}", [[name] for name in project_names],
+            value_input_option="USER_ENTERED",
+        )
+        ws_proj_pdf.update(f"H2:H{1+n}", [["Y"]] * n, value_input_option="USER_ENTERED")
+    _log(
+        log,
+        f"    PDF名單：清潔 {len(normal_names)} 人，專案 {len(project_names)} 人",
+    )
