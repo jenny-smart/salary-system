@@ -523,6 +523,20 @@ selected_function = st.selectbox(
     "功能", FUNCTION_MAP[system], label_visibility="collapsed", key="func"
 )
 
+ENGINE_KEYS = {
+    "💰 金流對帳": "engine_payment",
+    "🧹 清潔承攬": "engine_cleaning",
+    "📦 其他承攬": "engine_other",
+}
+engine_key = ENGINE_KEYS[system]
+saved_engine = str(config.get("schedule", {}).get(engine_key, "PYTHON")).upper()
+execution_engine = st.selectbox(
+    "執行引擎",
+    ["PYTHON", "GAS"],
+    index=1 if saved_engine == "GAS" else 0,
+    help="尚未完成 Python 驗證的功能可切回 GAS。",
+)
+
 c3, c4 = st.columns([2, 1])
 with c3:
     st.markdown('<div class="field-label">🗺️ 執行地區</div>', unsafe_allow_html=True)
@@ -540,8 +554,15 @@ with c4:
 
 st.markdown('</div>', unsafe_allow_html=True)
 
+if st.session_state.get("gas_launch_url"):
+    st.link_button(
+        "🚀 開啟中央 GAS 面板",
+        st.session_state["gas_launch_url"],
+        use_container_width=True,
+    )
+
 if run_clicked:
-    st.info("⏳ 執行中，請稍候...")
+    st.info("⏳ 準備執行，請稍候...")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -587,7 +608,55 @@ if st.session_state.get("pdf_result"):
 # ═══════════════════════════════════════════════════════════
 # █ 區塊8：執行邏輯 — 共用前置檢查
 # ═══════════════════════════════════════════════════════════
-if run_clicked:
+if run_clicked and execution_engine == "GAS":
+    import os
+    from urllib.parse import urlencode
+
+    config.setdefault("schedule", {})[engine_key] = "GAS"
+    save_config(config)
+
+    gas_url = str(
+        _safe_secret("GAS_SCHEDULER_WEB_APP_URL", "")
+        or os.environ.get("GAS_SCHEDULER_WEB_APP_URL", "")
+    ).strip()
+
+    try:
+        if not gas_url:
+            raise RuntimeError("尚未設定 GAS_SCHEDULER_WEB_APP_URL")
+        if not selected_name:
+            raise RuntimeError("請先選擇地區")
+        root_id = selected_region.get("root_folder_id", "")
+        if not root_id:
+            raise RuntimeError(f"【{selected_name}】尚未設定根目錄 ID")
+
+        if system == "💰 金流對帳":
+            from modules.cleaning_process_1 import find_payment_file
+            target_id = find_payment_file(root_id, period, selected_name)
+            app_name = "payment"
+        elif system == "🧹 清潔承攬":
+            from modules.cleaning_process_1 import find_cleaning_file
+            target_id = find_cleaning_file(root_id, period, selected_name)
+            app_name = "cleaning"
+        else:
+            from modules.other_contract_process import _find_other_file
+            target_id = _find_other_file(root_id, period, selected_name)
+            app_name = "other"
+
+        query = urlencode({
+            "app": app_name,
+            "spreadsheetId": target_id,
+            "region": selected_name,
+            "period": period,
+        })
+        st.session_state["gas_launch_url"] = f"{gas_url}?{query}"
+        add_log(f"已建立中央 GAS 連結：{selected_name} {period}", "success")
+        st.rerun()
+    except Exception as e:
+        add_log(f"中央 GAS 開啟失敗：{e}", "error")
+
+if run_clicked and execution_engine == "PYTHON":
+    config.setdefault("schedule", {})[engine_key] = "PYTHON"
+    save_config(config)
     _period = period
     _system = system
     _func   = selected_function

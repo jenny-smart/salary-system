@@ -1,0 +1,1132 @@
+<!doctype html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8" />
+  <title>金流對帳面板</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 12px;
+      font-family: Arial, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      font-size: 14px;
+    }
+
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .title {
+      font-size: 16px;
+      font-weight: bold;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status {
+      padding: 4px 10px;
+      background: #475569;
+      border-radius: 12px;
+      font-size: 12px;
+    }
+
+    label {
+      display: block;
+      margin: 8px 0 4px;
+      font-size: 13px;
+      color: #94a3b8;
+    }
+
+    input, select {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #475569;
+      border-radius: 6px;
+      background: #0f172a;
+      color: #e2e8f0;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      margin: 8px 0;
+    }
+
+    .row > * {
+      flex: 1;
+    }
+
+    button {
+      padding: 10px 14px;
+      border: 1px solid #475569;
+      border-radius: 6px;
+      background: #334155;
+      color: #e2e8f0;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background 0.2s;
+      width: 100%;
+    }
+
+    button:hover {
+      background: #475569;
+    }
+
+    button.primary {
+      background: #3b82f6;
+      border-color: #3b82f6;
+      color: white;
+    }
+
+    button.primary:hover {
+      background: #2563eb;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .progress-container {
+      margin: 12px 0;
+    }
+
+    .progress-bar {
+      height: 8px;
+      background: #334155;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 8px 0;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: #3b82f6;
+      width: 0%;
+      transition: width 0.3s;
+    }
+
+    .progress-text {
+      text-align: center;
+      font-size: 12px;
+      color: #94a3b8;
+    }
+
+    .control-buttons {
+      display: flex;
+      gap: 6px;
+      margin: 12px 0;
+    }
+
+    .log-container {
+      height: 250px;
+      overflow-y: auto;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      padding: 12px;
+      margin-top: 12px;
+      font-family: monospace;
+      font-size: 12px;
+    }
+
+    .log-entry {
+      margin-bottom: 6px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #334155;
+    }
+
+    .log-time {
+      color: #64748b;
+      font-size: 11px;
+    }
+
+    .log-message {
+      color: #e2e8f0;
+    }
+
+    .section-toggle {
+      cursor: pointer;
+      user-select: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+    }
+
+    .section-content {
+      overflow: hidden;
+      transition: max-height 0.3s ease;
+    }
+
+    .hint {
+      font-size: 12px;
+      color: #94a3b8;
+      margin: 4px 0;
+      text-align: center;
+    }
+
+    .alert {
+      padding: 8px 12px;
+      border-radius: 6px;
+      margin: 8px 0;
+      font-size: 13px;
+    }
+
+    .alert-success {
+      background: rgba(34, 197, 94, 0.1);
+      border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+
+    .alert-warning {
+      background: rgba(245, 158, 11, 0.1);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+
+    .schedule-status {
+      background: #0f172a;
+      border-radius: 6px;
+      padding: 12px;
+      margin-top: 12px;
+      font-size: 13px;
+    }
+
+    .schedule-status-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      border-bottom: 1px solid #334155;
+    }
+
+    .schedule-status-item:last-child {
+      border-bottom: none;
+    }
+
+    .badge {
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: bold;
+    }
+
+    .badge-success {
+      background: #10b981;
+      color: white;
+    }
+
+    .badge-warning {
+      background: #f59e0b;
+      color: white;
+    }
+
+    .badge-error {
+      background: #ef4444;
+      color: white;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="title">🧩 金流對帳面板</div>
+    <div class="status" id="status">準備就緒</div>
+  </div>
+
+  <div class="card">
+    <div class="title">🚀 執行控制</div>
+
+    <div>
+      <label>執行期別 (格式: YYYYMM-1 或 YYYYMM-2)</label>
+      <div class="row">
+        <input type="text" id="period" placeholder="例如: 202502-1" />
+        <button type="button" onclick="detectPeriod()" style="width: auto; flex: 0 0 100px;">偵測期別</button>
+      </div>
+      <div id="periodHint" class="hint">請輸入期別或點擊偵測</div>
+    </div>
+
+    <div style="margin-top: 12px;">
+      <label>執行作業</label>
+      <select id="job">
+        <option value="">-- 請選擇作業 --</option>
+        <option value="設定LINE">設定 LINE 通知</option>
+        <option value="建立期別">建立期別資料夾與檔案</option>
+        <option value="轉檔期別訂單">期別訂單轉檔</option>
+        <option value="複製到範本">期別訂單搬運</option>
+        <option value="處理範本">期別訂單加工</option>
+        <option value="複製分類">期別訂單分類</option>
+        <option value="轉換所有金流檔案">金流檔案轉檔</option>
+        <option value="搬運退款預收">搬運已退款＋預收</option>
+        <option value="搬運發票藍新">搬運發票＋藍新</option>
+      </select>
+    </div>
+
+    <div class="row" style="margin-top: 12px;">
+      <button id="btnRun" onclick="startJob()" class="primary" disabled>▶️ 開始執行</button>
+      <button onclick="validateSettings()">✅ 驗證設定</button>
+    </div>
+
+    <div class="progress-container">
+      <div class="progress-text" id="progressText">進度: 0%</div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+    </div>
+
+    <div class="control-buttons">
+      <button id="btnPause" onclick="pauseJob()" disabled>⏸️ 暫停</button>
+      <button id="btnResume" onclick="resumeJob()" disabled>▶️ 繼續</button>
+      <button id="btnStop" onclick="stopJob()" disabled>⏹️ 停止</button>
+    </div>
+
+    <div id="hint" class="hint">請選擇作業並設定期別</div>
+  </div>
+
+  <div class="card">
+    <div class="header">
+      <div class="title">📝 執行記錄</div>
+      <button onclick="clearLog()" style="width: auto; padding: 4px 10px; font-size: 12px;">清空</button>
+    </div>
+
+    <div class="log-container" id="logContainer">
+      <div class="log-entry">
+        <div class="log-time" id="currentTime">--:--:--</div>
+        <div class="log-message">金流對帳面板已就緒</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-toggle" onclick="toggleConfig()">
+      <div class="title">⚙️ 系統設定</div>
+      <div id="configToggle">▼</div>
+    </div>
+
+    <div id="configSection" class="section-content" style="max-height: 0px;">
+      <div style="margin-top: 12px;">
+        <label>根目錄 Folder ID</label>
+        <input type="text" id="cfgFolderId" placeholder="例如: 1AbCDeFgHiJkLmNoPqRsT" />
+
+        <label>區域名稱</label>
+        <input type="text" id="cfgRegion" placeholder="例如: 台北 / 台中 / 高雄" />
+
+        <div class="row">
+          <button onclick="saveBaseSettings()" class="primary">💾 儲存設定</button>
+          <button onclick="clearBaseSettings()">🗑️ 清除</button>
+        </div>
+      </div>
+
+      <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #334155;">
+        <label>LINE 通知設定 (選用)</label>
+        <input type="text" id="cfgLineToken" placeholder="LINE Channel Access Token" />
+        <input type="text" id="cfgLineUsers" placeholder="LINE User IDs (逗號分隔)" style="margin-top: 8px;" />
+
+        <div class="row">
+          <button onclick="saveLineSettings()">💾 儲存 LINE</button>
+          <button onclick="clearLineSettings()">🗑️ 清除</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-toggle" onclick="toggleSchedule()">
+      <div class="title">⏰ 自動排程設定</div>
+      <div id="scheduleToggle">▼</div>
+    </div>
+
+    <div id="scheduleSection" class="section-content" style="max-height: 0px;">
+      <label>排程日期 (每月幾號, 逗號分隔)</label>
+      <input type="text" id="cfgScheduleDays" value="10,25" placeholder="例如: 10,25" />
+
+      <label>執行時間</label>
+      <div class="row">
+        <select id="cfgScheduleHour"></select>
+        <select id="cfgScheduleMinute"></select>
+      </div>
+
+      <label style="display: flex; align-items: center; margin-top: 8px;">
+        <input type="checkbox" id="cfgAllRegions" style="width: auto; margin-right: 8px;" />
+        套用到所有區域
+      </label>
+
+      <div class="row" style="margin-top: 12px;">
+        <button onclick="saveSchedule(event)" class="primary">💾 儲存排程</button>
+        <button onclick="clearSchedule()">🗑️ 清除</button>
+      </div>
+
+      <div id="scheduleStatusDisplay" class="schedule-status" style="display: none;">
+        <div style="font-weight: bold; margin-bottom: 8px;">📊 目前排程狀態</div>
+        <div id="scheduleStatusContent"></div>
+      </div>
+
+      <div style="margin-top: 16px; display: flex; flex-direction: column; gap: 8px;">
+        <div class="row">
+          <button onclick="checkScheduleStatus()" style="background: #3b82f6;">🔍 檢查排程狀態</button>
+          <button onclick="runScheduleNow()" style="background: #f59e0b;">⚡ 立即執行排程</button>
+        </div>
+        <button onclick="clearAllTriggersAction()" style="background: #dc2626; color: white;">🗑️ 清理所有觸發器</button>
+        <button onclick="initializeSystemAction()" style="background: #10b981;">🔄 重新初始化排程</button>
+      </div>
+
+      <div class="hint" style="margin-top: 12px; color: #94a3b8;">
+        ⏰ 排程將在設定的日期和時間自動建立期別檔案<br>
+        📍 設定後請點擊「檢查排程狀態」確認觸發器是否正常
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="title">🔧 系統維護</div>
+    <div class="row">
+      <button onclick="diagnoseSystem()">🏥 系統診斷</button>
+      <button onclick="checkEnvironment()">🌐 環境檢查</button>
+      <button onclick="testTemplateProcess()">🧪 測試範本加工</button>
+    </div>
+    <div class="row" style="margin-top: 8px;">
+      <button onclick="reloadSettings()">📂 重新載入設定</button>
+      <button onclick="exportSettings()">📋 匯出設定</button>
+    </div>
+  </div>
+
+<script>
+  let currentRunId = null;
+  let pollTimer = null;
+  let isPaused = false;
+  let isStopped = false;
+  let isJobRunning = false;
+  let isConfigOpen = false;
+  let isScheduleOpen = false;
+
+  const TASK_NAME_MAP = {
+    設定LINE: "設定LINE",
+    建立期別: "建立期別",
+    轉檔期別訂單: "轉檔期別訂單",
+    複製到範本: "複製到範本",
+    處理範本: "處理範本",
+    複製分類: "複製分類",
+    轉換所有金流檔案: "轉換所有金流檔案",
+    搬運退款預收: "搬運退款預收",
+    搬運發票藍新: "搬運發票藍新"
+  };
+
+  document.addEventListener("DOMContentLoaded", () => {
+    buildTimeSelectors();
+    updateClock();
+    setInterval(updateClock, 1000);
+    bindEvents();
+    loadSettings();
+    loadScheduleSettings();
+    setTimeout(autoDetectPeriod, 500);
+  });
+
+  function buildTimeSelectors() {
+    const hourSelect = document.getElementById("cfgScheduleHour");
+    const minuteSelect = document.getElementById("cfgScheduleMinute");
+    if (!hourSelect || !minuteSelect) return;
+
+    hourSelect.innerHTML = "";
+    minuteSelect.innerHTML = "";
+
+    for (let hour = 0; hour <= 23; hour++) {
+      const option = document.createElement("option");
+      option.value = String(hour);
+      option.textContent = String(hour).padStart(2, "0") + ":00";
+      hourSelect.appendChild(option);
+    }
+
+    [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].forEach(minute => {
+      const option = document.createElement("option");
+      option.value = String(minute);
+      option.textContent = String(minute).padStart(2, "0") + "分";
+      minuteSelect.appendChild(option);
+    });
+  }
+
+  function bindEvents() {
+    const jobSelect = document.getElementById("job");
+    const periodInput = document.getElementById("period");
+    if (jobSelect) jobSelect.addEventListener("change", updateRunButtonState);
+    if (periodInput) periodInput.addEventListener("input", updateRunButtonState);
+  }
+
+  function updateClock() {
+    const el = document.getElementById("currentTime");
+    if (!el) return;
+    el.textContent = new Date().toTimeString().split(" ")[0];
+  }
+
+  function updateRunButtonState() {
+    const task = document.getElementById("job")?.value;
+    const period = document.getElementById("period")?.value.trim();
+    const button = document.getElementById("btnRun");
+    const hint = document.getElementById("hint");
+    if (!button || !hint) return;
+
+    const enabled = !!task && !!period;
+    button.disabled = !enabled;
+    hint.textContent = enabled ? "設定完成，可點擊開始執行" : "請選擇作業並設定期別";
+  }
+
+  function toggleConfig() {
+    const section = document.getElementById("configSection");
+    const toggle = document.getElementById("configToggle");
+    if (!section || !toggle) return;
+
+    isConfigOpen = !isConfigOpen;
+    section.style.maxHeight = isConfigOpen ? section.scrollHeight + "px" : "0px";
+    toggle.textContent = isConfigOpen ? "▲" : "▼";
+  }
+
+  function toggleSchedule() {
+    const section = document.getElementById("scheduleSection");
+    const toggle = document.getElementById("scheduleToggle");
+    if (!section || !toggle) return;
+
+    isScheduleOpen = !isScheduleOpen;
+    section.style.maxHeight = isScheduleOpen ? section.scrollHeight + "px" : "0px";
+    toggle.textContent = isScheduleOpen ? "▲" : "▼";
+
+    if (isScheduleOpen) {
+      setTimeout(checkScheduleStatus, 300);
+    }
+  }
+
+  function autoDetectPeriod() {
+    const hint = document.getElementById("periodHint");
+    if (hint) hint.textContent = "偵測中...";
+
+    callServer("api_detectCurrentPeriod", [])
+      .then(response => {
+        const input = document.getElementById("period");
+        if (response?.success && response?.period && input) {
+          input.value = response.period;
+          if (hint) hint.innerHTML = `<span style="color:#10b981;">✅ 已自動偵測到: ${response.period}</span>`;
+          updateRunButtonState();
+        } else if (hint) {
+          hint.textContent = "無法自動偵測，請手動輸入期別";
+        }
+      })
+      .catch(() => {
+        if (hint) hint.textContent = "自動偵測失敗，請手動輸入期別";
+      });
+  }
+
+  function detectPeriod() {
+    autoDetectPeriod();
+  }
+
+  function validateSettings() {
+    const task = document.getElementById("job")?.value;
+    const period = document.getElementById("period")?.value.trim();
+    const folderId = document.getElementById("cfgFolderId")?.value.trim();
+    const region = document.getElementById("cfgRegion")?.value.trim();
+
+    const messages = [];
+    let isValid = true;
+
+    if (!task) {
+      messages.push("❌ 請選擇執行作業");
+      isValid = false;
+    } else {
+      const select = document.getElementById("job");
+      messages.push(`✅ 作業: ${select.options[select.selectedIndex].text}`);
+    }
+
+    if (!period) {
+      messages.push("❌ 請輸入執行期別");
+      isValid = false;
+    } else if (!/^\d{6}-[12]$/.test(period)) {
+      messages.push("❌ 期別格式錯誤 (正確: YYYYMM-1 或 YYYYMM-2)");
+      isValid = false;
+    } else {
+      messages.push(`✅ 期別: ${period}`);
+    }
+
+    messages.push(folderId ? "✅ 根目錄已設定" : "⚠️ 根目錄 Folder ID 未設定");
+    messages.push(region ? `✅ 區域: ${region}` : "⚠️ 區域名稱未設定");
+
+    renderValidationAlert_(messages, isValid);
+    return isValid;
+  }
+
+  function renderValidationAlert_(messages, isValid) {
+    document.querySelectorAll(".temp-validation-alert").forEach(node => node.remove());
+
+    const alert = document.createElement("div");
+    alert.className = `alert ${isValid ? "alert-success" : "alert-warning"} temp-validation-alert`;
+    alert.innerHTML = "<strong>驗證結果:</strong><br>" + messages.join("<br>");
+
+    const card = document.querySelector(".card");
+    const progress = card?.querySelector(".progress-container");
+    if (card && progress) card.insertBefore(alert, progress);
+
+    setTimeout(() => alert.remove(), 5000);
+  }
+
+  function setProgress(percent) {
+    const fill = document.getElementById("progressFill");
+    const text = document.getElementById("progressText");
+    if (!fill || !text) return;
+
+    const value = Math.max(0, Math.min(100, percent));
+    fill.style.width = value + "%";
+    text.textContent = `進度: ${value}%`;
+  }
+
+  function setStatus(text, type = "info") {
+    const el = document.getElementById("status");
+    if (!el) return;
+
+    el.textContent = text;
+    el.style.background = "#475569";
+    if (type === "success") el.style.background = "#10b981";
+    if (type === "error") el.style.background = "#ef4444";
+    if (type === "running") el.style.background = "#3b82f6";
+    if (type === "warning") el.style.background = "#f59e0b";
+  }
+
+  function setControlButtons(running, paused) {
+    const pause = document.getElementById("btnPause");
+    const resume = document.getElementById("btnResume");
+    const stop = document.getElementById("btnStop");
+    if (pause) pause.disabled = !running || paused;
+    if (resume) resume.disabled = !running || !paused;
+    if (stop) stop.disabled = !running;
+  }
+
+  function addLog(message, type = "info") {
+    const container = document.getElementById("logContainer");
+    if (!container) return;
+
+    const entry = document.createElement("div");
+    entry.className = "log-entry";
+
+    const time = document.createElement("div");
+    time.className = "log-time";
+    time.textContent = new Date().toTimeString().split(" ")[0];
+
+    const text = document.createElement("div");
+    text.className = "log-message";
+    if (type === "error") text.style.color = "#ef4444";
+    if (type === "success") text.style.color = "#10b981";
+    if (type === "warning") text.style.color = "#f59e0b";
+    text.textContent = message;
+
+    entry.appendChild(time);
+    entry.appendChild(text);
+    container.appendChild(entry);
+    container.scrollTop = container.scrollHeight;
+
+    const entries = container.getElementsByClassName("log-entry");
+    if (entries.length > 100) container.removeChild(entries[0]);
+  }
+
+  function clearLog() {
+    const container = document.getElementById("logContainer");
+    if (!container) return;
+    container.innerHTML = "";
+    addLog("記錄已清空");
+  }
+
+  function startJob() {
+    if (!validateSettings()) {
+      alert("請先修正設定問題");
+      return;
+    }
+
+    const taskValue = document.getElementById("job")?.value;
+    const period = document.getElementById("period")?.value.trim();
+    const taskName = TASK_NAME_MAP[taskValue] || taskValue;
+
+    let payload = {};
+    if (taskValue === "建立期別") {
+      payload = { period, isScheduled: false, allRegions: false };
+    } else if (taskValue === "設定LINE") {
+      payload = {
+        token: document.getElementById("cfgLineToken")?.value.trim() || "",
+        users: document.getElementById("cfgLineUsers")?.value.trim() || ""
+      };
+    } else {
+      payload = { period };
+    }
+
+    isJobRunning = true;
+    isPaused = false;
+    isStopped = false;
+
+    setStatus("啟動中", "running");
+    setControlButtons(true, false);
+    setProgress(5);
+    addLog(`開始執行: ${taskName} (期別: ${period})`);
+
+    callServer("api_startTask", [taskName, payload])
+      .then(response => {
+        if (!response?.runId) throw new Error("無法取得執行 ID");
+        currentRunId = response.runId;
+        setStatus("執行中", "running");
+        beginPolling();
+      })
+      .catch(error => handleJobError(error));
+  }
+
+  function handleJobError(error) {
+    setStatus("啟動失敗", "error");
+    setProgress(0);
+    setControlButtons(false, false);
+    isJobRunning = false;
+    addLog(`啟動失敗: ${error.message || error}`, "error");
+  }
+
+  function pauseJob() {
+    if (!isJobRunning || isPaused) return;
+    isPaused = true;
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
+    setStatus("已暫停", "warning");
+    setControlButtons(true, true);
+    addLog("作業已暫停", "warning");
+  }
+
+  function resumeJob() {
+    if (!isJobRunning || !isPaused) return;
+    isPaused = false;
+    setStatus("恢復執行", "running");
+    setControlButtons(true, false);
+    addLog("作業恢復執行");
+    beginPolling();
+  }
+
+  function stopJob() {
+    if (!isJobRunning) return;
+    if (!confirm("確定要停止當前作業？")) return;
+
+    isStopped = true;
+    isJobRunning = false;
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
+    currentRunId = null;
+    setStatus("已停止", "error");
+    setControlButtons(false, false);
+    setProgress(0);
+    addLog("作業已手動停止", "error");
+  }
+
+  function beginPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+
+    pollTimer = setInterval(() => {
+      if (!currentRunId || isPaused || isStopped) return;
+
+      callServer("api_pollBusStatus", [currentRunId])
+        .then(state => {
+          if (!state) return;
+
+          if (typeof state.progress === "number") {
+            setProgress(state.progress);
+          }
+
+          if (state.steps?.length) {
+            const step = state.steps[state.steps.length - 1];
+            if (step?.message) {
+              addLog(step.message, normalizeLogType_(step.stage));
+            }
+          }
+
+          if (state.done) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            isJobRunning = false;
+            setControlButtons(false, false);
+            currentRunId = null;
+
+            if (state.success) {
+              setStatus("完成", "success");
+              setProgress(100);
+              addLog("作業執行完成", "success");
+            } else {
+              setStatus("失敗", "error");
+              addLog("作業執行失敗", "error");
+            }
+          }
+        })
+        .catch(() => {});
+    }, 1500);
+  }
+
+  function normalizeLogType_(stage) {
+    if (stage === "ERROR") return "error";
+    if (stage === "SUCCESS") return "success";
+    if (stage === "WARNING") return "warning";
+    return "info";
+  }
+
+  function loadSettings() {
+    callServer("api_getCurrentSettings", [])
+      .then(settings => {
+        if (!settings) return;
+
+        const map = {
+          cfgFolderId: settings.rootFolderId || "",
+          cfgRegion: settings.region || "",
+          cfgLineToken: settings.lineToken || "",
+          cfgLineUsers: settings.lineUsers || ""
+        };
+
+        Object.keys(map).forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.value = map[id];
+        });
+
+        addLog("系統設定已載入", "success");
+      })
+      .catch(() => {});
+  }
+
+  function loadScheduleSettings() {
+    callServer("api_getScheduleSettings", [])
+      .then(settings => {
+        if (!settings) return;
+
+        if (Array.isArray(settings.date)) {
+          const days = document.getElementById("cfgScheduleDays");
+          if (days) days.value = settings.date.join(",");
+        }
+
+        if (settings.time) {
+          const [hour, minute] = settings.time.split(":");
+          const hourSelect = document.getElementById("cfgScheduleHour");
+          const minuteSelect = document.getElementById("cfgScheduleMinute");
+          if (hourSelect) hourSelect.value = String(parseInt(hour, 10));
+          if (minuteSelect) minuteSelect.value = String(parseInt(minute, 10));
+        }
+
+        const allRegions = document.getElementById("cfgAllRegions");
+        if (allRegions) allRegions.checked = !!settings.allRegions;
+      })
+      .catch(() => {});
+  }
+
+  function saveBaseSettings() {
+    const rootFolderId = document.getElementById("cfgFolderId")?.value.trim() || "";
+    const region = document.getElementById("cfgRegion")?.value.trim() || "";
+
+    if (!rootFolderId || !region) {
+      alert("請填寫根目錄 Folder ID 與區域名稱");
+      return;
+    }
+
+    callServer("saveBaseSettings", [rootFolderId, region])
+      .then(response => {
+        alert(response.message || "✅ 系統設定已儲存");
+        addLog("系統設定已儲存", "success");
+      })
+      .catch(error => {
+        alert("❌ 儲存失敗: " + (error.message || error));
+        addLog("系統設定儲存失敗", "error");
+      });
+  }
+
+  function clearBaseSettings() {
+    if (!confirm("確定要清除系統設定？")) return;
+    ["cfgFolderId", "cfgRegion"].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = "";
+    });
+    addLog("系統設定已清除 (前端)", "warning");
+  }
+
+  function saveLineSettings() {
+    const token = document.getElementById("cfgLineToken")?.value.trim() || "";
+    const users = document.getElementById("cfgLineUsers")?.value.trim() || "";
+
+    if (!token || !users) {
+      alert("請填寫 LINE Token 與 User IDs");
+      return;
+    }
+
+    callServer("saveLineSettings", [token, users])
+      .then(response => {
+        alert(response.message || "✅ LINE 設定已儲存");
+        addLog("LINE 設定已儲存", "success");
+      })
+      .catch(error => {
+        alert("❌ 儲存失敗: " + (error.message || error));
+        addLog("LINE 設定儲存失敗", "error");
+      });
+  }
+
+  function clearLineSettings() {
+    if (!confirm("確定要清除 LINE 設定？")) return;
+    ["cfgLineToken", "cfgLineUsers"].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = "";
+    });
+    addLog("LINE 設定已清除 (前端)", "warning");
+  }
+
+  function saveSchedule(event) {
+    if (event) event.stopPropagation();
+
+    const days = document.getElementById("cfgScheduleDays")?.value.trim() || "";
+    const hour = document.getElementById("cfgScheduleHour")?.value || "0";
+    const minute = document.getElementById("cfgScheduleMinute")?.value || "0";
+    const allRegions = document.getElementById("cfgAllRegions")?.checked || false;
+
+    if (!days) {
+      alert("請輸入排程日期");
+      return;
+    }
+
+    const parsed = days.split(",").map(v => parseInt(v.trim(), 10));
+    if (!parsed.every(v => !isNaN(v) && v >= 1 && v <= 31)) {
+      alert("排程日期格式錯誤，請輸入 1-31 的數字，用逗號分隔");
+      return;
+    }
+
+    const time = `${hour}:${String(minute).padStart(2, "0")}`;
+    const button = event?.target;
+    const originalText = button?.textContent || "";
+
+    if (button) {
+      button.textContent = "💾 儲存中...";
+      button.disabled = true;
+    }
+
+    callServer("api_setSchedule", [{ date: days, time, allRegions }])
+      .then(response => {
+        if (button) {
+          button.textContent = originalText;
+          button.disabled = false;
+        }
+
+        if (!response?.success) throw new Error(response?.message || "儲存失敗");
+
+        alert("✅ 排程設定已儲存成功");
+        addLog(`排程設定已儲存: 每月${days}日 ${time}`, "success");
+        setTimeout(checkScheduleStatus, 500);
+      })
+      .catch(error => {
+        if (button) {
+          button.textContent = originalText;
+          button.disabled = false;
+        }
+
+        alert("❌ 排程設定儲存失敗: " + (error.message || error));
+        addLog("排程設定儲存失敗", "error");
+      });
+  }
+
+  function clearSchedule() {
+    if (!confirm("確定要清除排程設定？")) return;
+    document.getElementById("cfgScheduleDays").value = "10,25";
+    document.getElementById("cfgScheduleHour").value = "0";
+    document.getElementById("cfgScheduleMinute").value = "0";
+    document.getElementById("cfgAllRegions").checked = false;
+    document.getElementById("scheduleStatusDisplay").style.display = "none";
+    addLog("排程設定已清除 (前端)", "warning");
+  }
+
+  function checkScheduleStatus() {
+    const display = document.getElementById("scheduleStatusDisplay");
+    const content = document.getElementById("scheduleStatusContent");
+    if (!display || !content) return;
+
+    display.style.display = "block";
+    content.innerHTML = '<div style="text-align:center;padding:10px;">🔍 檢查中...</div>';
+
+    callServer("api_checkScheduleStatus", [])
+      .then(response => {
+        if (!response?.hasSchedule) {
+          content.innerHTML = '<div style="text-align:center;padding:20px;color:#94a3b8;">⚠️ 目前無排程設定</div>';
+          addLog("目前無排程設定", "warning");
+          return;
+        }
+
+        const settings = response.settings;
+        const triggers = response.triggers;
+        const dateText = Array.isArray(settings.date) ? settings.date.join(", ") : settings.date;
+
+        content.innerHTML = `
+          <div class="schedule-status-item"><span>📅 排程日期</span><span style="font-weight:bold;">每月 ${dateText} 日</span></div>
+          <div class="schedule-status-item"><span>⏰ 執行時間</span><span style="font-weight:bold;">${settings.time}</span></div>
+          <div class="schedule-status-item"><span>🌍 全區模式</span><span class="badge ${settings.allRegions ? "badge-success" : "badge-warning"}">${settings.allRegions ? "啟用" : "停用"}</span></div>
+          <div class="schedule-status-item"><span>⚙️ 每日檢查</span><span class="badge ${triggers.dailyCheck ? "badge-success" : "badge-error"}">${triggers.dailyCheck ? "正常" : "異常"}</span></div>
+          <div class="schedule-status-item"><span>⚙️ 每小時檢查</span><span class="badge ${triggers.hourlyCheck ? "badge-success" : "badge-error"}">${triggers.hourlyCheck ? "正常" : "異常"}</span></div>
+          <div class="schedule-status-item"><span>🔄 觸發器總數</span><span>${triggers.total || 0} 個</span></div>
+        `;
+
+        addLog("排程狀態檢查完成", "success");
+      })
+      .catch(error => {
+        content.innerHTML = `<div style="text-align:center;padding:20px;color:#ef4444;">❌ 檢查失敗: ${error.message || error}</div>`;
+        addLog("檢查排程狀態失敗", "error");
+      });
+  }
+
+  function runScheduleNow() {
+    if (!confirm("確定要立即執行排程檢查？")) return;
+    callServer("api_runScheduleNow", [])
+      .then(() => {
+        alert("✅ 排程已觸發執行");
+        addLog("手動觸發排程執行", "success");
+      })
+      .catch(error => {
+        alert("❌ 執行失敗: " + (error.message || error));
+        addLog("手動觸發排程失敗", "error");
+      });
+  }
+
+  function clearAllTriggersAction() {
+    if (!confirm("⚠️ 確定要刪除所有觸發器？\n這將影響所有自動排程！")) return;
+    callServer("clearAllTriggers", [])
+      .then(response => {
+        alert(`✅ ${response.message || "已清理所有觸發器"}`);
+        addLog(`清理觸發器: 已刪除 ${response.deletedCount || 0} 個`, "success");
+        setTimeout(checkScheduleStatus, 1000);
+      })
+      .catch(error => {
+        alert("❌ 清理失敗: " + (error.message || error));
+        addLog("清理觸發器失敗", "error");
+      });
+  }
+
+  function initializeSystemAction() {
+    if (!confirm("⚠️ 確定要初始化系統？\n這將重新建立所有排程觸發器！")) return;
+    callServer("api_initializeSystem", [])
+      .then(response => {
+        if (!response?.success) throw new Error(response?.error || "初始化失敗");
+        alert(`✅ ${response.message || "系統初始化完成"}`);
+        addLog("系統初始化完成", "success");
+        setTimeout(checkScheduleStatus, 1000);
+      })
+      .catch(error => {
+        alert("❌ 初始化失敗: " + (error.message || error));
+        addLog("系統初始化失敗", "error");
+      });
+  }
+
+  function diagnoseSystem() {
+    callServer("api_diagnoseSystem", [])
+      .then(response => {
+        if (!response?.success) throw new Error(response?.error || "診斷失敗");
+        const data = response.data;
+        let message = "🏥 系統診斷報告\n\n";
+        message += `⏰ 時間: ${data.timestamp}\n`;
+        message += `🔄 BUS測試: ${data.busStatus}\n`;
+        message += `⚙️ 觸發器: ${data.triggers.length} 個\n\n`;
+
+        if (data.triggers.length) {
+          data.triggers.forEach((item, index) => {
+            message += `  ${index + 1}. ${item.handler} (${item.eventType})\n`;
+          });
+        } else {
+          message += "  無觸發器\n";
+        }
+
+        message += `\n📋 屬性設定: ${data.properties.length} 項`;
+        alert(message);
+        addLog("系統診斷完成", "success");
+      })
+      .catch(error => alert("❌ 診斷失敗: " + (error.message || error)));
+  }
+
+  function checkEnvironment() {
+    callServer("api_checkEnvironment", [])
+      .then(response => {
+        let message = "🌐 環境檢查報告\n\n";
+        message += `⏰ 時間: ${response.timestamp}\n`;
+        message += `✅ 正常: ${response.ok ? "是" : "否"}\n\n`;
+
+        if (response.issues?.length) {
+          message += "⚠️ 問題列表:\n";
+          response.issues.forEach((issue, index) => {
+            message += `  ${index + 1}. ${issue}\n`;
+          });
+        } else {
+          message += "✅ 所有環境檢查通過";
+        }
+
+        alert(message);
+        addLog("環境檢查完成", response.ok ? "success" : "warning");
+      })
+      .catch(error => alert("❌ 檢查失敗: " + (error.message || error)));
+  }
+
+  function testTemplateProcess() {
+    callServer("api_testTemplateProcessing", [])
+      .then(response => {
+        if (!response?.success) throw new Error(response?.error || "測試失敗");
+        alert(`✅ 測試完成\n期別: ${response.period}\n排序: ${response.result?.sortCount}\n異常標記: ${response.result?.markCount}\n水洗拆分: ${response.result?.washSplitCount}`);
+        addLog("範本加工測試完成", "success");
+      })
+      .catch(error => alert("❌ 測試失敗: " + (error.message || error)));
+  }
+
+  function reloadSettings() {
+    loadSettings();
+    loadScheduleSettings();
+    addLog("重新載入設定");
+  }
+
+  function exportSettings() {
+    const payload = {
+      rootFolderId: document.getElementById("cfgFolderId")?.value.trim() || "",
+      region: document.getElementById("cfgRegion")?.value.trim() || "",
+      lineToken: document.getElementById("cfgLineToken")?.value.trim() ? "已設定" : "未設定",
+      lineUsers: document.getElementById("cfgLineUsers")?.value.trim() ? "已設定" : "未設定",
+      scheduleDays: document.getElementById("cfgScheduleDays")?.value.trim() || "未設定",
+      scheduleTime: `${document.getElementById("cfgScheduleHour")?.value || "0"}:${String(document.getElementById("cfgScheduleMinute")?.value || "0").padStart(2, "0")}`,
+      allRegions: document.getElementById("cfgAllRegions")?.checked ? "啟用" : "停用",
+      exportedAt: new Date().toLocaleString("zh-TW")
+    };
+
+    const text = JSON.stringify(payload, null, 2);
+
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text)
+        .then(() => {
+          alert("✅ 設定已複製到剪貼簿");
+          addLog("設定已匯出", "success");
+        })
+        .catch(() => {
+          prompt("📋 請手動複製設定", text);
+        });
+    } else {
+      prompt("📋 請手動複製設定", text);
+    }
+  }
+
+  function callServer(functionName, args) {
+    return new Promise((resolve, reject) => {
+      if (!(google && google.script && google.script.run)) {
+        reject(new Error("Google Apps Script runtime is unavailable."));
+        return;
+      }
+
+      let runner = google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(reject);
+
+      if (!Array.isArray(args)) args = [];
+      runner[functionName](...args);
+    });
+  }
+</script>
+</body>
+</html>
