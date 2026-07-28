@@ -489,8 +489,8 @@ FUNCTION_MAP = {
         "產生專案PDF",
     ],
     "📦 其他承攬": [
-        "水洗前置", "家電前置", "收納前置", "地毯前置", "座椅前置", "全部前置",
-        "水洗結算", "家電結算", "收納結算", "地毯結算", "座椅結算", "全部結算",
+        "執行前置作業",
+        "執行全部結算",
         "產出全部薪資單",
     ],
 }
@@ -1023,20 +1023,16 @@ if run_clicked and execution_engine == "PYTHON":
                                 "warning" if "⚠️" in message else "info"
                         add_log(message, level)
 
-                    service = None if _func.startswith(("全部", "產出全部")) else \
-                              next((s for s in ["水洗", "家電", "收納", "地毯", "座椅"]
-                                    if _func.startswith(s)), None)
-
-                    if _func.endswith("前置"):
+                    if _func == "執行前置作業":
                         result = run_other_preprocess(
                             root_folder_id=root_id, region=_name, period=_period,
-                            is_first_half=_is_first_half, service_type=service, log=other_log,
+                            is_first_half=_is_first_half, service_type=None, log=other_log,
                         )
                         add_log(f"其他承攬前置完成：{result}", "success")
-                    elif _func.endswith("結算"):
+                    elif _func == "執行全部結算":
                         result = run_other_settlement(
                             root_folder_id=root_id, region=_name, period=_period,
-                            service_type=service, log=other_log,
+                            service_type=None, log=other_log,
                         )
                         add_log("其他承攬結算完成", "success")
                     elif _func == "產出全部薪資單":
