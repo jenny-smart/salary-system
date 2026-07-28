@@ -429,6 +429,11 @@ def _process_order_data(
         log(f"  {svc} 營收明細無本期資料，略過")
         return 0
 
+    if svc == "水洗":
+        for row in rows:
+            row[4] = re.sub(r"^\s*3\s*水洗\s*[:：]\s*", "", str(row[4] or ""))
+        log("  水洗訂單 E 欄已移除「3水洗：」前綴")
+
     end_row = paste_start + len(rows) - 1
     if end_row > order_ws.row_count:
         order_ws.add_rows(end_row - order_ws.row_count)
