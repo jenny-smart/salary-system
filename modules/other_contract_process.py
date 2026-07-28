@@ -129,7 +129,7 @@ TS_FMT              = "%Y/%m/%d %H:%M"
 def _is_zero(val) -> bool:
     if val is None:
         return True
-    s = str(val).strip()
+    s = str(val).strip().replace(",", "").replace("，", "")
     if s in ("", "-", "－", "0"):
         return True
     try:
