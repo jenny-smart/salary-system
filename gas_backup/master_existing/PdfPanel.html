@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Noto Sans TC', Arial, sans-serif;
+    font-size: 13px;
+    background: #f0f4f8;
+    padding: 12px;
+    color: #1a2e40;
+  }
+  h2 {
+    font-size: 15px;
+    color: #0a4b6e;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #c8dce8;
+  }
+  .section {
+    background: white;
+    border-radius: 10px;
+    padding: 12px;
+    margin-bottom: 10px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  }
+  .section-title {
+    font-weight: 700;
+    color: #1a5276;
+    font-size: 12px;
+    margin-bottom: 8px;
+  }
+  label { display: block; font-size: 11px; color: #4a6278; margin-bottom: 3px; }
+  input, select {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #cde;
+    border-radius: 6px;
+    font-size: 12px;
+    margin-bottom: 8px;
+    background: #fafcff;
+  }
+  .btn {
+    width: 100%;
+    padding: 8px;
+    border: none;
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 13px;
+    cursor: pointer;
+    margin-bottom: 6px;
+  }
+  .btn-primary { background: #1f6c9e; color: white; }
+  .btn-primary:hover { background: #155880; }
+  .btn-secondary { background: #e8f4fb; color: #1f6c9e; border: 1px solid #b0d0e8; }
+  .btn-secondary:hover { background: #d0e8f5; }
+  .btn-danger { background: #e74c3c; color: white; }
+  .btn-sm {
+    padding: 4px 8px;
+    font-size: 11px;
+    border-radius: 5px;
+    border: none;
+    cursor: pointer;
+    margin-left: 4px;
+  }
+  .btn-del { background: #fde; color: #c0392b; }
+  .btn-add { background: #d5f5e3; color: #1e8449; }
+
+  .region-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 6px;
+    gap: 4px;
+  }
+  .region-row input { margin: 0; flex: 1; min-width: 0; font-size: 11px; padding: 4px 6px; }
+
+  .log-box {
+    background: #0c2030;
+    color: #a8d4e8;
+    border-radius: 8px;
+    padding: 10px;
+    font-family: monospace;
+    font-size: 11px;
+    min-height: 80px;
+    max-height: 200px;
+    overflow-y: auto;
+    margin-top: 8px;
+  }
+  .log-entry { padding: 2px 0; border-bottom: 1px solid #1a3545; line-height: 1.4; }
+  .log-ok   { color: #6ee7b7; }
+  .log-err  { color: #fca5a5; }
+  .log-warn { color: #fcd34d; }
+
+  .status-bar {
+    background: #e8f4fb;
+    border: 1px solid #b0d0e8;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 11px;
+    color: #1a5276;
+    margin-bottom: 8px;
+    min-height: 28px;
+  }
+  .spinner { display: inline-block; margin-right: 4px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinning { animation: spin 1s linear infinite; display: inline-block; }
+</style>
+</head>
+<body>
+<h2>🍋 清潔承攬 PDF 產出</h2>
+
+<!-- 地區設定 -->
+<div class="section">
+  <div class="section-title">⚙️ 地區設定</div>
+  <div id="region-list"></div>
+  <button class="btn btn-secondary" onclick="addRegionRow()">➕ 新增地區</button>
+  <button class="btn btn-primary" style="margin-top:6px" onclick="saveConfigs()">💾 儲存設定</button>
+</div>
+
+<!-- 執行設定 -->
+<div class="section">
+  <div class="section-title">🚀 執行設定</div>
+
+  <label>執行地區</label>
+  <select id="sel-region">
+    <option value="">── 全部地區 ──</option>
+  </select>
+
+  <label>期別</label>
+  <input type="text" id="input-period" placeholder="例：202604-2">
+
+  <label>產出類型</label>
+  <select id="sel-job">
+    <option value="CLEANING">清潔服務（PDF產出）</option>
+    <option value="PROJECT">清潔專案（專案PDF產出）</option>
+  </select>
+
+  <button class="btn btn-primary" onclick="runGeneration()">▶ 產出 PDF</button>
+</div>
+
+<!-- 進度 -->
+<div class="section">
+  <div class="section-title">📋 執行進度</div>
+  <div class="status-bar" id="status-bar">尚未執行</div>
+  <div class="log-box" id="log-box"></div>
+</div>
+
+<script>
+  var regions  = [];
+  var running  = false;
+  var pollTimer = null;
+
+  // ── 初始化 ──────────────────────────────────
+  window.onload = function() {
+    google.script.run
+      .withSuccessHandler(function(data) {
+        regions = data || [];
+        renderRegions();
+        updateRegionSelect();
+        autofillPeriod();
+      })
+      .withFailureHandler(showError)
+      .getRegionConfigs();
+  };
+
+  function autofillPeriod() {
+    var now = new Date();
+    var y   = now.getFullYear();
+    var m   = String(now.getMonth() + 1).padStart(2, "0");
+    var h   = now.getDate() <= 15 ? "1" : "2";
+    document.getElementById("input-period").value = y + "" + m + "-" + h;
+  }
+
+  // ── 地區列表渲染 ────────────────────────────
+  function renderRegions() {
+    var list = document.getElementById("region-list");
+    list.innerHTML = "";
+    if (regions.length === 0) {
+      list.innerHTML = '<div style="color:#999;font-size:11px;margin-bottom:8px;">尚無地區設定，請新增</div>';
+      return;
+    }
+    regions.forEach(function(r, i) {
+      var row = document.createElement("div");
+      row.className = "region-row";
+      row.innerHTML =
+        '<input placeholder="地區名稱" value="' + esc(r.name) + '" onchange="regions[' + i + '].name=this.value">' +
+        '<input placeholder="清潔承攬試算表ID" value="' + esc(r.fileId) + '" onchange="regions[' + i + '].fileId=this.value">' +
+        '<input placeholder="根目錄ID" value="' + esc(r.rootId) + '" onchange="regions[' + i + '].rootId=this.value">' +
+        '<button class="btn-sm btn-del" onclick="removeRegion(' + i + ')">✕</button>';
+      list.appendChild(row);
+    });
+  }
+
+  function addRegionRow() {
+    regions.push({ name: "", fileId: "", rootId: "" });
+    renderRegions();
+    updateRegionSelect();
+  }
+
+  function removeRegion(i) {
+    regions.splice(i, 1);
+    renderRegions();
+    updateRegionSelect();
+  }
+
+  function updateRegionSelect() {
+    var sel = document.getElementById("sel-region");
+    var cur = sel.value;
+    sel.innerHTML = '<option value="">── 全部地區 ──</option>';
+    regions.forEach(function(r) {
+      if (r.name) {
+        var opt = document.createElement("option");
+        opt.value = r.name;
+        opt.textContent = r.name;
+        if (r.name === cur) opt.selected = true;
+        sel.appendChild(opt);
+      }
+    });
+  }
+
+  function saveConfigs() {
+    addLog("💾 儲存設定中...");
+    google.script.run
+      .withSuccessHandler(function() {
+        addLog("✅ 設定已儲存", "ok");
+        updateRegionSelect();
+      })
+      .withFailureHandler(showError)
+      .saveRegionConfigs(regions);
+  }
+
+  // ── 執行 PDF 產出 ────────────────────────────
+  function runGeneration() {
+    if (running) { addLog("⚠️ 正在執行中，請稍候", "warn"); return; }
+
+    var regionName = document.getElementById("sel-region").value;
+    var period     = document.getElementById("input-period").value.trim();
+    var jobType    = document.getElementById("sel-job").value;
+
+    if (!period) { addLog("❌ 請填入期別", "err"); return; }
+
+    running = true;
+    setStatus("⏳ 執行中...", true);
+    addLog("▶ 開始產出 PDF｜期別：" + period + "｜地區：" + (regionName || "全部") + "｜類型：" + jobType);
+
+    // 開始輪詢進度
+    startPolling();
+
+    google.script.run
+      .withSuccessHandler(function(result) {
+        stopPolling();
+        running = false;
+        if (result.error) {
+          setStatus("❌ 錯誤", false);
+          addLog("❌ " + result.error, "err");
+          return;
+        }
+        (result.results || []).forEach(function(r) {
+          addLog("✅ " + r.region + "：成功 " + r.count + " 份，略過 " + r.skipped + " 份", "ok");
+        });
+        (result.errors || []).forEach(function(e) {
+          addLog("❌ " + e.region + "：" + e.error, "err");
+        });
+        setStatus("✅ 全部完成", false);
+      })
+      .withFailureHandler(function(e) {
+        stopPolling();
+        running = false;
+        setStatus("❌ 執行失敗", false);
+        addLog("❌ " + e.message, "err");
+      })
+      .runPdfGeneration(regionName, period, jobType);
+  }
+
+  // ── 進度輪詢 ─────────────────────────────────
+  function startPolling() {
+    pollTimer = setInterval(function() {
+      google.script.run
+        .withSuccessHandler(function(msg) {
+          if (msg) {
+            setStatus(msg, true);
+            addLog(msg);
+          }
+        })
+        .getProgress();
+    }, 2000);
+  }
+
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  // ── UI 工具 ──────────────────────────────────
+  function setStatus(msg, spinning) {
+    var bar = document.getElementById("status-bar");
+    bar.innerHTML = (spinning ? '<span class="spinning">⏳</span> ' : '') + msg;
+  }
+
+  function addLog(msg, type) {
+    var box = document.getElementById("log-box");
+    var div = document.createElement("div");
+    div.className = "log-entry" + (type === "ok" ? " log-ok" : type === "err" ? " log-err" : type === "warn" ? " log-warn" : "");
+    var now = new Date();
+    var ts  = String(now.getHours()).padStart(2,"0") + ":" + String(now.getMinutes()).padStart(2,"0") + ":" + String(now.getSeconds()).padStart(2,"0");
+    div.textContent = "[" + ts + "] " + msg;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function showError(e) {
+    addLog("❌ " + (e.message || e), "err");
+  }
+
+  function esc(s) {
+    return String(s || "").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  }
+</script>
+</body>
+</html>

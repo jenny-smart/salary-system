@@ -1,0 +1,267 @@
+<!doctype html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8" />
+  <title>其他承攬面板</title>
+
+  <style>
+    body { margin:0; padding:14px; font-family:Arial,sans-serif; background:#0f172a; color:#e2e8f0; font-size:14px; }
+    .header { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+    .title { font-size:17px; font-weight:bold; }
+    .status { padding:4px 10px; background:#475569; border-radius:999px; font-size:12px; }
+    .card { background:#1e293b; border:1px solid #334155; border-radius:10px; padding:14px; margin-bottom:12px; }
+    label { display:block; margin:10px 0 5px; color:#94a3b8; font-size:13px; }
+    input, select { width:100%; padding:9px 10px; border-radius:6px; border:1px solid #475569; background:#0f172a; color:#e2e8f0; box-sizing:border-box; font-size:14px; }
+    .row { display:flex; gap:8px; }
+    .row > * { flex:1; }
+    button { width:100%; padding:10px 12px; border-radius:7px; border:1px solid #475569; background:#334155; color:#e2e8f0; cursor:pointer; font-size:14px; font-weight:bold; }
+    button:hover { background:#475569; }
+    button.primary { background:#2563eb; border-color:#2563eb; color:white; }
+    button.primary:hover { background:#1d4ed8; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    .progress-bar { height:8px; background:#334155; border-radius:999px; overflow:hidden; margin-top:12px; }
+    .progress-fill { height:100%; background:#3b82f6; width:0%; transition:width .25s; }
+    .progress-text { text-align:center; margin-top:6px; color:#94a3b8; font-size:12px; }
+    .log { height:280px; overflow-y:auto; background:#0f172a; border:1px solid #334155; border-radius:8px; padding:10px; font-family:monospace; font-size:12px; }
+    .log-entry { padding-bottom:7px; margin-bottom:7px; border-bottom:1px solid #1e293b; }
+    .log-time { color:#64748b; font-size:11px; }
+    .log-message { color:#e2e8f0; white-space:pre-wrap; }
+    .ok { color:#10b981; }
+    .error { color:#ef4444; }
+    .warn { color:#f59e0b; }
+    .hint { color:#94a3b8; font-size:12px; margin-top:6px; }
+    .toggle-header { display:flex; justify-content:space-between; align-items:center; cursor:pointer; user-select:none; }
+    .setting-body { display:none; margin-top:12px; }
+    .toggle-icon { color:#94a3b8; font-size:14px; }
+  </style>
+</head>
+
+<body>
+  <div class="header">
+    <div class="title">📄 其他承攬面板</div>
+    <div class="status" id="status">準備就緒</div>
+  </div>
+
+  <div class="card">
+    <div class="title">🚀 執行設定</div>
+
+    <label>期別</label>
+    <div class="row">
+      <input id="period" placeholder="例如：202605-1" />
+      <button onclick="detectPeriod()" style="flex:0 0 100px;">偵測</button>
+    </div>
+
+    <label>執行作業</label>
+    <select id="job">
+      <option value="">-- 請選擇 --</option>
+      <option value="前置作業">1️⃣ 執行前置作業</option>
+      <option value="全部結算">2️⃣ 執行全部結算</option>
+      <option value="產出全部薪資單">3️⃣ 產出全部薪資單</option>
+    </select>
+
+    <div style="margin-top:12px;">
+      <button id="runButton" onclick="runJob()" class="primary" disabled>▶️ 開始執行</button>
+    </div>
+
+    <div class="progress-bar">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+    <div class="progress-text" id="progressText">進度：0%</div>
+  </div>
+
+  <div class="card">
+    <div class="header" style="margin-bottom:10px;">
+      <div class="title">📝 執行記錄</div>
+      <button onclick="clearLog()" style="width:auto;padding:5px 10px;font-size:12px;">清空</button>
+    </div>
+    <div class="log" id="log"></div>
+  </div>
+
+  <div class="card">
+    <div class="toggle-header" onclick="toggleSettings()">
+      <div class="title">⚙️ 區域設定</div>
+      <div class="toggle-icon" id="settingsToggle">▼</div>
+    </div>
+
+    <div class="setting-body" id="settingsBody">
+      <label>區域名稱</label>
+      <input id="regionName" placeholder="例如：台北 / 台中 / 高雄" />
+
+      <label>區域根目錄 Folder ID</label>
+      <input id="rootFolderId" placeholder="PDF 會存到：區域根目錄 / 期別 / 期別" />
+
+      <div style="margin-top:12px;">
+        <button onclick="saveSettings()" class="primary">💾 儲存設定</button>
+      </div>
+
+      <div class="hint">PDF 路徑：區域根目錄 / 期別資料夾 / 期別資料夾</div>
+    </div>
+  </div>
+
+<script>
+  let settingsOpen = false;
+
+  document.addEventListener("DOMContentLoaded", function() {
+    loadSettings();
+    bindEvents();
+    addLog("其他承攬面板已就緒", "ok");
+  });
+
+  function toggleSettings() {
+    settingsOpen = !settingsOpen;
+    document.getElementById("settingsBody").style.display = settingsOpen ? "block" : "none";
+    document.getElementById("settingsToggle").textContent = settingsOpen ? "▲" : "▼";
+  }
+
+  function bindEvents() {
+    document.getElementById("period").addEventListener("input", updateRunButton);
+    document.getElementById("job").addEventListener("change", updateRunButton);
+  }
+
+  function updateRunButton() {
+    const period = document.getElementById("period").value.trim();
+    const job = document.getElementById("job").value;
+    document.getElementById("runButton").disabled = !(period && job);
+  }
+
+  function setStatus(text, type) {
+    const el = document.getElementById("status");
+    el.textContent = text;
+    el.style.background = "#475569";
+    if (type === "ok") el.style.background = "#10b981";
+    if (type === "error") el.style.background = "#ef4444";
+    if (type === "run") el.style.background = "#2563eb";
+    if (type === "warn") el.style.background = "#f59e0b";
+  }
+
+  function setProgress(value) {
+    value = Math.max(0, Math.min(100, value));
+    document.getElementById("progressFill").style.width = value + "%";
+    document.getElementById("progressText").textContent = "進度：" + value + "%";
+  }
+
+  function addLog(message, type) {
+    const log = document.getElementById("log");
+    const entry = document.createElement("div");
+    entry.className = "log-entry";
+
+    const time = document.createElement("div");
+    time.className = "log-time";
+    time.textContent = new Date().toLocaleTimeString();
+
+    const msg = document.createElement("div");
+    msg.className = "log-message";
+    if (type === "ok") msg.classList.add("ok");
+    if (type === "error") msg.classList.add("error");
+    if (type === "warn") msg.classList.add("warn");
+    msg.textContent = message;
+
+    entry.appendChild(time);
+    entry.appendChild(msg);
+    log.appendChild(entry);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function clearLog() {
+    document.getElementById("log").innerHTML = "";
+    addLog("執行記錄已清空", "warn");
+  }
+
+  function loadSettings() {
+    google.script.run
+      .withSuccessHandler(function(settings) {
+        document.getElementById("rootFolderId").value = settings.rootFolderId || "";
+        document.getElementById("regionName").value = settings.regionName || "";
+        if (settings.detectedPeriod) document.getElementById("period").value = settings.detectedPeriod;
+        updateRunButton();
+        addLog("設定已載入", "ok");
+      })
+      .withFailureHandler(function(error) {
+        addLog("設定載入失敗：" + error.message, "error");
+      })
+      .other_api_getOtherContractSettings();
+  }
+
+  function saveSettings() {
+    const rootFolderId = document.getElementById("rootFolderId").value.trim();
+    const regionName = document.getElementById("regionName").value.trim();
+
+    setStatus("儲存中", "run");
+    addLog("開始儲存區域設定");
+
+    google.script.run
+      .withSuccessHandler(function(result) {
+        setStatus("設定已儲存", "ok");
+        addLog(result.message || "設定已儲存", "ok");
+      })
+      .withFailureHandler(function(error) {
+        setStatus("儲存失敗", "error");
+        addLog("設定儲存失敗：" + error.message, "error");
+      })
+      .other_api_saveOtherContractSettings(rootFolderId, regionName);
+  }
+
+  function detectPeriod() {
+    google.script.run
+      .withSuccessHandler(function(result) {
+        if (result.success && result.period) {
+          document.getElementById("period").value = result.period;
+          updateRunButton();
+          addLog("已偵測期別：" + result.period, "ok");
+        }
+      })
+      .withFailureHandler(function(error) {
+        addLog("偵測期別失敗：" + error.message, "error");
+      })
+      .other_api_detectCurrentPeriod();
+  }
+
+  function runJob() {
+    const period = document.getElementById("period").value.trim();
+    const job = document.getElementById("job").value;
+    const rootFolderId = document.getElementById("rootFolderId").value.trim();
+    const regionName = document.getElementById("regionName").value.trim();
+
+    if (!/^\d{6}-[12]$/.test(period)) {
+      alert("期別格式錯誤，請使用 YYYYMM-1 或 YYYYMM-2");
+      return;
+    }
+
+    if (!rootFolderId || !regionName) {
+      alert("請先設定區域名稱與區域根目錄 Folder ID");
+      return;
+    }
+
+    setStatus("執行中", "run");
+    setProgress(10);
+    document.getElementById("runButton").disabled = true;
+    addLog("開始執行：" + job + "\n期別：" + period);
+
+    let fakeProgress = 10;
+    const timer = setInterval(function() {
+      fakeProgress += 8;
+      if (fakeProgress < 90) setProgress(fakeProgress);
+    }, 800);
+
+    google.script.run
+      .withSuccessHandler(function(result) {
+        clearInterval(timer);
+        setProgress(100);
+        setStatus("完成", "ok");
+        document.getElementById("runButton").disabled = false;
+        addLog(result.message || "作業完成", "ok");
+        setTimeout(function() { setProgress(0); }, 1500);
+      })
+      .withFailureHandler(function(error) {
+        clearInterval(timer);
+        setProgress(0);
+        setStatus("失敗", "error");
+        document.getElementById("runButton").disabled = false;
+        addLog("作業失敗：" + error.message, "error");
+      })
+      .other_api_runOtherContractJob(job, period);
+  }
+</script>
+</body>
+</html>

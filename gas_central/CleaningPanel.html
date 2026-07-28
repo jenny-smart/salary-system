@@ -1,0 +1,1582 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <!-- 
+    清潔承攬 | 執行控制面板 
+    - 執行鍵移到執行區域旁
+    - 暫停/繼續/停止圖示在清除按鈕旁邊
+  -->
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Segoe UI', 'Noto Sans TC', '微軟正黑體', sans-serif;
+      background: #f4f8fc;
+      color: #103544;
+      padding: 16px;
+      font-size: 14px;
+    }
+
+    .container {
+      max-width: 560px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    .app-header {
+      margin-bottom: 20px;
+      text-align: center;
+    }
+
+    .app-title {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #0a4b6e;
+      letter-spacing: 1px;
+    }
+
+    .execution-card {
+      background: white;
+      border-radius: 24px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 6px 16px rgba(0,32,48,0.06);
+      border: 1px solid #e2edf2;
+    }
+
+    .execution-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #164a5e;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid #e7f0f5;
+    }
+
+    /* 兩欄式設定行 */
+    .settings-row {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .settings-col {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .settings-label {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      color: #2a5770;
+      font-weight: 600;
+      margin-bottom: 6px;
+      font-size: 0.8rem;
+    }
+
+    .settings-input, .settings-select {
+      width: 100%;
+      padding: 12px 16px;
+      border: 2px solid #d6e3ec;
+      border-radius: 40px;
+      font-size: 0.95rem;
+      background: white;
+    }
+
+    .settings-select {
+      appearance: none;
+      background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="%233c6e8f" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>');
+      background-repeat: no-repeat;
+      background-position: right 16px center;
+      padding-right: 40px;
+    }
+
+    .settings-input:focus, .settings-select:focus {
+      border-color: #1e7eac;
+      outline: none;
+    }
+
+    /* 執行區域行 - 包含執行按鈕 */
+    .region-row {
+      display: flex;
+      gap: 12px;
+      align-items: flex-end;
+      margin-bottom: 16px;
+    }
+
+    .region-col {
+      flex: 1;
+    }
+
+    .execute-btn {
+      background: #1f6c9e;
+      border: none;
+      border-radius: 40px;
+      padding: 12px 28px;
+      color: white;
+      font-weight: 600;
+      font-size: 1rem;
+      cursor: pointer;
+      white-space: nowrap;
+      height: 48px;
+      box-shadow: 0 2px 8px rgba(31,108,158,0.2);
+    }
+
+    .execute-btn:hover {
+      background: #135b84;
+    }
+
+    .execute-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .log-section {
+      background: #0c2835;
+      color: #d7ecf5;
+      border-radius: 24px;
+      padding: 20px;
+      margin-bottom: 20px;
+      font-family: 'Courier New', monospace;
+      border: 1px solid #254f60;
+    }
+
+    .log-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      color: #b0d1dd;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #2c5a6a;
+      font-size: 0.85rem;
+    }
+
+    .log-header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .start-time {
+      color: #58c1d9;
+      font-size: 0.75rem;
+    }
+
+    /* 控制按鈕群組 */
+    .control-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: 8px;
+    }
+
+    /* 暫停/繼續/停止按鈕 */
+    .control-btn {
+      border: none;
+      border-radius: 20px;
+      padding: 4px 10px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .control-btn.pause {
+      background: #f39c4b;
+      color: white;
+    }
+
+    .control-btn.pause:hover {
+      background: #e6862a;
+    }
+
+    .control-btn.resume {
+      background: #2a8c5a;
+      color: white;
+    }
+
+    .control-btn.resume:hover {
+      background: #1e6b44;
+    }
+
+    .control-btn.stop {
+      background: #dc2626;
+      color: white;
+    }
+
+    .control-btn.stop:hover {
+      background: #b91c1c;
+    }
+
+    .control-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* 清除按鈕 */
+    .clear-log-btn {
+      background: transparent;
+      border: 1px solid #3e6c87;
+      border-radius: 16px;
+      color: #b0d1dd;
+      font-size: 0.65rem;
+      padding: 3px 10px;
+      cursor: pointer;
+    }
+
+    .clear-log-btn:hover {
+      background: #1e4757;
+    }
+
+    .log-content {
+      height: 260px;
+      overflow-y: auto;
+      padding: 10px 8px;
+      background: #0a1f28;
+      border-radius: 16px;
+      display: flex;
+      flex-direction: column;
+      font-size: 0.8rem;
+    }
+
+    .log-entry {
+      padding: 8px 12px;
+      border-bottom: 1px solid #1c4452;
+      color: #cde3ec;
+      line-height: 1.5;
+      word-break: break-word;
+      font-family: 'Courier New', monospace;
+    }
+
+    .log-time {
+      color: #58c1d9;
+      margin-right: 8px;
+      font-weight: 600;
+      display: inline-block;
+    }
+
+    .system-section {
+      background: white;
+      border-radius: 24px;
+      margin-bottom: 20px;
+      border: 1px solid #e2edf2;
+      overflow: hidden;
+    }
+
+    .system-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 24px;
+      background: #edf6fa;
+      border-bottom: 1px solid #cde1e9;
+    }
+
+    .system-header-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      color: #0f4a62;
+      font-size: 1rem;
+    }
+
+    .add-region-btn {
+      background: white;
+      border: 1px solid #1f6c9e;
+      border-radius: 40px;
+      padding: 8px 18px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #1f6c9e;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: 0.15s;
+    }
+
+    .add-region-btn:hover {
+      background: #e1eff7;
+    }
+
+    .system-content {
+      padding: 24px;
+      background: white;
+    }
+
+    .region-card {
+      background: #f8fcff;
+      border-radius: 20px;
+      padding: 18px;
+      margin-bottom: 18px;
+      border: 1px solid #d9eaf2;
+    }
+
+    .region-card:last-child {
+      margin-bottom: 0;
+    }
+
+    .region-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .region-name {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .region-name span {
+      font-weight: 700;
+      color: #0a4b6e;
+      font-size: 1rem;
+      cursor: pointer;
+      padding: 6px 12px;
+      border-radius: 30px;
+      transition: 0.15s;
+    }
+
+    .region-name span:hover {
+      background: #e1eff7;
+    }
+
+    .region-badge {
+      background: #2a8c5a;
+      color: white;
+      padding: 4px 12px;
+      border-radius: 30px;
+      font-size: 0.7rem;
+    }
+
+    .region-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    .region-btn {
+      background: white;
+      border: 1px solid #c8dde9;
+      border-radius: 30px;
+      padding: 6px 14px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #1e5770;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: 0.15s;
+    }
+
+    .region-btn:hover {
+      background: #e1eff7;
+      border-color: #8fb9d0;
+    }
+
+    .region-btn.delete:hover {
+      background: #fee2e2;
+      border-color: #dc2626;
+      color: #dc2626;
+    }
+
+    .region-content {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid #e2eff5;
+    }
+
+    .region-detail-row {
+      display: flex;
+      align-items: center;
+      padding: 10px 14px;
+      background: white;
+      border-radius: 14px;
+      margin-bottom: 8px;
+      border: 1px solid #e2eff5;
+    }
+
+    .region-detail-label {
+      min-width: 85px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #3e6c87;
+      background: #e1eff7;
+      padding: 4px 10px;
+      border-radius: 20px;
+      margin-right: 14px;
+      text-align: center;
+    }
+
+    .region-detail-value {
+      font-weight: 500;
+      color: #0b3b4f;
+      font-size: 0.85rem;
+      font-family: monospace;
+      word-break: break-all;
+      flex: 1;
+    }
+
+    /* 編輯表單 */
+    .region-edit-form {
+      margin-top: 16px;
+    }
+
+    .region-edit-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 1rem;
+      font-weight: 700;
+      color: #0a4b6e;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #d9eaf2;
+    }
+
+    .region-form-row {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 16px;
+    }
+
+    .region-form-label {
+      font-weight: 600;
+      color: #1a4d63;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .region-form-label::before {
+      content: "📌";
+      font-size: 0.85rem;
+    }
+
+    .region-form-input input {
+      width: 100%;
+      padding: 12px 16px;
+      border: 2px solid #d3e3ed;
+      border-radius: 40px;
+      font-size: 0.9rem;
+      background: white;
+      transition: 0.15s;
+    }
+
+    .region-form-input input:focus {
+      border-color: #1e7eac;
+      outline: none;
+    }
+
+    .region-form-actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 24px;
+      justify-content: flex-end;
+    }
+
+    .region-save-btn {
+      background: #1f6c9e;
+      border: none;
+      border-radius: 40px;
+      padding: 12px 28px;
+      color: white;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: 0.15s;
+    }
+
+    .region-save-btn:hover {
+      background: #135b84;
+    }
+
+    .region-cancel-btn {
+      background: #e5f0f7;
+      border: 1px solid #b8d4e3;
+      border-radius: 40px;
+      padding: 12px 28px;
+      color: #1e5770;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: 0.15s;
+    }
+
+    .region-cancel-btn:hover {
+      background: #d1e4ef;
+    }
+
+    .footer {
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 1px solid #cde0e8;
+      font-size: 0.75rem;
+      color: #557f97;
+      text-align: center;
+    }
+
+    .close-link {
+      text-decoration: underline;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .no-region {
+      text-align: center;
+      padding: 40px 20px;
+      color: #608aa3;
+      font-size: 0.95rem;
+      background: #f8fcff;
+      border-radius: 20px;
+      border: 2px dashed #b8d4e3;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- ========= 執行設定 ========= -->
+    <div class="execution-card">
+      <div class="execution-title">⚙️ 執行設定</div>
+
+      <!-- 第一行：📆 執行期別 + 🎯 執行功能 -->
+      <div class="settings-row">
+        <div class="settings-col">
+          <div class="settings-label">📆 執行期別</div>
+          <input 
+            type="text" 
+            id="periodInput" 
+            class="settings-input" 
+            placeholder=""
+            value=""
+            autocomplete="off"
+          >
+        </div>
+        <div class="settings-col">
+          <div class="settings-label">🎯 執行功能</div>
+          <select id="functionSelect" class="settings-select">
+            <option value="">-- 請選擇作業 --</option>
+            <option value="runSalaryPreparation">薪資表整理</option>
+            <option value="runSalaryPreparationWithProjectOrders">薪資表整理（含專案訂單）</option>
+            <option value="runAdjustmentPreparation">00調薪</option>
+            <option value="runAllowanceProcess">01專員請款</option>
+            <option value="runVoucherPreparation">02儲值金</option>
+            <option value="runNewcomerProcess">標注新人實境期别</option>
+            <option value="runNewcomerProcess">03新人實境</option>
+            <option value="runInternProcess">04新人實習</option>
+            <option value="runLeaderProcess">05組長津贴</option>
+            <option value="runFinalSettlement">結算整理</option>
+            <option value="runCompletePayrollProcess">上半月完整流程</option>
+            <option value="runBankAccountUpdate">元大帳户更新</option>
+            <option value="separator" disabled>─────────────────</option>
+            <option value="PDF" disabled>📄 PDF 輸出管理</option>
+            <option value="generatePDF">　🖨️ 產生PDF（不寄信）</option>
+            <option value="generateProjectPDF">　🖨️ 產生專案PDF（不寄信）</option>            
+            <option value="markAllStaff">　✅ 標記所有人</option>
+            <option value="clearAllFlags">　🧹 清除標記</option>
+            <option value="repairPdfLinks">　🔧 修復PDF連結</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- 第二行：🗺️ 執行區域 + 執行按鈕 -->
+      <div class="region-row">
+        <div class="region-col">
+          <div class="settings-label">🗺️ 執行區域</div>
+          <select id="regionSelect" class="settings-select">
+            <option value="">-- 請選擇區域 --</option>
+          </select>
+        </div>
+        <button class="execute-btn" onclick="executeSelectedFunction()" id="executeBtn">
+          ▶ 執行
+        </button>
+      </div>
+    </div>
+
+    <!-- ========= 執行日誌 ========= -->
+    <div class="log-section">
+      <div class="log-header">
+        <div class="log-header-left">
+          <span>📋 執行日誌</span>
+          <span class="start-time" id="startTime"></span>
+          <!-- 控制按鈕群組：暫停/繼續/停止 + 清除 -->
+          <span class="control-group">
+            <!-- 暫停/繼續/停止按鈕 -->
+            <span class="execution-controls" id="executionControls" style="display: none;">
+              <button class="control-btn pause" onclick="pauseExecution()" id="pauseBtn">⏸️</button>
+              <button class="control-btn resume" onclick="resumeExecution()" id="resumeBtn" disabled>▶️</button>
+              <button class="control-btn stop" onclick="stopExecution()" id="stopBtn">⏹️</button>
+            </span>
+            <!-- 清除按鈕 -->
+            <button class="clear-log-btn" onclick="clearLog()">清除</button>
+          </span>
+        </div>
+        <span style="background: #1e4757; padding: 4px 12px; border-radius: 30px;">即時更新</span>
+      </div>
+      <div id="logContent" class="log-content">
+        <div class="log-entry">
+          <span class="log-time">[--:--:--]</span> 系統已就緒，請選擇作業...
+        </div>
+      </div>
+    </div>
+
+    <!-- ========= 系統設定 - 多區域管理 ========= -->
+    <div class="system-section">
+      <div class="system-header">
+        <div class="system-header-left">
+          <span>⚙️ 區域設定</span>
+        </div>
+        <button class="add-region-btn" onclick="addNewRegion()">
+          ➕ 新增區域
+        </button>
+      </div>
+
+      <div class="system-content" id="regionsContainer">
+        <!-- 由 JavaScript 動態產生所有區域卡片 -->
+      </div>
+    </div>
+
+    <div class="footer">
+      <div id="footerPeriodInfo">當前期別：<strong></strong> · </div>
+      <span class="close-link" onclick="google.script.host.close()">關閉面板</span>
+    </div>
+  </div>
+
+  <script>
+    // --------------------------------------------------------------
+    // 介面樣式：第二個版本
+    // 執行邏輯：第一個版本（直接呼叫函數）
+    // 執行鍵在執行區域旁
+    // 暫停/繼續/停止圖示在清除按鈕旁邊
+    // --------------------------------------------------------------
+    let regions = [];
+    let editingRegionId = null;
+    let isExecuting = false;
+    let isPaused = false;
+
+    // ===== 初始化 =====
+    function init() {
+      addLog('🔄 初始化面板，讀取資料...');
+      document.getElementById('startTime').textContent = new Date().toLocaleTimeString();
+      
+      google.script.run
+        .withSuccessHandler(initPanel)
+        .withFailureHandler((err) => {
+          addLog('❌ 初始化失敗：' + err.message);
+          useMockData();
+        })
+        .cleaning_getPanelInitData();
+    }
+
+    // ===== 使用模擬資料 =====
+    function useMockData() {
+      addLog('📋 使用測試資料...');
+      
+      document.getElementById('periodInput').value = '202602-1';
+      document.getElementById('footerPeriodInfo').innerHTML = 
+        `當前期別：<strong>202602-1</strong> · `;
+      
+      regions = [
+        {
+          id: 'region_1',
+          name: '新北區',
+          rootFolderId: '1abc123...',
+          folderId: '2def456...',
+          salaryId: '3ghi789...',
+          rosterId: '4jkl012...',
+          isExpanded: false
+        },
+        {
+          id: 'region_2',
+          name: '台北區',
+          rootFolderId: '6pqr678...',
+          folderId: '7stu901...',
+          salaryId: '8vwx234...',
+          rosterId: '9yz567...',
+          isExpanded: false
+        },
+        {
+          id: 'region_3',
+          name: '桃園區',
+          rootFolderId: 'abc123...',
+          folderId: 'def456...',
+          salaryId: 'ghi789...',
+          rosterId: 'jkl012...',
+          isExpanded: false
+        }
+      ];
+      
+      renderRegions();
+      updateRegionSelect();
+      
+      addLog(`✅ 初始化完成，共 ${regions.length} 個區域`);
+    }
+
+    function initPanel(data) {
+      if (data.periodCode) {
+        document.getElementById('periodInput').value = data.periodCode;
+        document.getElementById('footerPeriodInfo').innerHTML = 
+          `當前期別：<strong>${data.periodCode}</strong> · `;
+      }
+      
+      if (data.regions && Array.isArray(data.regions)) {
+        regions = data.regions;
+        regions.forEach(r => {
+          if (r.isExpanded === undefined) r.isExpanded = false;
+        });
+      } else {
+        regions = [];
+      }
+      
+      renderRegions();
+      updateRegionSelect();
+      
+      addLog(`✅ 初始化完成，共 ${regions.length} 個區域`);
+    }
+
+    // ===== 更新區域選擇下拉選單 =====
+    function updateRegionSelect() {
+      const select = document.getElementById('regionSelect');
+      if (!select) return;
+      
+      let options = '<option value="">-- 請選擇區域 --</option>';
+      regions.forEach(region => {
+        if (region.id && region.name) {
+          options += `<option value="${region.id}">🏷️ ${region.name}</option>`;
+        }
+      });
+      select.innerHTML = options;
+    }
+
+    // ===== 切換區域展開/收合 =====
+    function toggleRegion(regionId) {
+      const region = regions.find(r => r.id === regionId);
+      if (region) {
+        region.isExpanded = !region.isExpanded;
+        renderRegions();
+      }
+    }
+
+    // ===== 渲染所有區域卡片 =====
+    function renderRegions() {
+      const container = document.getElementById('regionsContainer');
+      if (!container) return;
+
+      if (regions.length === 0) {
+        container.innerHTML = `
+          <div class="no-region">
+            📭 尚未設定任何區域<br>
+            <span style="font-size:0.8rem; margin-top:12px; display:block;">點擊上方「新增區域」開始設定</span>
+          </div>
+        `;
+        return;
+      }
+
+      let html = '';
+      regions.forEach(region => {
+        const isEditing = editingRegionId === region.id;
+        html += renderRegionCard(region, isEditing);
+      });
+
+      container.innerHTML = html;
+    }
+
+    // ===== 渲染單一區域卡片 =====
+    function renderRegionCard(region, isEditing = false) {
+      const isExpanded = region.isExpanded || false;
+      
+      if (!isEditing) {
+        return `
+          <div class="region-card" data-region-id="${region.id}">
+            <div class="region-header">
+              <div class="region-name">
+                <span onclick="toggleRegion('${region.id}')">
+                  ${isExpanded ? '🔽' : '▶️'} 🏷️ ${region.name || '未命名區域'}
+                </span>
+                <span class="region-badge">已啟用</span>
+              </div>
+              <div class="region-actions">
+                <button class="region-btn" onclick="editRegion('${region.id}')">📝 編輯</button>
+                <button class="region-btn delete" onclick="confirmDeleteRegion('${region.id}')">🗑️ 刪除</button>
+              </div>
+            </div>
+            
+            ${isExpanded ? `
+              <div class="region-content">
+                <div class="region-detail-row">
+                  <span class="region-detail-label">📁 根目錄</span>
+                  <span class="region-detail-value">${region.rootFolderId || '—'}</span>
+                </div>
+                <div class="region-detail-row">
+                  <span class="region-detail-label">💰 請款檔</span>
+                  <span class="region-detail-value">${region.folderId || '—'}</span>
+                </div>
+                <div class="region-detail-row">
+                  <span class="region-detail-label">🧾 薪資檔</span>
+                  <span class="region-detail-value">${region.salaryId || '—'}</span>
+                </div>
+                <div class="region-detail-row">
+                  <span class="region-detail-label">📋 名冊檔</span>
+                  <span class="region-detail-value">${region.rosterId || '—'}</span>
+                </div>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      } else {
+        return `
+          <div class="region-card" data-region-id="${region.id}">
+            <div class="region-edit-form">
+              <div class="region-edit-title">✏️ 編輯區域設定</div>
+              
+              <div class="region-form-row">
+                <div class="region-form-label">區域名稱</div>
+                <div class="region-form-input">
+                  <input type="text" id="edit_name_${region.id}" value="${region.name || ''}" placeholder="請輸入區域名稱">
+                </div>
+              </div>
+              
+              <div class="region-form-row">
+                <div class="region-form-label">根目錄ID</div>
+                <div class="region-form-input">
+                  <input type="text" id="edit_root_${region.id}" value="${region.rootFolderId || ''}" placeholder="請輸入根目錄ID">
+                </div>
+              </div>
+              
+              <div class="region-form-row">
+                <div class="region-form-label">請款檔ID</div>
+                <div class="region-form-input">
+                  <input type="text" id="edit_folder_${region.id}" value="${region.folderId || ''}" placeholder="請輸入請款檔ID">
+                </div>
+              </div>
+              
+              <div class="region-form-row">
+                <div class="region-form-label">薪資檔ID</div>
+                <div class="region-form-input">
+                  <input type="text" id="edit_salary_${region.id}" value="${region.salaryId || ''}" placeholder="請輸入薪資檔ID">
+                </div>
+              </div>
+              
+              <div class="region-form-row">
+                <div class="region-form-label">名冊檔ID</div>
+                <div class="region-form-input">
+                  <input type="text" id="edit_roster_${region.id}" value="${region.rosterId || ''}" placeholder="請輸入名冊檔ID">
+                </div>
+              </div>
+              
+              <div class="region-form-actions">
+                <button class="region-save-btn" onclick="saveRegion('${region.id}')">💾 儲存</button>
+                <button class="region-cancel-btn" onclick="cancelEdit()">✕ 取消</button>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+    }
+
+    // ===== 新增區域 =====
+    function addNewRegion() {
+      const tempId = 'new_' + Date.now();
+      
+      const newRegion = {
+        id: tempId,
+        name: '',
+        rootFolderId: '',
+        folderId: '',
+        salaryId: '',
+        rosterId: '',
+        isExpanded: true,
+        isNew: true
+      };
+      
+      editingRegionId = tempId;
+      regions.push(newRegion);
+      renderRegions();
+      addLog('➕ 新增區域 - 請填寫表單');
+    }
+
+    // ===== 編輯區域 =====
+    function editRegion(regionId) {
+      editingRegionId = regionId;
+      renderRegions();
+      addLog('📝 編輯區域');
+    }
+
+    // ===== 取消編輯 =====
+    function cancelEdit() {
+      if (editingRegionId && editingRegionId.toString().startsWith('new_')) {
+        regions = regions.filter(r => r.id !== editingRegionId);
+      }
+      editingRegionId = null;
+      renderRegions();
+    }
+
+    // ===== 儲存區域設定 =====
+    function saveRegion(regionId) {
+      const name = document.getElementById(`edit_name_${regionId}`)?.value.trim();
+      const rootFolderId = document.getElementById(`edit_root_${regionId}`)?.value.trim();
+      
+      if (!name) {
+        addLog('❌ 請輸入區域名稱');
+        return;
+      }
+      if (!rootFolderId) {
+        addLog('❌ 請輸入根目錄 ID');
+        return;
+      }
+
+      const folderId = document.getElementById(`edit_folder_${regionId}`)?.value.trim() || '';
+      const salaryId = document.getElementById(`edit_salary_${regionId}`)?.value.trim() || '';
+      const rosterId = document.getElementById(`edit_roster_${regionId}`)?.value.trim() || '';
+
+      addLog(`📍 儲存區域設定：${name}`);
+
+      const regionData = {
+        id: regionId.toString().startsWith('new_') ? null : regionId,
+        name: name,
+        rootFolderId: rootFolderId,
+        folderId: folderId,
+        salaryId: salaryId,
+        rosterId: rosterId
+      };
+
+      if (regionId.toString().startsWith('new_')) {
+        const savedRegion = {
+          ...regionData,
+          id: 'region_' + Date.now(),
+          isExpanded: false
+        };
+        
+        const index = regions.findIndex(r => r.id === regionId);
+        if (index !== -1) {
+          regions[index] = savedRegion;
+        }
+        
+        addLog(`✅ 區域「${name}」儲存成功`);
+        editingRegionId = null;
+        renderRegions();
+        updateRegionSelect();
+      } else {
+        google.script.run
+          .withSuccessHandler((savedRegion) => {
+            addLog(`✅ 區域「${name}」儲存成功`);
+            
+            const index = regions.findIndex(r => r.id === regionId);
+            if (index !== -1) {
+              savedRegion.isExpanded = false;
+              regions[index] = savedRegion;
+            }
+            
+            editingRegionId = null;
+            renderRegions();
+            updateRegionSelect();
+          })
+          .withFailureHandler((err) => {
+            addLog(`❌ 儲存失敗：${err.message}`);
+          })
+          .saveRegion(regionData);
+      }
+    }
+
+    // ===== 確認刪除區域 =====
+    function confirmDeleteRegion(regionId) {
+      const region = regions.find(r => r.id === regionId);
+      if (!region) return;
+      
+      if (confirm(`⚠️ 確定要刪除區域「${region.name || '未命名'}」嗎？\n此操作無法復原。`)) {
+        deleteRegion(regionId);
+      }
+    }
+
+    // ===== 刪除區域 =====
+    function deleteRegion(regionId) {
+      const region = regions.find(r => r.id === regionId);
+      const regionName = region?.name || regionId;
+      
+      addLog(`🗑️ 刪除區域：${regionName}`);
+      
+      regions = regions.filter(r => r.id !== regionId);
+      
+      if (editingRegionId === regionId) {
+        editingRegionId = null;
+      }
+      
+      addLog(`✅ 區域刪除完成：${regionName}`);
+      renderRegions();
+      updateRegionSelect();
+    }
+
+    // ===== 執行作業 =====
+    function executeSelectedFunction() {
+      const select = document.getElementById('functionSelect');
+      const action = select.value;
+      const regionId = document.getElementById('regionSelect').value;
+      
+      if (!action) {
+        addLog('❌ 請選擇作業');
+        return;
+      }
+
+      if (!regionId) {
+        addLog('❌ 請選擇要執行的區域');
+        return;
+      }
+
+      const periodCode = document.getElementById('periodInput').value.trim();
+      if (!periodCode) {
+        addLog('❌ 請輸入期別代碼');
+        return;
+      }
+      if (!periodCode.match(/^\d{6}(-\d)?$/)) {
+        addLog('❌ 期別格式錯誤，請使用 YYYYMM-N');
+        return;
+      }
+
+      const region = regions.find(r => r.id === regionId);
+      const actionName = getActionName(action);
+      const isFirstHalf = periodCode.includes('-1');
+      const periodType = isFirstHalf ? '上半月' : '下半月';
+      
+      isExecuting = true;
+      isPaused = false;
+      document.getElementById('executionControls').style.display = 'inline-flex';
+      document.getElementById('pauseBtn').disabled = false;
+      document.getElementById('resumeBtn').disabled = true;
+      document.getElementById('stopBtn').disabled = false;
+      document.getElementById('executeBtn').disabled = true;
+      
+      addLog(`🟢 執行【${region.name}】${periodType} ${actionName}，期別：${periodCode}`);
+
+      switch(action) {
+        case 'runSalaryPreparation':
+          if (isFirstHalf) {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runSalaryPreparationFirstHalf();
+          } else {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runSalaryPreparationSecondHalf();
+          }
+          break;
+        
+        /* 🔥 新增這段 */
+        case 'runSalaryPreparationWithProjectOrders':
+          if (isFirstHalf) {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runSalaryPreparationWithProjectOrdersFirstHalf();
+          } else {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runSalaryPreparationWithProjectOrdersSecondHalf();
+          }
+          break;
+
+
+        case 'runAdjustmentPreparation':
+          if (isFirstHalf) {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runAdjustmentPreparationFirstHalf();
+          } else {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runAdjustmentPreparationSecondHalf();
+          }
+          break;
+
+        case 'runAllowanceProcess':
+          if (isFirstHalf) {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runAllowanceProcessFirstHalf();
+          } else {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runAllowanceProcessSecondHalf();
+          }
+          break;
+
+        case 'runVoucherPreparation':
+          if (isFirstHalf) {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runVoucherPreparationFirstHalf();
+          } else {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runVoucherPreparationSecondHalf();
+          }
+          break;
+
+        case 'runNewcomerProcess':
+          if (isFirstHalf) {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runNewcomerProcessFirstHalf();
+          } else {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runNewcomerProcessSecondHalf();
+          }
+          break;
+
+        case 'runInternProcess':
+          if (isFirstHalf) {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runInternProcessFirstHalf();
+          } else {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runInternProcessSecondHalf();
+          }
+          break;
+
+        case 'runLeaderProcess':
+          if (isFirstHalf) {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runLeaderProcessFirstHalf();
+          } else {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runLeaderProcessSecondHalf();
+          }
+          break;
+
+        case 'runToolDepositProcess':
+          if (isFirstHalf) {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runToolDepositProcessFirst();
+          } else {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runToolDepositProcessSecond();
+          }
+          break;
+
+        case 'runFinalSettlement':
+          if (isFirstHalf) {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runFinalSettlementFirstHalf();
+          } else {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runFinalSettlementSecondHalf();
+          }
+          break;
+
+        case 'runCompletePayrollProcess':
+          if (isFirstHalf) {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runCompletePayrollProcessFirstHalf();
+          } else {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runCompletePayrollProcessSecondHalf();
+          }
+          break;
+
+        case 'runBankAccountUpdate':
+          if (isFirstHalf) {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runYuantaAccountFirstHalf();
+          } else {
+            google.script.run
+              .withSuccessHandler(() => {
+                addLog(`✅ ${periodType} ${actionName} 執行完成`);
+                resetExecutionState();
+              })
+              .withFailureHandler((err) => {
+                addLog(`❌ 執行失敗：${err.message}`);
+                resetExecutionState();
+              })
+              .cleaning_runYuantaAccountSecondHalf();
+          }
+          break;
+
+        case 'generatePDF':
+          addLog('🔄 開始產生PDF...');
+
+          if (!region.rootFolderId) {
+            addLog('❌ 此區域未設定 rootFolderId');
+            resetExecutionState();
+            return;
+          }
+
+          google.script.run
+            .withSuccessHandler((res) => {
+              if (res && res.success === false) {
+                addLog(`❌ PDF失敗：${res.message || '未知錯誤'}`);
+              } else {
+                addLog('✅ PDF產生完成');
+             }
+              resetExecutionState();
+            })
+            .withFailureHandler((err) => {
+              addLog(`❌ PDF失敗：${err.message}`);
+              resetExecutionState();
+            })
+            .cleaning_generateCleaningSalaryPDFsByPeriodFile(
+              region.rootFolderId,
+              periodCode,
+              region.name,
+              false
+            );
+
+          break;
+
+        case 'generateProjectPDF':
+          addLog('🔄 開始產生專案PDF...');
+
+          if (!region.rootFolderId) {
+            addLog('❌ 此區域未設定 rootFolderId');
+            resetExecutionState();
+            break;
+          }
+
+          google.script.run
+            .withSuccessHandler((res) => {
+              if (res && res.success === false) {
+                addLog(`❌ 專案PDF失敗：${res.message || '未知錯誤'}`);
+              } else {
+                addLog('✅ 專案PDF產生完成');
+              }
+              resetExecutionState();
+            })
+            .withFailureHandler((err) => {
+              addLog(`❌ 專案PDF失敗：${err.message}`);
+              resetExecutionState();
+            })
+            .cleaning_generateProjectSalaryPDFsByPeriodFile(
+              region.rootFolderId,
+              periodCode,
+              region.name,
+              false
+            );
+          break;
+
+        case 'markAllStaff':
+          google.script.run
+            .withSuccessHandler(() => {
+              addLog('✅ 標記所有人完成');
+              resetExecutionState();
+            })
+            .withFailureHandler((err) => {
+              addLog(`❌ 標記失敗：${err.message}`);
+              resetExecutionState();
+            })
+            .cleaning_markAllStaffForProcessing();
+          break;
+
+        case 'clearAllFlags':
+          google.script.run
+            .withSuccessHandler(() => {
+              addLog('✅ 清除標記完成');
+              resetExecutionState();
+            })
+            .withFailureHandler((err) => {
+              addLog(`❌ 清除失敗：${err.message}`);
+              resetExecutionState();
+            })
+            .cleaning_clearAllControlFlags();
+          break;
+
+        case 'repairPdfLinks':
+          google.script.run
+            .withSuccessHandler(() => {
+              addLog('✅ 修復PDF連結完成');
+              resetExecutionState();
+            })
+            .withFailureHandler((err) => {
+              addLog(`❌ 修復失敗：${err.message}`);
+              resetExecutionState();
+            })
+            .cleaning_repairPdfLinks();
+          break;
+
+        default:
+          addLog('❌ 未知的作業類型：' + action);
+          resetExecutionState();
+      }
+    }
+
+    // ===== 重置執行狀態 =====
+    function resetExecutionState() {
+      isExecuting = false;
+      document.getElementById('executionControls').style.display = 'none';
+      document.getElementById('executeBtn').disabled = false;
+    }
+
+    // ===== 執行控制 =====
+    function pauseExecution() {
+      isPaused = true;
+      document.getElementById('pauseBtn').disabled = true;
+      document.getElementById('resumeBtn').disabled = false;
+      addLog('⏸️ 執行已暫停');
+      
+      google.script.run.cleaning_pauseExecution();
+    }
+
+    function resumeExecution() {
+      isPaused = false;
+      document.getElementById('pauseBtn').disabled = false;
+      document.getElementById('resumeBtn').disabled = true;
+      addLog('▶ 繼續執行');
+      
+      google.script.run.cleaning_resumeExecution();
+    }
+
+    function stopExecution() {
+      if (confirm('⚠️ 確定要停止執行嗎？')) {
+        isExecuting = false;
+        document.getElementById('executionControls').style.display = 'none';
+        document.getElementById('executeBtn').disabled = false;
+        addLog('⏹️ 執行已停止');
+        
+        google.script.run.cleaning_stopExecution();
+      }
+    }
+
+    // ===== 清除日誌 =====
+    function clearLog() {
+      const logEl = document.getElementById('logContent');
+      logEl.innerHTML = '';
+      addLog('系統準備就緒...');
+    }
+
+    // ===== 取得動作中文名稱 =====
+    function getActionName(action) {
+      const names = {
+        'runSalaryPreparation': '薪資表整理',
+        'runAdjustmentPreparation': '00調薪',
+        'runAllowanceProcess': '01專員請款',
+        'runVoucherPreparation': '02儲值金',
+        'runNewcomerProcess': '標注新人實境期别',
+        'runInternProcess': '03新人實境',
+        'runLeaderProcess': '04新人實習',
+        'runToolDepositProcess': '05組長津贴',
+        'runFinalSettlement': '結算整理',
+        'runCompletePayrollProcess': '上半月完整流程',
+        'runBankAccountUpdate': '元大帳户更新',
+        'generatePDF': '產生PDF',
+        'generateProjectPDF': '產生專案PDF',
+        'markAllStaff': '標記所有人',
+        'clearAllFlags': '清除標記',
+        'repairPdfLinks': '修復PDF連結'
+      };
+      return names[action] || action;
+    }
+
+    // ===== 執行日誌 =====
+    function addLog(message) {
+      const logEl = document.getElementById('logContent');
+      const now = new Date();
+      const timestamp = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+      
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.innerHTML = `<span class="log-time">[${timestamp}]</span> ${message}`;
+      
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+      
+      while (logEl.children.length > 100) {
+        logEl.removeChild(logEl.firstChild);
+      }
+    }
+
+    // 啟動
+    init();
+  </script>
+</body>
+</html>
