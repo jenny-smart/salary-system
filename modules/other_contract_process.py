@@ -808,14 +808,20 @@ def _export_pdf(
 
 
 def _prepare_drive_output(root_folder_id: str, period: str, log: Callable):
-    try:
-        drive     = _get_oauth_drive_service()
-        folder_id = _get_or_create_pdf_folder(root_folder_id, period, drive)
-        log("  Drive 資料夾準備完成")
-        return drive, folder_id
-    except Exception as e:
-        log(f"  ⚠️ Drive 未啟用，改走下載模式：{e}")
-        return None, None
+    errors = []
+    for label, factory in [
+        ("使用者 OAuth", _get_oauth_drive_service),
+        ("服務帳戶", get_drive_service),
+    ]:
+        try:
+            drive = factory()
+            folder_id = _get_or_create_pdf_folder(root_folder_id, period, drive)
+            log(f"  Drive 資料夾準備完成（{label}）")
+            return drive, folder_id
+        except Exception as e:
+            errors.append(f"{label}：{e}")
+    log(f"  ⚠️ Drive 未啟用，改走下載模式：{'；'.join(errors)}")
+    return None, None
 
 
 def _get_oauth_drive_service():
@@ -870,18 +876,25 @@ def _upload_or_update_drive(
             fileId=eid, body={"name": file_name},
             media_body=media, supportsAllDrives=True,
         ).execute()
-        return existing_url
+        fid = eid
+        url = existing_url
+    else:
+        res = oauth_drive.files().create(
+            body={"name": file_name, "parents": [folder_id]},
+            media_body=media, fields="id", supportsAllDrives=True,
+        ).execute()
+        fid = res["id"]
+        url = f"https://drive.google.com/file/d/{fid}/view"
 
-    res = oauth_drive.files().create(
-        body={"name": file_name, "parents": [folder_id]},
-        media_body=media, fields="id", supportsAllDrives=True,
-    ).execute()
-    fid = res["id"]
-    oauth_drive.permissions().create(
-        fileId=fid, body={"type": "anyone", "role": "reader"},
-        supportsAllDrives=True,
-    ).execute()
-    return f"https://drive.google.com/file/d/{fid}/view"
+    try:
+        oauth_drive.permissions().create(
+            fileId=fid, body={"type": "anyone", "role": "reader"},
+            supportsAllDrives=True,
+        ).execute()
+    except Exception as e:
+        if "already" not in str(e).lower():
+            raise
+    return url
 
 
 # ─────────────────────────────────────────────────────────────────────────────
