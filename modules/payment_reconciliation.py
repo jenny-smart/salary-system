@@ -187,10 +187,26 @@ def copy_orders_to_template(
 
     first_half = is_first_half(period)
     start_row  = _get_period_paste_row(template_sheet, first_half, log_fn=log)
-    count      = paste_data(template_sheet, start_row, data)
+    count = len(data)
 
-    log(f"✅ 搬運完成：{count} 筆（起始列：{start_row}，"
-        f"{'上半月清空後貼入' if first_half else '下半月接續貼入'}）")
+    # 下半月重跑時，若目標尾端已是同一批資料，只補格式，不再重複追加。
+    retry_start = start_row - count
+    is_retry = False
+    if not first_half and retry_start >= 2:
+        existing = template_sheet.get(f"A{retry_start}:BJ{start_row - 1}")
+
+        def normalized(rows):
+            return [[str(cell) for cell in row] for row in rows]
+
+        is_retry = normalized(existing) == normalized(data)
+
+    if is_retry:
+        start_row = retry_start
+        log(f"✅ 資料先前已搬運：{count} 筆（起始列：{start_row}），本次只補格式")
+    else:
+        count = paste_data(template_sheet, start_row, data)
+        log(f"✅ 搬運完成：{count} 筆（起始列：{start_row}，"
+            f"{'上半月清空後貼入' if first_half else '下半月接續貼入'}）")
 
     # 搬移格式（底色 + 字型 + 列高 21px）
     # 來源：訂單工作表第 2 列起（共 count 列）
@@ -198,18 +214,20 @@ def copy_orders_to_template(
     try:
         import traceback
         src_row_nums = list(range(2, 2 + count))
+        used_cols = max((len(row) for row in data), default=1)
         log(f"🔵 讀取格式中（訂單工作表第 2–{1 + count} 列）...")
         fmt_map = _fetch_row_fmts(
             spreadsheet_id = order_file["id"],
             sheet_title    = source_sheet.title,
             row_nums       = src_row_nums,
+            max_cols       = used_cols,
         )
         log(f"🔵 格式讀取完成，套用中...")
         fmts = [fmt_map.get(r) for r in src_row_nums]
         _apply_fmts(template_sheet, start_row, fmts)
         log(f"🔵 格式搬移完成（{count} 列，列高 21px）")
     except Exception as e:
-        log(f"⚠️ 格式搬移失敗：{e}")
+        log(f"⚠️ 資料已完成搬運；僅格式搬移失敗：{e}")
         log(f"⚠️ 詳細：{traceback.format_exc()[:300]}")
 
     return {"count": count, "start_row": start_row}
@@ -530,7 +548,9 @@ def process_template(
         "mark_count":      mark_count,
         "expand_count":    expand_count,
         "warnings":        warnings,
-        "category_counts": category_counts,
+        # ⑤分類搬運需要的是加工後「所有服務的實際列數」；
+        # category_counts 只包含需拆解的類別，會讓讀取範圍嚴重不足。
+        "category_counts": after_rows_count,
         "before_main":     before_main,
         "after_main":      after_main,
         "after_rows":      after_rows_count,
@@ -893,8 +913,16 @@ def _cell_format_from_effective(ef: dict | None) -> dict:
     return out
 
 
+def _column_letter(number: int) -> str:
+    letters = ""
+    while number:
+        number, remainder = divmod(number - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
+
+
 def _fetch_row_fmts(spreadsheet_id: str, sheet_title: str,
-                    row_nums: list[int]) -> dict[int, dict]:
+                    row_nums: list[int], max_cols: int = 62) -> dict[int, dict]:
     """
     批次讀取多列 A:BJ 逐格格式。
     回傳：
@@ -907,39 +935,47 @@ def _fetch_row_fmts(spreadsheet_id: str, sheet_title: str,
     if not row_nums:
         return {}
 
-    min_row = min(row_nums)
-    max_row = max(row_nums)
-    svc     = _build_sheets_service()
-
-    result = svc.spreadsheets().get(
-        spreadsheetId   = spreadsheet_id,
-        ranges          = [f"'{sheet_title}'!A{min_row}:BJ{max_row}"],
-        fields          = "sheets.data.rowData.values.effectiveFormat",
-        includeGridData = True,
-    ).execute()
-
-    try:
-        all_row_data = result["sheets"][0]["data"][0].get("rowData", [])
-    except (IndexError, KeyError):
-        return {r: {"cells": [{} for _ in range(62)]} for r in row_nums}
-
     fmt_map = {}
-    for row_num in row_nums:
-        idx = row_num - min_row
-        cells = []
+    svc = _build_sheets_service()
+    max_cols = max(1, min(int(max_cols), 62))
+    end_col = _column_letter(max_cols)
+
+    # Highly repetitive Sheets formatting compresses beyond httplib2's safety
+    # ratio (100x). Request identity encoding and keep each response bounded.
+    sorted_rows = sorted(set(row_nums))
+    for offset in range(0, len(sorted_rows), 100):
+        chunk = sorted_rows[offset:offset + 100]
+        min_row, max_row = min(chunk), max(chunk)
+        request = svc.spreadsheets().get(
+            spreadsheetId=spreadsheet_id,
+            ranges=[f"'{sheet_title}'!A{min_row}:{end_col}{max_row}"],
+            fields="sheets.data.rowData.values.effectiveFormat",
+            includeGridData=True,
+        )
+        request.headers["Accept-Encoding"] = "identity"
+        result = request.execute()
+
         try:
-            values = all_row_data[idx].get("values", [])
-        except (IndexError, KeyError, TypeError):
-            values = []
+            all_row_data = result["sheets"][0]["data"][0].get("rowData", [])
+        except (IndexError, KeyError):
+            all_row_data = []
 
-        for col_idx in range(62):
+        for row_num in chunk:
+            idx = row_num - min_row
+            cells = []
             try:
-                ef = values[col_idx].get("effectiveFormat", {}) if col_idx < len(values) else {}
-            except (KeyError, TypeError):
-                ef = {}
-            cells.append(_cell_format_from_effective(ef))
+                values = all_row_data[idx].get("values", [])
+            except (IndexError, KeyError, TypeError):
+                values = []
 
-        fmt_map[row_num] = {"cells": cells}
+            for col_idx in range(max_cols):
+                try:
+                    ef = values[col_idx].get("effectiveFormat", {}) if col_idx < len(values) else {}
+                except (KeyError, TypeError):
+                    ef = {}
+                cells.append(_cell_format_from_effective(ef))
+
+            fmt_map[row_num] = {"cells": cells}
 
     return fmt_map
 
@@ -1097,7 +1133,12 @@ def copy_classified_data(
 
     if category_counts:
         for cat, expected in category_counts.items():
-            actual = len(other_buckets.get(cat, []))
+            if cat == "清潔":
+                actual = len(cleaning_rows)
+            elif cat in other_buckets:
+                actual = len(other_buckets[cat])
+            else:
+                continue
             if actual != expected:
                 log(f"⚠️ Double check [{cat}]：④加工={expected} 列，⑤分類={actual} 列，請確認")
             else:
