@@ -400,6 +400,8 @@ def _process_order_data(
         # 有些期別檔只有本期資料，資料會直接位於第 2 列起，沒有分隔空白列。
         # 此時依金流對帳⑤打卡筆數，從營收明細尾端精確往回抓本期資料。
         recorded = get_recorded_value(region, period, cfg["preprocess_key"])
+        if not recorded:
+            recorded = get_recorded_value(region, period, f"加工-{svc}加工列數")
         try:
             expected_count = int(float(str(recorded).strip())) if recorded else 0
         except (TypeError, ValueError):
@@ -411,6 +413,13 @@ def _process_order_data(
                 f"  {svc} 分段區無資料，改依本期打卡 {expected_count} 筆，"
                 f"讀取第 {income_start}–{last_income_row} 列"
             )
+            rows, backgrounds = _read_income_rows_and_backgrounds(
+                ss.id, income_ws, income_start
+            )
+        elif last_income_row >= 2:
+            # 主控尚未留下正確筆數時，期別檔第 2 列起的連續資料仍視為本期資料。
+            income_start = 2
+            log(f"  {svc} 無可用打卡筆數，改讀取第 2–{last_income_row} 列")
             rows, backgrounds = _read_income_rows_and_backgrounds(
                 ss.id, income_ws, income_start
             )
