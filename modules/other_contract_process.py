@@ -395,8 +395,27 @@ def _process_order_data(
         income_start = _first_empty_row_b(income_ws, 2) + 1
         paste_start = _first_empty_row_b(order_ws, 2)
 
-    _clear_order_from(order_ws, paste_start)
     rows, backgrounds = _read_income_rows_and_backgrounds(ss.id, income_ws, income_start)
+    if not is_first_half and not rows:
+        # 有些期別檔只有本期資料，資料會直接位於第 2 列起，沒有分隔空白列。
+        # 此時依金流對帳⑤打卡筆數，從營收明細尾端精確往回抓本期資料。
+        recorded = get_recorded_value(region, period, cfg["preprocess_key"])
+        try:
+            expected_count = int(float(str(recorded).strip())) if recorded else 0
+        except (TypeError, ValueError):
+            expected_count = 0
+        last_income_row = _last_nonempty_row_b(income_ws)
+        if expected_count > 0 and last_income_row >= 2:
+            income_start = max(2, last_income_row - expected_count + 1)
+            log(
+                f"  {svc} 分段區無資料，改依本期打卡 {expected_count} 筆，"
+                f"讀取第 {income_start}–{last_income_row} 列"
+            )
+            rows, backgrounds = _read_income_rows_and_backgrounds(
+                ss.id, income_ws, income_start
+            )
+
+    _clear_order_from(order_ws, paste_start)
     if not rows:
         log(f"  {svc} 營收明細無本期資料，略過")
         return 0
