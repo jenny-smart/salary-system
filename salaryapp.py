@@ -1081,6 +1081,7 @@ if run_clicked and execution_engine == "PYTHON":
 
             except Exception as e:
                 import traceback
+                st.error(f"❌ {e}")
                 add_log(f"執行失敗：{e}", "error")
                 add_log(traceback.format_exc(), "error")
 

@@ -689,6 +689,8 @@ def run_adjustment(
 
     except Exception as e:
         _log(log, f"❌ 00調薪失敗：{e}")
+        if str(e).startswith("請檢查 "):
+            raise
         return False
 
 
