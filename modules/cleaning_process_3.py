@@ -126,6 +126,9 @@ def run_settlement(
         ws_pdf      = ss.worksheet("PDF產出")
         ws_proj_pdf = ss.worksheet("專案PDF產出")
 
+        ws_summary.batch_clear(["AB4:AE120"])
+        _log(log, "  已清空場次時數薪資總表 AB4:AE")
+
         # ── 步驟1：薪資表 L2048 → L2047 ──────────────────────
         _log(log, "  步驟1：薪資表 L2048 轉值複製至 L2047")
         _step1_copy_salary_row(ws_salary, log)

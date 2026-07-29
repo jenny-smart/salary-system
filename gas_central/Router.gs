@@ -62,7 +62,8 @@ var CentralMaster = {
           root_folder_id: values[r][index.root_folder_id] || "",
           allowance_id: values[r][index.allowance_id] || "",
           salary_id: values[r][index.salary_id] || "",
-          roster_id: values[r][index.roster_id] || ""
+          roster_id: values[r][index.roster_id] || "",
+          mail_id: values[r][index.mail_id] || ""
         };
       }
     }
@@ -118,7 +119,27 @@ function doPost(e) {
   if (action === "generatePdf") {
     return handleCentralPdfRequest_(e);
   }
+  if (action === "runYuanta") {
+    return handleCentralYuantaRequest_(e);
+  }
   return routeCentralRequest_(e);
+}
+
+function handleCentralYuantaRequest_(e) {
+  try {
+    var p = (e && e.parameter) || {};
+    CentralContext.setRequest(p.spreadsheetId, p.region, p.period);
+    var result = cleaning_runBankAccountUpdate(
+      String(p.period || "").slice(-2) === "-1"
+    );
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true, result: result
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false, message: error.message || String(error)
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
 }
 
 function handleCentralPdfRequest_(e) {

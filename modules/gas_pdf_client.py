@@ -37,3 +37,23 @@ def generate_pdf(spreadsheet_id, region, period, kind) -> dict:
     if response.status_code >= 400:
         data["success"] = False
     return data
+
+
+def run_yuanta(spreadsheet_id, region, period) -> dict:
+    url = _url()
+    if not url:
+        return {"success": False, "message": "尚未設定 GAS_SCHEDULER_WEB_APP_URL"}
+    response = requests.post(
+        url,
+        params={
+            "action": "runYuanta",
+            "spreadsheetId": spreadsheet_id,
+            "region": region,
+            "period": period,
+        },
+        timeout=360,
+    )
+    try:
+        return response.json()
+    except Exception:
+        return {"success": False, "message": response.text[:500]}

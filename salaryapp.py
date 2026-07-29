@@ -83,7 +83,7 @@ CONFIG_PATH = "config.yaml"
 CONFIG_SHEET_NAME = "Lemon Clean 系統設定"
 REGION_SHEET_NAME = "地區設定"
 SCHEDULE_SHEET_NAME = "排程設定"
-REGION_HEADERS = ["name", "root_folder_id", "allowance_id", "salary_id", "roster_id"]
+REGION_HEADERS = ["name", "root_folder_id", "allowance_id", "salary_id", "roster_id", "mail_id"]
 SCHEDULE_HEADERS = ["key", "value"]
 
 
@@ -113,6 +113,7 @@ def _load_yaml_backup() -> dict:
                         "allowance_id": cfg.get("allowance_id", cfg.get("billing_sheet_id", "")),
                         "salary_id": cfg.get("salary_id", cfg.get("salary_sheet_id", "")),
                         "roster_id": cfg.get("roster_id", cfg.get("roster_sheet_id", "")),
+                        "mail_id": cfg.get("mail_id", ""),
                     }
                     for name, cfg in data["regions"].items()
                     if isinstance(cfg, dict)
@@ -260,7 +261,7 @@ def _read_config_from_sheet(spreadsheet_id: str) -> dict:
 
     region_values = svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
-        range=f"'{REGION_SHEET_NAME}'!A2:E",
+        range=f"'{REGION_SHEET_NAME}'!A2:F",
     ).execute().get("values", [])
 
     regions = []
@@ -275,6 +276,7 @@ def _read_config_from_sheet(spreadsheet_id: str) -> dict:
             "allowance_id": str(row[2]).strip(),
             "salary_id": str(row[3]).strip(),
             "roster_id": str(row[4]).strip(),
+            "mail_id": str(row[5]).strip(),
         })
 
     schedule_values = svc.spreadsheets().values().get(
@@ -325,6 +327,7 @@ def _write_config_to_sheet(spreadsheet_id: str, cfg: dict):
             r.get("allowance_id", ""),
             r.get("salary_id", ""),
             r.get("roster_id", ""),
+            r.get("mail_id", ""),
         ])
 
     schedule = cfg.get("schedule", {}) or {}
@@ -338,7 +341,7 @@ def _write_config_to_sheet(spreadsheet_id: str, cfg: dict):
 
     svc.spreadsheets().values().clear(
         spreadsheetId=spreadsheet_id,
-        range=f"'{REGION_SHEET_NAME}'!A:E",
+        range=f"'{REGION_SHEET_NAME}'!A:F",
         body={},
     ).execute()
     svc.spreadsheets().values().update(
@@ -497,6 +500,9 @@ FUNCTION_MAP = {
         "執行全部結算",
         "產出全部薪資單",
     ],
+    "✉️ 承攬 mail": [
+        "同步承攬服務費 mail",
+    ],
 }
 
 
@@ -519,7 +525,7 @@ with c2:
     st.markdown('<div class="field-label">🗂️ 執行系統</div>', unsafe_allow_html=True)
     system = st.selectbox(
         "系統",
-        ["💰 金流對帳", "🧹 清潔承攬", "📦 其他承攬"],
+        ["💰 金流對帳", "🧹 清潔承攬", "📦 其他承攬", "✉️ 承攬 mail"],
         label_visibility="collapsed", key="system"
     )
 
@@ -532,6 +538,7 @@ ENGINE_KEYS = {
     "💰 金流對帳": "engine_payment",
     "🧹 清潔承攬": "engine_cleaning",
     "📦 其他承攬": "engine_other",
+    "✉️ 承攬 mail": "engine_mail",
 }
 engine_key = ENGINE_KEYS[system]
 saved_engine = str(config.get("schedule", {}).get(engine_key, "PYTHON")).upper()
@@ -642,10 +649,12 @@ if run_clicked and execution_engine == "GAS":
             from modules.cleaning_process_1 import find_cleaning_file
             target_id = find_cleaning_file(root_id, period, selected_name)
             app_name = "cleaning"
-        else:
+        elif system == "📦 其他承攬":
             from modules.other_contract_process import _find_other_file
             target_id = _find_other_file(root_id, period, selected_name)
             app_name = "other"
+        else:
+            raise RuntimeError("承攬 mail 請使用 PYTHON 執行引擎")
 
         query = urlencode({
             "app": app_name,
@@ -1014,7 +1023,7 @@ if run_clicked and execution_engine == "PYTHON":
                 # ───────────────────────────────────────────────
                 # █ 區塊8-C：其他承攬執行邏輯
                 # ───────────────────────────────────────────────
-                else:
+                elif _system == "📦 其他承攬":
                     from modules.other_contract_process import (
                         run_other_preprocess,
                         run_other_settlement,
@@ -1058,8 +1067,21 @@ if run_clicked and execution_engine == "PYTHON":
                     else:
                         add_log(f"{_func} 尚未實作", "warning")
 
+                elif _system == "✉️ 承攬 mail":
+                    from modules.service_fee_mail import sync_service_fee_mail
+                    count = sync_service_fee_mail(
+                        root_folder_id=root_id,
+                        period=_period,
+                        region=_name,
+                        mail_id=str(_region.get("mail_id", "") or ""),
+                        roster_id=str(_region.get("roster_id", "") or ""),
+                        log=lambda msg: add_log(msg, "success"),
+                    )
+                    add_log(f"承攬服務費 mail 完成：{count} 筆", "success")
+
             except Exception as e:
                 import traceback
+                st.error(f"❌ {e}")
                 add_log(f"執行失敗：{e}", "error")
                 add_log(traceback.format_exc(), "error")
 
@@ -1287,6 +1309,7 @@ REGION_FIELDS = [
     ("allowance_id",   "請款 ID"),
     ("salary_id",      "薪資 ID"),
     ("roster_id",      "名冊 ID"),
+    ("mail_id",        "承攬服務費 mail ID"),
 ]
 
 col_hdr, col_add = st.columns([3, 1])
@@ -1303,6 +1326,7 @@ if st.session_state.adding_region:
         new_allowance = st.text_input("請款 ID")
         new_salary    = st.text_input("薪資 ID")
         new_roster    = st.text_input("名冊 ID")
+        new_mail      = st.text_input("承攬服務費 mail ID")
 
         s1, s2 = st.columns(2)
         with s1:
@@ -1323,6 +1347,7 @@ if st.session_state.adding_region:
                         "allowance_id":   new_allowance,
                         "salary_id":      new_salary,
                         "roster_id":      new_roster,
+                        "mail_id":        new_mail,
                     })
                     config["regions"] = regions
                     save_config(config)
@@ -1356,6 +1381,7 @@ for i, region in enumerate(regions):
             e_allowance = st.text_input("請款 ID",    value=region.get("allowance_id",   ""))
             e_salary    = st.text_input("薪資 ID",    value=region.get("salary_id",      ""))
             e_roster    = st.text_input("名冊 ID",    value=region.get("roster_id",      ""))
+            e_mail      = st.text_input("承攬服務費 mail ID", value=region.get("mail_id", ""))
 
             es1, es2 = st.columns(2)
             with es1:
@@ -1370,6 +1396,7 @@ for i, region in enumerate(regions):
                     "allowance_id":   e_allowance,
                     "salary_id":      e_salary,
                     "roster_id":      e_roster,
+                    "mail_id":        e_mail,
                 }
                 config["regions"] = regions
                 save_config(config)
