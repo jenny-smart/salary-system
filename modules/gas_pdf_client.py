@@ -34,8 +34,15 @@ def generate_pdf(spreadsheet_id, region, period, kind) -> dict:
         data = response.json()
     except Exception:
         data = {"success": False, "message": response.text[:500]}
+    if "success" not in data:
+        data["success"] = False
+        data["message"] = (
+            data.get("message")
+            or "中央 GAS 回應不是 PDF API；請更新並重新部署 Web App"
+        )
     if response.status_code >= 400:
         data["success"] = False
+        data["message"] = data.get("message") or f"HTTP {response.status_code}"
     return data
 
 
