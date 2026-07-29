@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime
 import time
+import unicodedata
 from typing import List, Optional
 
 import gspread
@@ -31,6 +32,15 @@ from modules.master_sheet import record_execution
 TS_FMT = "%Y/%m/%d %H:%M"
 SUMMARY_START = 4
 SUMMARY_END = 120
+
+
+def _name_key(value) -> str:
+    """統一姓名字形並移除不可見空白。"""
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    return "".join(
+        ch for ch in text
+        if not ch.isspace() and ch not in "\u200b\u200c\u200d\ufeff"
+    )
 
 
 def _now_ts() -> str:
@@ -352,13 +362,13 @@ def _fill_account_cols(
     for row in raw:
         while len(row) < 10:
             row.append("")
-        h_val = str(row[h_idx]).strip()
+        h_val = _name_key(row[h_idx])
         if h_val:
             h_map[h_val] = (row[i_idx], row[j_idx])
 
     col1_data, col2_data = [], []
     for name in names:
-        ij = h_map.get(str(name).strip(), ("", ""))
+        ij = h_map.get(_name_key(name), ("", ""))
         col1_data.append([ij[0]])
         col2_data.append([ij[1]])
 
