@@ -115,7 +115,37 @@ function doPost(e) {
   if (action === "syncTriggers" || action === "dispatchNow") {
     return handleRequest_(e);
   }
+  if (action === "generatePdf") {
+    return handleCentralPdfRequest_(e);
+  }
   return routeCentralRequest_(e);
+}
+
+function handleCentralPdfRequest_(e) {
+  try {
+    var p = (e && e.parameter) || {};
+    CentralContext.setRequest(p.spreadsheetId, p.region, p.period);
+    var kind = String(p.kind || "CLEANING").toUpperCase();
+    var result;
+    if (kind === "OTHER") {
+      result = other_generateAllSalaryPDFs_v2025();
+    } else {
+      result = cleaning_generateSalaryPDFsByConfigAndFile_(
+        kind === "PROJECT" ? "PROJECT" : "CLEANING",
+        p.spreadsheetId,
+        false
+      );
+    }
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      result: result
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      message: error.message || String(error)
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
 }
 
 function routeCentralRequest_(e) {
