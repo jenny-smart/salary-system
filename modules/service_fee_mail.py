@@ -4,7 +4,7 @@ import datetime
 import gspread
 
 from modules.auth import get_gspread_client, get_drive_service
-from modules.master_sheet import MASTER_SHEET_ID
+from modules.master_sheet import MASTER_SHEET_ID, record_execution
 
 MAIL_IDS = {
     "台北": "1vbtsEF5_WjQGgmBuVNq9t1zhtgGqsKHpabEVQnuYCNY",
@@ -131,4 +131,5 @@ def sync_service_fee_mail(
                 value_input_option="USER_ENTERED",
             )
     log(f"承攬服務費 mail 已同步 {len(data)} 筆")
+    record_execution(region, period, "承攬mail", len(data))
     return len(data)
