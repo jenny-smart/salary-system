@@ -857,11 +857,11 @@ def _adj_set_summary_b_to_g(
                 f"=HLOOKUP(A{r},'薪資表'!$1:$2013,2013,FALSE)"]]},
             {"range": f"D{r}", "values": [[
                 f"=IF(AND(E{r}=0,'薪資單'!$AD$1=$D$1),"
-                f"HLOOKUP($A{r},'薪資表'!$1:$2047,2042,FALSE),"
-                f"HLOOKUP($A{r},'薪資表'!$1:$2047,2043,FALSE))"]]},
+                f"HLOOKUP($A{r},'薪資表'!$1:$2047,2046,FALSE),"
+                f"HLOOKUP($A{r},'薪資表'!$1:$2047,2045,FALSE))"]]},
             {"range": f"E{r}", "values": [[
                 f"=IF('薪資單'!$AD$1=$E$1,"
-                f"HLOOKUP($A{r},'薪資表'!$1:$2047,2044,FALSE),0)"]]},
+                f"HLOOKUP($A{r},'薪資表'!$1:$2047,2046,FALSE),0)"]]},
             {"range": f"F{r}", "values": [[
                 f"=HLOOKUP(A{r},'薪資表'!$1:$2042,2039,FALSE)"
                 f"+HLOOKUP(A{r},'薪資表'!$1:$2042,2040,FALSE)"]]},
