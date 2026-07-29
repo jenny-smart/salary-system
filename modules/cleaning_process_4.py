@@ -147,9 +147,9 @@ def run_tool_deposit(
         ss = gc.open_by_key(cleaning_file_id)
 
         ws_summary = ss.worksheet("場次時數薪資總表")
-        ws_intro    = ss.worksheet("介紹獎金")
 
         if is_first_half:
+            ws_intro = ss.worksheet("介紹獎金")
             _tool_clear(ws_summary, ws_intro, log)
             dep_count = 0
         else:
@@ -177,7 +177,8 @@ def run_tool_deposit(
         return True
 
     except Exception as e:
-        _log(log, f"❌ 工具包押金失敗：{e}")
+        detail = str(e).strip() or f"{type(e).__name__}: {e!r}"
+        _log(log, f"❌ 工具包押金失敗：{detail}")
         return False
 
 
