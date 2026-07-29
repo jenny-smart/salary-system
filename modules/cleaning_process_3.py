@@ -27,6 +27,7 @@ import gspread
 
 from modules.auth import get_gspread_client
 from modules.master_sheet import record_execution
+from modules.period_utils import format_taipei_time
 
 
 TS_FMT = "%Y/%m/%d %H:%M"
@@ -44,7 +45,7 @@ def _name_key(value) -> str:
 
 
 def _now_ts() -> str:
-    return datetime.datetime.now().strftime(TS_FMT)
+    return format_taipei_time(fmt=TS_FMT)
 
 
 def _log(log: List[str], msg: str) -> None:

@@ -765,9 +765,14 @@ function detectCurrentPeriod_() {
   if (match) return match[1];
 
   var today = new Date();
-  var year = today.getFullYear();
-  var month = String(today.getMonth() + 1).padStart(2, "0");
-  var half = today.getDate() <= 15 ? "1" : "2";
+  var taipeiParts = Utilities.formatDate(
+    today,
+    OTHER_CONTRACT_PDF_CONFIG.TIMEZONE,
+    "yyyy,MM,dd"
+  ).split(",");
+  var year = taipeiParts[0];
+  var month = taipeiParts[1];
+  var half = Number(taipeiParts[2]) <= 15 ? "1" : "2";
   return year + month + "-" + half;
 }
 
@@ -987,6 +992,7 @@ function replacePdfFileContent_(fileId, pdfBlob) {
     preprocessOtherContractSheets_: preprocessOtherContractSheets_,
     preprocessSalaryTablesByPeriod_: preprocessSalaryTablesByPeriod_,
     preprocessWashingSalaryTable_: preprocessWashingSalaryTable_,
+    replacePdfFileContent_: replacePdfFileContent_,
     runAllPreprocess: runAllPreprocess,
     runAllPreprocessCore_: runAllPreprocessCore_,
     runAllSettlement: runAllSettlement,
@@ -1043,6 +1049,7 @@ function other_preprocessApplianceSalaryTable_() { return OtherApp.preprocessApp
 function other_preprocessOtherContractSheets_() { return OtherApp.preprocessOtherContractSheets_.apply(null, arguments); }
 function other_preprocessSalaryTablesByPeriod_() { return OtherApp.preprocessSalaryTablesByPeriod_.apply(null, arguments); }
 function other_preprocessWashingSalaryTable_() { return OtherApp.preprocessWashingSalaryTable_.apply(null, arguments); }
+function other_replacePdfFileContent_() { return OtherApp.replacePdfFileContent_.apply(null, arguments); }
 function other_runAllPreprocess() { return OtherApp.runAllPreprocess.apply(null, arguments); }
 function other_runAllPreprocessCore_() { return OtherApp.runAllPreprocessCore_.apply(null, arguments); }
 function other_runAllSettlement() { return OtherApp.runAllSettlement.apply(null, arguments); }

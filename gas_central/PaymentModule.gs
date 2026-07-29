@@ -520,9 +520,14 @@ function checkAndRunSchedule_(isHourlyCheck) {
     if (!settings) return;
 
     const now = new Date();
-    const today = now.getDate();
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
+    const taipeiNow = Utilities.formatDate(
+      now, "Asia/Taipei", "yyyy,MM,dd,HH,mm"
+    ).split(",").map(Number);
+    const year = taipeiNow[0];
+    const month = String(taipeiNow[1]).padStart(2, "0");
+    const today = taipeiNow[2];
+    const currentHour = taipeiNow[3];
+    const currentMinute = taipeiNow[4];
     const [scheduledHour, scheduledMinute] = settings.time.split(":").map(Number);
 
     if (!settings.date.includes(today)) {
@@ -537,16 +542,18 @@ function checkAndRunSchedule_(isHourlyCheck) {
       return;
     }
 
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, "0");
     const half = today <= 15 ? "1" : "2";
     const period = `${year}${month}-${half}`;
 
     const executedKey = `SCHEDULE_EXECUTED_${period}`;
     const executedAt = scriptProperties.getProperty(executedKey);
     if (executedAt) {
-      const executedDate = new Date(parseInt(executedAt, 10));
-      if (executedDate.getDate() === today) return;
+      const executedDay = Number(
+        Utilities.formatDate(
+          new Date(parseInt(executedAt, 10)), "Asia/Taipei", "dd"
+        )
+      );
+      if (executedDay === today) return;
     }
 
     enqueueScheduledPeriodCreation_(period, settings.allRegions);

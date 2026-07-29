@@ -19,6 +19,7 @@ import gspread
 
 from modules.auth import get_gspread_client, get_drive_service, get_credentials
 from modules.master_sheet import record_execution, record_batch, get_recorded_values
+from modules.period_utils import format_taipei_time
 
 logger = logging.getLogger(__name__)
 
@@ -359,7 +360,7 @@ def run_other_preprocess(
         time.sleep(0.5)
 
     # 打卡
-    ts    = datetime.datetime.now().strftime(TS_FMT)
+    ts    = format_taipei_time(fmt=TS_FMT)
     batch = []
     for svc in svcs:
         c = results.get(svc, 0)
@@ -545,7 +546,7 @@ def run_other_settlement(
         time.sleep(0.3)
 
     # 打卡
-    ts    = datetime.datetime.now().strftime(TS_FMT)
+    ts    = format_taipei_time(fmt=TS_FMT)
     batch_punch = []
     for svc in svcs:
         batch_punch.append({
@@ -708,7 +709,7 @@ def run_other_pdf(
                     raise ValueError(f"PDF 過小（{len(pdf_bytes)} bytes），可能為空白頁")
 
                 file_name = f"{period} 檸檬家事｜{cfg['file_title']}_{name}.pdf"
-                now_str   = datetime.datetime.now().strftime(TS_FMT)
+                now_str   = format_taipei_time(fmt=TS_FMT)
                 updates   = [
                     {"range": f"D{row}", "values": [[now_str]]},
                     {"range": f"H{row}", "values": [[""]]},

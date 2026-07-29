@@ -685,7 +685,7 @@ function runCommonProcess(sheetName) {
 class AttendanceModule {
   constructor(config = {}) {
     this.config = {
-      TIMEZONE: config.TIMEZONE || "GMT+8",
+      TIMEZONE: config.TIMEZONE || "Asia/Taipei",
       DATE_FORMAT: config.DATE_FORMAT || "yyyy/MM/dd HH:mm",
       PROCESS_DELAY: config.PROCESS_DELAY || 1000,
       ...config
@@ -1094,7 +1094,7 @@ function exampleUsage() {
   try {
     // 1. 初始化打卡模組
     const attendance = new AttendanceModule({
-      TIMEZONE: "GMT+8",
+      TIMEZONE: "Asia/Taipei",
       DATE_FORMAT: "yyyy/MM/dd HH:mm",
       PROCESS_DELAY: 1000
     });
@@ -1130,7 +1130,7 @@ function exampleUsage() {
 class UnifiedProcessHandler {
   constructor(config = {}) {
     this.config = {
-      TIMEZONE: config.TIMEZONE || "GMT+8",
+      TIMEZONE: config.TIMEZONE || "Asia/Taipei",
       DATE_FORMAT: config.DATE_FORMAT || "yyyy/MM/dd HH:mm",
       PROCESS_DELAY: config.PROCESS_DELAY || 2000,
       IMPORT_DELAY: config.IMPORT_DELAY || 3000,
@@ -4307,7 +4307,7 @@ function processVoucherBonusDistribution(sheets, isFirstHalf, handler) {
         const r = gForCalculation ? Math.round(h / gForCalculation) : "";
         
         // 計算S欄（日期格式化）
-        const s = c && e ? Utilities.formatDate(new Date(c), handler.config.TIMEZONE || "GMT+8", "MM/dd") + e : "";
+        const s = c && e ? Utilities.formatDate(new Date(c), handler.config.TIMEZONE || "Asia/Taipei", "MM/dd") + e : "";
 
         // 根據實際人數生成記錄
         for (let i = 0; i < actualPersonCount; i++) {
@@ -7801,7 +7801,7 @@ function runToolDepositProcess(isFirstHalf) {
     
     // 建立 handler 以支援進度更新
     const handler = {
-      config: { TIMEZONE: Session.getScriptTimeZone() },
+      config: { TIMEZONE: "Asia/Taipei" },
       updateProgress: function(msg) { 
         Logger.log(msg);
         if (typeof updateSidebarProgress === "function") {
@@ -8026,7 +8026,7 @@ function executeFullToolDepositProcess(sheets, isFirstHalf, handler) {
     // 打卡記錄
     const now = new Date();
     exec.getRange("B2").setValue("🔧 工具包押金（下半月）");
-    exec.getRange("C2").setValue(Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss"));
+    exec.getRange("C2").setValue(Utilities.formatDate(now, "Asia/Taipei", "yyyy/MM/dd HH:mm:ss"));
     exec.getRange("D2").setValue(`區域：${region} | 押金名單：${names.length} | 介紹獎金：${introRows.length}`);
 
     progress("✅ 完成：下半月工具包押金處理");
@@ -8321,7 +8321,7 @@ function promptUserForPeriod(isFirstHalf) {
  */
 function getDefaultPeriod(isFirstHalf) {
   const currentDate = new Date();
-  const basePrefix = Utilities.formatDate(currentDate, "GMT+8", "yyyyMM");
+  const basePrefix = Utilities.formatDate(currentDate, "Asia/Taipei", "yyyyMM");
   const halfMark = isFirstHalf ? "-1" : "-2";
   const defaultPeriod = basePrefix + halfMark;
   
@@ -8550,7 +8550,7 @@ function processFirstHalfYuanta(summarySheet, yuantaAccountSheet, yuantaAccountS
   
   // 計算當月10日（週六日提前到週五）
   const targetDate = getTargetDateFor10th(new Date());
-  handler.updateProgress(`計算目標日期：${Utilities.formatDate(targetDate, "GMT+8", "yyyy/MM/dd")}`);
+  handler.updateProgress(`計算目標日期：${Utilities.formatDate(targetDate, "Asia/Taipei", "yyyy/MM/dd")}`);
   
   // 定位到場次時數薪資總表N4
   summarySheet.activate();
@@ -11017,10 +11017,10 @@ function showSystemSettings() {
 📅 期別資訊：${display || '未設定'}
 📁 檔案名稱：${ss.getName()}
 🔢 工作表數量：${ss.getSheets().length}
-⏰ 最後修改：${Utilities.formatDate(new Date(ss.getLastUpdated()), 'GMT+8', 'yyyy/MM/dd HH:mm')}
+⏰ 最後修改：${Utilities.formatDate(new Date(ss.getLastUpdated()), 'Asia/Taipei', 'yyyy/MM/dd HH:mm')}
 
 ⚙️ 系統配置：
-🕐 時區：${CONFIG.TIMEZONE || 'GMT+8'}
+🕐 時區：${CONFIG.TIMEZONE || 'Asia/Taipei'}
 ⏱️ 處理延遲：${CONFIG.PROCESS_DELAY || 2000}ms
 📧 郵件延遲：${CONFIG.EMAIL_DELAY || 2000}ms
 📄 PDF延遲：${CONFIG.PDF_DELAY || 1000}ms
@@ -11207,6 +11207,7 @@ function debugUpDown() {
   }
 }
 
+
   return {
     addProgress: addProgress,
     adjustPdfNoteRowHeight_: adjustPdfNoteRowHeight_,
@@ -11377,6 +11378,7 @@ function debugUpDown() {
     repairPdfLinks: repairPdfLinks,
     repairPdfLinksByConfig_: repairPdfLinksByConfig_,
     repairProjectPdfLinks: repairProjectPdfLinks,
+    replacePdfFileContent_: replacePdfFileContent_,
     restoreHeaderFormat: restoreHeaderFormat,
     resumeExecution: resumeExecution,
     runAdjustmentFirst: runAdjustmentFirst,
@@ -11656,6 +11658,7 @@ function cleaning_repairCleaningPdfLinks() { return CleaningApp.repairCleaningPd
 function cleaning_repairPdfLinks() { return CleaningApp.repairPdfLinks.apply(null, arguments); }
 function cleaning_repairPdfLinksByConfig_() { return CleaningApp.repairPdfLinksByConfig_.apply(null, arguments); }
 function cleaning_repairProjectPdfLinks() { return CleaningApp.repairProjectPdfLinks.apply(null, arguments); }
+function cleaning_replacePdfFileContent_() { return CleaningApp.replacePdfFileContent_.apply(null, arguments); }
 function cleaning_restoreHeaderFormat() { return CleaningApp.restoreHeaderFormat.apply(null, arguments); }
 function cleaning_resumeExecution() { return CleaningApp.resumeExecution.apply(null, arguments); }
 function cleaning_runAdjustmentFirst() { return CleaningApp.runAdjustmentFirst.apply(null, arguments); }
