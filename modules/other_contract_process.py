@@ -621,11 +621,6 @@ def run_other_pdf(
     gas_result = generate_pdf(other_file_id, region, period, "OTHER")
     if gas_result.get("success"):
         log("✅ 中控 GAS 已完成其他承攬 PDF 並存入期別資料夾")
-        from modules.service_fee_mail import sync_service_fee_mail
-        sync_service_fee_mail(
-            root_folder_id=root_folder_id, period=period, region=region,
-            other_file_id=other_file_id, log=log,
-        )
         return {
             "pdfs": {}, "uploaded": {}, "failed": [],
             "success_count": 0, "gas_result": gas_result.get("result"),

@@ -500,6 +500,9 @@ FUNCTION_MAP = {
         "執行全部結算",
         "產出全部薪資單",
     ],
+    "✉️ 承攬 mail": [
+        "同步承攬服務費 mail",
+    ],
 }
 
 
@@ -522,7 +525,7 @@ with c2:
     st.markdown('<div class="field-label">🗂️ 執行系統</div>', unsafe_allow_html=True)
     system = st.selectbox(
         "系統",
-        ["💰 金流對帳", "🧹 清潔承攬", "📦 其他承攬"],
+        ["💰 金流對帳", "🧹 清潔承攬", "📦 其他承攬", "✉️ 承攬 mail"],
         label_visibility="collapsed", key="system"
     )
 
@@ -535,6 +538,7 @@ ENGINE_KEYS = {
     "💰 金流對帳": "engine_payment",
     "🧹 清潔承攬": "engine_cleaning",
     "📦 其他承攬": "engine_other",
+    "✉️ 承攬 mail": "engine_mail",
 }
 engine_key = ENGINE_KEYS[system]
 saved_engine = str(config.get("schedule", {}).get(engine_key, "PYTHON")).upper()
@@ -645,10 +649,12 @@ if run_clicked and execution_engine == "GAS":
             from modules.cleaning_process_1 import find_cleaning_file
             target_id = find_cleaning_file(root_id, period, selected_name)
             app_name = "cleaning"
-        else:
+        elif system == "📦 其他承攬":
             from modules.other_contract_process import _find_other_file
             target_id = _find_other_file(root_id, period, selected_name)
             app_name = "other"
+        else:
+            raise RuntimeError("承攬 mail 請使用 PYTHON 執行引擎")
 
         query = urlencode({
             "app": app_name,
@@ -1017,7 +1023,7 @@ if run_clicked and execution_engine == "PYTHON":
                 # ───────────────────────────────────────────────
                 # █ 區塊8-C：其他承攬執行邏輯
                 # ───────────────────────────────────────────────
-                else:
+                elif _system == "📦 其他承攬":
                     from modules.other_contract_process import (
                         run_other_preprocess,
                         run_other_settlement,
@@ -1060,6 +1066,18 @@ if run_clicked and execution_engine == "PYTHON":
                         )
                     else:
                         add_log(f"{_func} 尚未實作", "warning")
+
+                elif _system == "✉️ 承攬 mail":
+                    from modules.service_fee_mail import sync_service_fee_mail
+                    count = sync_service_fee_mail(
+                        root_folder_id=root_id,
+                        period=_period,
+                        region=_name,
+                        mail_id=str(_region.get("mail_id", "") or ""),
+                        roster_id=str(_region.get("roster_id", "") or ""),
+                        log=lambda msg: add_log(msg, "success"),
+                    )
+                    add_log(f"承攬服務費 mail 完成：{count} 筆", "success")
 
             except Exception as e:
                 import traceback

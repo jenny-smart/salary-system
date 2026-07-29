@@ -109,7 +109,12 @@ CLEANING_TASKS = [
     "元大帳戶",
 ]
 
-ALL_TASKS = PAYMENT_TASKS + ["__BLANK__"] + CLEANING_TASKS
+MAIL_TASKS = [
+    "__TITLE__:承攬mail系統",
+    "承攬mail",
+]
+
+ALL_TASKS = PAYMENT_TASKS + ["__BLANK__"] + CLEANING_TASKS + ["__BLANK__"] + MAIL_TASKS
 
 
 def _display_name(task: str) -> str:
@@ -230,6 +235,10 @@ def record_execution(
         ss    = open_spreadsheet(MASTER_SHEET_ID)
         sheet = ss.worksheet(region_name)
         row   = _find_row(sheet, task_key)
+        if row is None and task_key == "承攬mail":
+            next_row = max(sheet.row_count and len(sheet.col_values(1)) + 2, 3)
+            sheet.update(f"A{next_row}:A{next_row + 1}", [["承攬mail系統"], [task_key]])
+            row = next_row + 1
         if row is None:
             import streamlit as st
             st.warning(f"⚠️ 打卡找不到作業：{task_key}")
