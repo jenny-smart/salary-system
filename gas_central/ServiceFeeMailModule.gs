@@ -6,15 +6,17 @@ function mail_syncServiceFeeMail() {
 
   var cleaningId = mail_findPeriodFile_(cfg.root_folder_id, period, "清潔承攬", region);
   var otherId = mail_findPeriodFile_(cfg.root_folder_id, period, "其他承攬", region);
-  var rows = [];
+  var cleaningRows = [];
+  var otherRows = [];
   if (cleaningId) {
     var cleaning = SpreadsheetApp.openById(cleaningId);
-    rows = rows.concat(mail_readPdfPairs_(cleaning, "PDF產出"));
-    rows = rows.concat(mail_readPdfPairs_(cleaning, "專案PDF產出"));
+    cleaningRows = cleaningRows.concat(mail_readPdfPairs_(cleaning, "PDF產出"));
+    cleaningRows = cleaningRows.concat(mail_readPdfPairs_(cleaning, "專案PDF產出"));
   }
   if (otherId) {
-    rows = rows.concat(mail_readPdfPairs_(SpreadsheetApp.openById(otherId), "PDF產出"));
+    otherRows = mail_readPdfPairs_(SpreadsheetApp.openById(otherId), "PDF產出");
   }
+  var rows = cleaningRows.concat(otherRows);
 
   var mailBook = SpreadsheetApp.openById(cfg.mail_id);
   var periodSheet = mail_getOrCreateSheet_(mailBook, period);
@@ -31,8 +33,49 @@ function mail_syncServiceFeeMail() {
   if (/-2$/.test(period) && cleaningId) {
     mail_syncDeposit_(mailBook, SpreadsheetApp.openById(cleaningId), period, region);
   }
-  CentralMaster.recordExecution("承攬mail", rows.length, period);
+  mail_recordMasterExecution_("清潔承攬mail", cleaningRows.length, period);
+  mail_recordMasterExecution_("其他承攬mail", otherRows.length, period);
+  if (cleaningId) {
+    mail_recordPeriodExecution_(SpreadsheetApp.openById(cleaningId), "清潔承攬mail", cleaningRows.length, period);
+  }
+  if (otherId) {
+    mail_recordPeriodExecution_(SpreadsheetApp.openById(otherId), "其他承攬mail", otherRows.length, period);
+  }
   return { success: true, count: rows.length, message: "承攬服務費 mail 已同步 " + rows.length + " 筆" };
+}
+
+function mail_recordMasterExecution_(label, count, period) {
+  try {
+    CentralMaster.recordExecution(label, count, period);
+  } catch (error) {
+    if (String(error && error.message || error).indexOf("找不到打卡項目") < 0) throw error;
+    var sheet = CentralMaster.getSpreadsheet().getSheetByName(CentralContext.getRegion());
+    if (!sheet) throw error;
+    sheet.getRange(sheet.getLastRow() + 1, 1).setValue(label);
+    CentralMaster.recordExecution(label, count, period);
+  }
+}
+
+function mail_recordPeriodExecution_(book, label, count, period) {
+  var sheet = book.getSheetByName("執行") || book.insertSheet("執行");
+  var lastRow = Math.max(sheet.getLastRow(), 1);
+  var labels = sheet.getRange(1, 1, lastRow, 1).getDisplayValues();
+  var row = 0;
+  for (var i = 0; i < labels.length; i++) {
+    if (String(labels[i][0] || "").trim() === label) {
+      row = i + 1;
+      break;
+    }
+  }
+  if (!row) {
+    row = lastRow + 1;
+    sheet.getRange(row, 1).setValue(label);
+  }
+  sheet.getRange(row, 2).setValue(count);
+  var timeColumn = /-1$/.test(period) ? 3 : 4;
+  sheet.getRange(row, timeColumn)
+    .setValue(new Date())
+    .setNumberFormat("yyyy/MM/dd HH:mm:ss");
 }
 
 function mail_findPeriodFile_(rootId, period, label, region) {
