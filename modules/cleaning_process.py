@@ -36,6 +36,7 @@ import gspread
 from gspread.utils import rowcol_to_a1
 
 from modules.auth import get_gspread_client
+from modules.period_utils import format_taipei_time
 from modules.master_sheet import record_execution
 
 
@@ -121,7 +122,7 @@ def find_cleaning_file(root_folder_id: str, period: str, region: str) -> str:
 # ──────────────────────────────────────────────────────────────
 
 def _now_ts() -> str:
-    return datetime.now().strftime(TS_FMT)
+    return format_taipei_time(fmt=TS_FMT)
 
 
 def _col_letter(n: int) -> str:

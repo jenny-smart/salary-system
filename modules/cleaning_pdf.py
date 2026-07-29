@@ -32,6 +32,7 @@ import gspread
 import requests
 
 from modules.auth import get_gspread_client, get_drive_service
+from modules.period_utils import format_taipei_time
 import streamlit as st
 
 
@@ -201,7 +202,7 @@ def run_pdf(
 
                 file_title = f"{period} 檸檬家事｜{label}_{name}.pdf"
 
-                now_str = datetime.datetime.now().strftime(TS_FMT)
+                now_str = format_taipei_time(fmt=TS_FMT)
                 updates = [
                     {"range": f"D{target['row']}", "values": [[now_str]]},
                     {"range": f"H{target['row']}", "values": [[""]]},

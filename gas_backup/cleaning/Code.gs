@@ -683,7 +683,7 @@ function runCommonProcess(sheetName) {
 class AttendanceModule {
   constructor(config = {}) {
     this.config = {
-      TIMEZONE: config.TIMEZONE || "GMT+8",
+      TIMEZONE: config.TIMEZONE || "Asia/Taipei",
       DATE_FORMAT: config.DATE_FORMAT || "yyyy/MM/dd HH:mm",
       PROCESS_DELAY: config.PROCESS_DELAY || 1000,
       ...config
@@ -1094,7 +1094,7 @@ function exampleUsage() {
   try {
     // 1. 初始化打卡模組
     const attendance = new AttendanceModule({
-      TIMEZONE: "GMT+8",
+      TIMEZONE: "Asia/Taipei",
       DATE_FORMAT: "yyyy/MM/dd HH:mm",
       PROCESS_DELAY: 1000
     });
@@ -1130,7 +1130,7 @@ function exampleUsage() {
 class UnifiedProcessHandler {
   constructor(config = {}) {
     this.config = {
-      TIMEZONE: config.TIMEZONE || "GMT+8",
+      TIMEZONE: config.TIMEZONE || "Asia/Taipei",
       DATE_FORMAT: config.DATE_FORMAT || "yyyy/MM/dd HH:mm",
       PROCESS_DELAY: config.PROCESS_DELAY || 2000,
       IMPORT_DELAY: config.IMPORT_DELAY || 3000,
@@ -4307,7 +4307,7 @@ function processVoucherBonusDistribution(sheets, isFirstHalf, handler) {
         const r = gForCalculation ? Math.round(h / gForCalculation) : "";
         
         // 計算S欄（日期格式化）
-        const s = c && e ? Utilities.formatDate(new Date(c), handler.config.TIMEZONE || "GMT+8", "MM/dd") + e : "";
+        const s = c && e ? Utilities.formatDate(new Date(c), handler.config.TIMEZONE || "Asia/Taipei", "MM/dd") + e : "";
 
         // 根據實際人數生成記錄
         for (let i = 0; i < actualPersonCount; i++) {
@@ -7801,7 +7801,7 @@ function runToolDepositProcess(isFirstHalf) {
     
     // 建立 handler 以支援進度更新
     const handler = {
-      config: { TIMEZONE: Session.getScriptTimeZone() },
+      config: { TIMEZONE: "Asia/Taipei" },
       updateProgress: function(msg) { 
         Logger.log(msg);
         if (typeof updateSidebarProgress === "function") {
@@ -8026,7 +8026,7 @@ function executeFullToolDepositProcess(sheets, isFirstHalf, handler) {
     // 打卡記錄
     const now = new Date();
     exec.getRange("B2").setValue("🔧 工具包押金（下半月）");
-    exec.getRange("C2").setValue(Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss"));
+    exec.getRange("C2").setValue(Utilities.formatDate(now, "Asia/Taipei", "yyyy/MM/dd HH:mm:ss"));
     exec.getRange("D2").setValue(`區域：${region} | 押金名單：${names.length} | 介紹獎金：${introRows.length}`);
 
     progress("✅ 完成：下半月工具包押金處理");
@@ -8321,7 +8321,7 @@ function promptUserForPeriod(isFirstHalf) {
  */
 function getDefaultPeriod(isFirstHalf) {
   const currentDate = new Date();
-  const basePrefix = Utilities.formatDate(currentDate, "GMT+8", "yyyyMM");
+  const basePrefix = Utilities.formatDate(currentDate, "Asia/Taipei", "yyyyMM");
   const halfMark = isFirstHalf ? "-1" : "-2";
   const defaultPeriod = basePrefix + halfMark;
   
@@ -8443,6 +8443,14 @@ function executeCompleteYuantaProcess(sheets, isFirstHalf, handler) {
   }
   
   const yuantaAccountSheet = yuantaAccountSpreadsheet.getSheets()[0];
+  // H2 固定記錄執行期別的 YYYYMM，不依目前日期寫死。
+  let centralPeriod = "";
+  try {
+    centralPeriod = CentralContext.getPeriod();
+  } catch (ignore) {
+    centralPeriod = getPeriodPrefix(isFirstHalf);
+  }
+  yuantaAccountSheet.getRange("H2").setValue(String(centralPeriod).slice(0, 6));
   
   // 步驟2：設定表頭
   handler.updateProgress("設定元大帳戶表頭...");
@@ -8542,7 +8550,7 @@ function processFirstHalfYuanta(summarySheet, yuantaAccountSheet, yuantaAccountS
   
   // 計算當月10日（週六日提前到週五）
   const targetDate = getTargetDateFor10th(new Date());
-  handler.updateProgress(`計算目標日期：${Utilities.formatDate(targetDate, "GMT+8", "yyyy/MM/dd")}`);
+  handler.updateProgress(`計算目標日期：${Utilities.formatDate(targetDate, "Asia/Taipei", "yyyy/MM/dd")}`);
   
   // 定位到場次時數薪資總表N4
   summarySheet.activate();
@@ -9721,11 +9729,14 @@ function getPdfStorageFolderBySpreadsheet_(ss, periodCode) {
     var rootFolder = parents.next();
     var folders = rootFolder.getFoldersByName(periodCode);
 
-    if (folders.hasNext()) {
-      return folders.next();
-    }
-
-    return rootFolder.createFolder(periodCode);
+    var finalFolder = folders.hasNext()
+      ? folders.next()
+      : rootFolder.createFolder(periodCode);
+    finalFolder.setSharing(
+      DriveApp.Access.ANYONE_WITH_LINK,
+      DriveApp.Permission.VIEW
+    );
+    return finalFolder;
   } catch (error) {
     throw new Error("建立PDF資料夾失敗：" + error.message);
   }
@@ -10276,16 +10287,13 @@ function savePreservingFileLinkEnhanced(pdfFolder, fileName, pdfBlob, existingFi
       var existingFile = DriveApp.getFileById(existingFileId);
       existingFile.setName(fileName);
 
-      Drive.Files.update(
-        { title: fileName },
-        existingFileId,
-        pdfBlob
-      );
+      replacePdfFileContent_(existingFileId, pdfBlob);
 
       existingFile = DriveApp.getFileById(existingFileId);
-      try {
-        existingFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      } catch (permError1) {}
+      existingFile.setSharing(
+        DriveApp.Access.ANYONE_WITH_LINK,
+        DriveApp.Permission.VIEW
+      );
 
       return {
         success: true,
@@ -10301,16 +10309,13 @@ function savePreservingFileLinkEnhanced(pdfFolder, fileName, pdfBlob, existingFi
       var sameNameFile = existingFiles.next();
       var sameNameFileId = sameNameFile.getId();
 
-      Drive.Files.update(
-        { title: fileName },
-        sameNameFileId,
-        pdfBlob
-      );
+      replacePdfFileContent_(sameNameFileId, pdfBlob);
 
       sameNameFile = DriveApp.getFileById(sameNameFileId);
-      try {
-        sameNameFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      } catch (permError2) {}
+      sameNameFile.setSharing(
+        DriveApp.Access.ANYONE_WITH_LINK,
+        DriveApp.Permission.VIEW
+      );
 
       return {
         success: true,
@@ -10324,9 +10329,10 @@ function savePreservingFileLinkEnhanced(pdfFolder, fileName, pdfBlob, existingFi
     var file = pdfFolder.createFile(pdfBlob);
     file.setName(fileName);
 
-    try {
-      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    } catch (permError3) {}
+    file.setSharing(
+      DriveApp.Access.ANYONE_WITH_LINK,
+      DriveApp.Permission.VIEW
+    );
 
     return {
       success: true,
@@ -10337,6 +10343,26 @@ function savePreservingFileLinkEnhanced(pdfFolder, fileName, pdfBlob, existingFi
 
   } catch (error) {
     throw new Error("PDF儲存失敗: " + error.message);
+  }
+}
+
+function replacePdfFileContent_(fileId, pdfBlob) {
+  var response = UrlFetchApp.fetch(
+    "https://www.googleapis.com/upload/drive/v3/files/" +
+      encodeURIComponent(fileId) + "?uploadType=media",
+    {
+      method: "patch",
+      headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+      contentType: "application/pdf",
+      payload: pdfBlob.getBytes(),
+      muteHttpExceptions: true
+    }
+  );
+  if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) {
+    throw new Error(
+      "更新既有 PDF 失敗，HTTP " + response.getResponseCode() +
+      "：" + response.getContentText().slice(0, 300)
+    );
   }
 }
 
@@ -10991,10 +11017,10 @@ function showSystemSettings() {
 📅 期別資訊：${display || '未設定'}
 📁 檔案名稱：${ss.getName()}
 🔢 工作表數量：${ss.getSheets().length}
-⏰ 最後修改：${Utilities.formatDate(new Date(ss.getLastUpdated()), 'GMT+8', 'yyyy/MM/dd HH:mm')}
+⏰ 最後修改：${Utilities.formatDate(new Date(ss.getLastUpdated()), 'Asia/Taipei', 'yyyy/MM/dd HH:mm')}
 
 ⚙️ 系統配置：
-🕐 時區：${CONFIG.TIMEZONE || 'GMT+8'}
+🕐 時區：${CONFIG.TIMEZONE || 'Asia/Taipei'}
 ⏱️ 處理延遲：${CONFIG.PROCESS_DELAY || 2000}ms
 📧 郵件延遲：${CONFIG.EMAIL_DELAY || 2000}ms
 📄 PDF延遲：${CONFIG.PDF_DELAY || 1000}ms

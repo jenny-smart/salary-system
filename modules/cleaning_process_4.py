@@ -57,6 +57,7 @@ import gspread
 
 from modules.auth import get_gspread_client
 from modules.master_sheet import record_execution
+from modules.period_utils import format_taipei_time, get_current_taipei_time
 
 
 # ──────────────────────────────────────────────────────────────
@@ -79,7 +80,7 @@ AB_COL = 28                    # AB 欄（1-based）
 # ──────────────────────────────────────────────────────────────
 
 def _now_ts() -> str:
-    return datetime.datetime.now().strftime(TS_FMT)
+    return format_taipei_time(fmt=TS_FMT)
 
 
 def _log(log: List[str], msg: str) -> None:
@@ -105,7 +106,7 @@ def _target_date(is_first_half: bool) -> datetime.date:
     上半月：當月10日；下半月：當月20日。
     若落在週六提前到週五，週日提前到週五。
     """
-    today = datetime.date.today()
+    today = get_current_taipei_time().date()
     day   = 10 if is_first_half else 20
     d     = today.replace(day=day)
     if d.weekday() == 5:      # 週六

@@ -1,6 +1,11 @@
 # 中央 GAS Web App
 
 此目錄由 `scripts/build_central_gas.py` 將三套既有 GAS 隔離為單一 Web App。
+此專案就是綁定在 `LemonSalarySystem` 主控試算表的 GAS；「中央 GAS」
+與「主控檔 GAS」是同一個專案，不需要再把 PDF 程式留在每個期別執行檔。
+
+所有日期、排程及打卡均使用 `Asia/Taipei`。若以手動方式貼上程式，請一併
+更新 `appsscript.json`，或在 Apps Script「專案設定」將時區設為台北。
 
 ## 部署
 
