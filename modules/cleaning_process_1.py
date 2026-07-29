@@ -405,7 +405,7 @@ def run_preparation(
 
         # ── 打卡 ─────────────────────────────────────────────
         ts = _now_ts()
-        record_execution(region, period, "前置作業", ts)
+        record_execution(region, period, "前置作業", None)
         _log(log, f"✅ 前置作業 {label} 完成｜{ts}")
         return True
 

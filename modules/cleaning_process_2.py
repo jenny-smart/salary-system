@@ -147,7 +147,7 @@ def _punch(
 ) -> str:
     """打卡至主控試算表。"""
     ts = _now_ts()
-    record_execution(region, period, task_key, ts if value is None else value)
+    record_execution(region, period, task_key, value)
     return ts
 
 

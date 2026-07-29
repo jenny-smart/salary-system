@@ -90,7 +90,7 @@ def _log(log: List[str], msg: str) -> None:
 def _punch(task_key: str, region: str, period: str) -> str:
     """打卡至主控試算表。"""
     ts = _now_ts()
-    record_execution(region, period, task_key, ts)
+    record_execution(region, period, task_key, None)
     return ts
 
 

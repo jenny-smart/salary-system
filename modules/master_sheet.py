@@ -111,7 +111,8 @@ CLEANING_TASKS = [
 
 MAIL_TASKS = [
     "__TITLE__:承攬mail系統",
-    "承攬mail",
+    "清潔承攬mail",
+    "其他承攬mail",
 ]
 
 ALL_TASKS = PAYMENT_TASKS + ["__BLANK__"] + CLEANING_TASKS + ["__BLANK__"] + MAIL_TASKS
@@ -181,6 +182,14 @@ def _get_all_a_col(sheet) -> list:
     return [v.strip() if v else "" for v in sheet.col_values(1)]
 
 
+def _find_period_col(sheet, period: str) -> int:
+    """依第 1 列期別名稱找 ID/筆數欄，不依固定欄號。"""
+    for col, value in enumerate(sheet.row_values(1), start=1):
+        if str(value).strip() == period.strip():
+            return col
+    raise ValueError(f"找不到期別欄位：{period}")
+
+
 # ═══════════════════════════════════════
 # 初始化 / 更新地區工作表
 # ═══════════════════════════════════════
@@ -235,7 +244,7 @@ def record_execution(
         ss    = open_spreadsheet(MASTER_SHEET_ID)
         sheet = ss.worksheet(region_name)
         row   = _find_row(sheet, task_key)
-        if row is None and task_key == "承攬mail":
+        if row is None and task_key in ("清潔承攬mail", "其他承攬mail"):
             next_row = max(sheet.row_count and len(sheet.col_values(1)) + 2, 3)
             sheet.update(f"A{next_row}:A{next_row + 1}", [["承攬mail系統"], [task_key]])
             row = next_row + 1
@@ -244,7 +253,7 @@ def record_execution(
             st.warning(f"⚠️ 打卡找不到作業：{task_key}")
             return False
 
-        col       = period_to_col(period)
+        col       = _find_period_col(sheet, period)
         count_col = col_to_letter(col)
         time_col  = col_to_letter(col + 1)
         time_str  = datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %H:%M:%S")
@@ -280,6 +289,7 @@ def record_batch(region_name: str, period: str, records: list) -> None:
                     return i + 1
             return None
 
+        col       = _find_period_col(sheet, period)
         updates   = []
         not_found = []
         for record in records:
@@ -289,7 +299,6 @@ def record_batch(region_name: str, period: str, records: list) -> None:
             if row is None:
                 not_found.append(task_key)
                 continue
-            col       = period_to_col(period)
             count_col = col_to_letter(col)
             time_col  = col_to_letter(col + 1)
             if count is not None:
@@ -316,7 +325,7 @@ def get_recorded_value(region_name: str, period: str, task_key: str):
     row   = _find_row(sheet, task_key)
     if row is None:
         return None
-    col       = period_to_col(period)
+    col       = _find_period_col(sheet, period)
     count_col = col_to_letter(col)
     val       = sheet.acell(f"{count_col}{row}").value
     return val if val else None
@@ -326,7 +335,7 @@ def get_recorded_values(region_name: str, period: str, task_keys: list[str]) -> 
     """一次讀取多個打卡值，避免逐項呼叫造成 Sheets API 429。"""
     ss = open_spreadsheet(MASTER_SHEET_ID)
     sheet = ss.worksheet(region_name)
-    count_col = col_to_letter(period_to_col(period))
+    count_col = col_to_letter(_find_period_col(sheet, period))
     a_values, count_values = sheet.batch_get(["A:A", f"{count_col}:{count_col}"])
     names = [str(row[0]).strip() if row else "" for row in a_values]
     values = [row[0] if row else None for row in count_values]
