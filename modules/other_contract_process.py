@@ -617,6 +617,16 @@ def run_other_pdf(
         log(f"❌ {e}")
         return {"pdfs": {}, "failed": [], "success_count": 0}
 
+    from modules.gas_pdf_client import generate_pdf
+    gas_result = generate_pdf(other_file_id, region, period, "OTHER")
+    if gas_result.get("success"):
+        log("✅ 中控 GAS 已完成其他承攬 PDF 並存入期別資料夾")
+        return {
+            "pdfs": {}, "uploaded": {}, "failed": [],
+            "success_count": 0, "gas_result": gas_result.get("result"),
+        }
+    log(f"⚠️ 中控 GAS 未完成，改用 Python：{gas_result.get('message', '')}")
+
     gc    = get_gspread_client()
     other = gc.open_by_key(other_file_id)
 

@@ -86,6 +86,15 @@ def run_pdf(
     result = {"pdfs": {}, "uploaded": {}, "failed": [], "success_count": 0}
 
     try:
+        # 優先交由中控 GAS 以部署者 Drive 權限存入 期別/期別。
+        from modules.gas_pdf_client import generate_pdf
+        gas_result = generate_pdf(cleaning_file_id, region, period, job_type)
+        if gas_result.get("success"):
+            _log(log, "✅ 中控 GAS 已完成 PDF 產出並存入期別資料夾")
+            result["gas_result"] = gas_result.get("result")
+            return result
+        _log(log, f"⚠️ 中控 GAS 未完成，改用 Python：{gas_result.get('message', '')}")
+
         gc = get_gspread_client()
         ss = gc.open_by_key(cleaning_file_id)
 
