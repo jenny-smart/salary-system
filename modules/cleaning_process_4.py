@@ -147,9 +147,9 @@ def run_tool_deposit(
         ss = gc.open_by_key(cleaning_file_id)
 
         ws_summary = ss.worksheet("場次時數薪資總表")
-        ws_intro    = ss.worksheet("介紹獎金")
 
         if is_first_half:
+            ws_intro = ss.worksheet("介紹獎金")
             _tool_clear(ws_summary, ws_intro, log)
             dep_count = 0
         else:
@@ -159,6 +159,7 @@ def run_tool_deposit(
             salary_ss = gc.open_by_key(salary_id)
             ws_deposit = salary_ss.worksheet("工具包押金")
             ws_counts = salary_ss.worksheet("場次和時數")
+            ws_intro = ss.worksheet("介紹獎金")
 
             month = int(period[4:6])
             id_col = 5 + (month - 1) * 3  # 1月E、2月H、3月K...
@@ -167,7 +168,8 @@ def run_tool_deposit(
 
             deposit_amount = DEPOSIT_TAICHUNG if "台中" in region else DEPOSIT_OTHER
             dep_count = _tool_process_v2(
-                ws_deposit, ws_summary, deposit_amount, period, log
+                ws_deposit, ws_summary, ws_intro,
+                deposit_amount, period, log
             )
             _log(log, f"  工具包押金：{dep_count} 筆")
 
@@ -177,19 +179,21 @@ def run_tool_deposit(
         return True
 
     except Exception as e:
-        _log(log, f"❌ 工具包押金失敗：{e}")
+        detail = str(e).strip() or f"{type(e).__name__}: {e!r}"
+        _log(log, f"❌ 工具包押金失敗：{detail}")
         return False
 
 
 def _tool_process_v2(
     ws_deposit: gspread.Worksheet,
     ws_summary: gspread.Worksheet,
+    ws_intro: gspread.Worksheet,
     deposit_amount: int,
     period: str,
     log: List[str],
 ) -> int:
     """依 salary_id 工具包押金表處理下半月押金。"""
-    rows = ws_deposit.get("A2:I") or []
+    rows = ws_deposit.get("A2:J") or []
     year, month = int(period[:4]), int(period[4:6])
     if month == 12:
         due = datetime.date(year + 1, 1, 10)
@@ -199,7 +203,7 @@ def _tool_process_v2(
     selected = []
     updates = []
     for offset, row in enumerate(rows, start=2):
-        row += [""] * (9 - len(row))
+        row += [""] * (10 - len(row))
         name = str(row[0]).strip()
         current_due = str(row[6]).strip().replace("-", "/")
         due_text = due.strftime("%Y/%m/%d")
@@ -224,6 +228,24 @@ def _tool_process_v2(
         ws_deposit.spreadsheet.values_batch_update({
             "valueInputOption": "USER_ENTERED", "data": updates
         })
+
+    # 符合押金資格且 J 欄有介紹人：A=本人、B=介紹人、C=1000。
+    intro_rows = []
+    selected_names = {name for name, _due in selected}
+    for row in rows:
+        row += [""] * (10 - len(row))
+        name = str(row[0]).strip()
+        introducer = str(row[9]).strip()
+        if name in selected_names and introducer:
+            intro_rows.append([name, introducer, INTRO_BONUS])
+    ws_intro.batch_clear(["A2:C"])
+    if intro_rows:
+        ws_intro.update(
+            f"A2:C{len(intro_rows) + 1}",
+            intro_rows,
+            value_input_option="USER_ENTERED",
+        )
+    _log(log, f"  介紹獎金回填 {len(intro_rows)} 筆")
 
     # 清除上次由本功能追加的列，避免重跑重複。
     old_ae = ws_summary.get("AE4:AE120") or []

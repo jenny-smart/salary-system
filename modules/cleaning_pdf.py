@@ -93,7 +93,10 @@ def run_pdf(
             _log(log, "✅ 中控 GAS 已完成 PDF 產出並存入期別資料夾")
             result["gas_result"] = gas_result.get("result")
             return result
-        _log(log, f"⚠️ 中控 GAS 未完成，改用 Python：{gas_result.get('message', '')}")
+        gas_message = gas_result.get("message") or "中央 GAS PDF API 未完成"
+        _log(log, f"❌ {gas_message}")
+        result["failed"].append(f"中控 GAS：{gas_message}")
+        return result
 
         gc = get_gspread_client()
         ss = gc.open_by_key(cleaning_file_id)

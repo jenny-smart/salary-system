@@ -19,7 +19,7 @@ def generate_pdf(spreadsheet_id, region, period, kind) -> dict:
     url = _url()
     if not url:
         return {"success": False, "message": "尚未設定 GAS_SCHEDULER_WEB_APP_URL"}
-    response = requests.post(
+    response = requests.get(
         url,
         params={
             "action": "generatePdf",
@@ -34,11 +34,11 @@ def generate_pdf(spreadsheet_id, region, period, kind) -> dict:
         data = response.json()
     except Exception:
         data = {"success": False, "message": response.text[:500]}
-    if "success" not in data:
+    if "success" not in data or data.get("pdfApiVersion") != "2026-07-29-v2":
         data["success"] = False
         data["message"] = (
             data.get("message")
-            or "中央 GAS 回應不是 PDF API；請更新並重新部署 Web App"
+            or "中央 GAS 仍是舊版；請更新 Router.gs 並重新部署 Web App 新版本"
         )
     if response.status_code >= 400:
         data["success"] = False
