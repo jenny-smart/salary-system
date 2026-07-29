@@ -311,3 +311,19 @@ def get_recorded_value(region_name: str, period: str, task_key: str):
     count_col = col_to_letter(col)
     val       = sheet.acell(f"{count_col}{row}").value
     return val if val else None
+
+
+def get_recorded_values(region_name: str, period: str, task_keys: list[str]) -> dict:
+    """一次讀取多個打卡值，避免逐項呼叫造成 Sheets API 429。"""
+    ss = open_spreadsheet(MASTER_SHEET_ID)
+    sheet = ss.worksheet(region_name)
+    count_col = col_to_letter(period_to_col(period))
+    a_values, count_values = sheet.batch_get(["A:A", f"{count_col}:{count_col}"])
+    names = [str(row[0]).strip() if row else "" for row in a_values]
+    values = [row[0] if row else None for row in count_values]
+    wanted = set(task_keys)
+    return {
+        name: (values[idx] if idx < len(values) else None)
+        for idx, name in enumerate(names)
+        if name in wanted
+    }
