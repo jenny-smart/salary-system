@@ -307,6 +307,30 @@ def record_batch(region_name: str, period: str, records: list) -> None:
         st.warning(f"⚠️ 打卡失敗：{e}")
 
 
+def record_period_execution(spreadsheet_id: str, period: str, task_key: str, count=None) -> bool:
+    """在期別執行檔「執行」工作表打卡：A=作業、B=筆數、C/D=上下半月時間。"""
+    try:
+        ss = open_spreadsheet(spreadsheet_id)
+        sheet = ss.worksheet("執行")
+        names = sheet.col_values(1)
+        row = next((i + 1 for i, value in enumerate(names) if str(value).strip() == task_key), None)
+        if row is None:
+            row = max(len(names) + 1, 2)
+            sheet.update_cell(row, 1, task_key)
+        updates = []
+        if count is not None:
+            updates.append({"range": f"B{row}", "values": [[count]]})
+        time_col = "C" if str(period).endswith("-1") else "D"
+        time_str = datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %H:%M:%S")
+        updates.append({"range": f"{time_col}{row}", "values": [[time_str]]})
+        sheet.batch_update(updates)
+        return True
+    except Exception as e:
+        import streamlit as st
+        st.warning(f"⚠️ 期別執行檔打卡失敗 [{task_key}]：{e}")
+        return False
+
+
 def get_recorded_value(region_name: str, period: str, task_key: str):
     """
     從打卡表讀取某作業的 ID/筆數欄值（供 double check 用）。

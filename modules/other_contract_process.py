@@ -18,7 +18,7 @@ from typing import Callable, List
 import gspread
 
 from modules.auth import get_gspread_client, get_drive_service, get_credentials
-from modules.master_sheet import record_execution, record_batch, get_recorded_values
+from modules.master_sheet import record_execution, record_batch, record_period_execution, get_recorded_values
 from modules.period_utils import format_taipei_time
 
 logger = logging.getLogger(__name__)
@@ -621,10 +621,22 @@ def run_other_pdf(
     from modules.gas_pdf_client import generate_pdf
     gas_result = generate_pdf(other_file_id, region, period, "OTHER")
     if gas_result.get("success"):
+        gas_detail = gas_result.get("result") or {}
+        service_counts = gas_detail.get("serviceCounts") or {}
+        total = int(gas_detail.get("successCount", sum(service_counts.values()) if service_counts else 0) or 0)
+        records = []
+        for svc in svcs:
+            count = int(service_counts.get(svc, 0) or 0)
+            task_key = SERVICE_CONFIG[svc]["pdf_key"]
+            records.append({"task_key": task_key, "count": count})
+            record_period_execution(other_file_id, period, task_key, count)
+        record_batch(region, period, records)
         log("✅ 中控 GAS 已完成其他承攬 PDF 並存入期別資料夾")
+        log(f"✅ PDF產出完成：成功 {total} 份，失敗 0 份")
         return {
             "pdfs": {}, "uploaded": {}, "failed": [],
-            "success_count": 0, "gas_result": gas_result.get("result"),
+            "success_count": total, "service_counts": service_counts,
+            "gas_result": gas_detail,
         }
     log(f"⚠️ 中控 GAS 未完成，改用 Python：{gas_result.get('message', '')}")
 
@@ -638,7 +650,10 @@ def run_other_pdf(
         return {"pdfs": {}, "failed": [], "success_count": 0}
 
     raw    = pdf_ws.get("A2:I", value_render_option="UNFORMATTED_VALUE") or []
-    result = {"pdfs": {}, "uploaded": {}, "failed": [], "success_count": 0}
+    result = {
+        "pdfs": {}, "uploaded": {}, "failed": [], "success_count": 0,
+        "service_counts": {svc: 0 for svc in svcs},
+    }
 
     token                  = _get_access_token()
     oauth_drive, folder_id = _prepare_drive_output(root_folder_id, period, log)
@@ -742,6 +757,7 @@ def run_other_pdf(
                     ],
                 })
                 result["success_count"] += 1
+                result["service_counts"][svc] += 1
 
             except Exception as e:
                 log(f"    ❌ {name} 失敗：{e}")
@@ -751,11 +767,11 @@ def run_other_pdf(
 
     # 打卡
     batch_punch = []
-    if service_type:
-        batch_punch.append({"task_key": SERVICE_CONFIG[service_type]["pdf_key"], "count": None})
-    else:
-        for svc in svcs:
-            batch_punch.append({"task_key": SERVICE_CONFIG[svc]["pdf_key"], "count": None})
+    for svc in svcs:
+        task_key = SERVICE_CONFIG[svc]["pdf_key"]
+        count = result["service_counts"].get(svc, 0)
+        batch_punch.append({"task_key": task_key, "count": count})
+        record_period_execution(other_file_id, period, task_key, count)
     record_batch(region, period, batch_punch)
 
     log(f"\n✅ PDF產出完成：成功 {result['success_count']} 份，失敗 {len(result['failed'])} 份")

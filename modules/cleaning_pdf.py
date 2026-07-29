@@ -85,14 +85,24 @@ def run_pdf(
     _log(log, f"▶ PDF產出 [{label}] {region} {period} 開始")
 
     result = {"pdfs": {}, "uploaded": {}, "failed": [], "success_count": 0}
+    task_key = "清潔專案薪資單" if job_type == "PROJECT" else "清潔薪資單"
 
     try:
         # 優先交由中控 GAS 以部署者 Drive 權限存入 期別/期別。
         from modules.gas_pdf_client import generate_pdf
         gas_result = generate_pdf(cleaning_file_id, region, period, job_type)
         if gas_result.get("success"):
+            gas_detail = gas_result.get("result") or {}
+            success_count = int(gas_detail.get("successCount", 0) or 0)
+            error_count = int(gas_detail.get("errorCount", 0) or 0)
+            result["success_count"] = success_count
+            result["failed"] = ["中央 GAS 產出失敗"] * error_count
             _log(log, "✅ 中控 GAS 已完成 PDF 產出並存入期別資料夾")
-            result["gas_result"] = gas_result.get("result")
+            _log(log, f"✅ PDF產出完成：成功 {success_count} 份，失敗 {error_count} 份")
+            result["gas_result"] = gas_detail
+            from modules.master_sheet import record_execution, record_period_execution
+            record_execution(region, period, task_key, success_count)
+            record_period_execution(cleaning_file_id, period, task_key, success_count)
             return result
         gas_message = gas_result.get("message") or "中央 GAS PDF API 未完成"
         _log(log, f"❌ 中央 GAS PDF 未完成：{gas_message}")
@@ -248,6 +258,9 @@ def run_pdf(
 
         total   = result["success_count"]
         failed  = len(result["failed"])
+        from modules.master_sheet import record_execution, record_period_execution
+        record_execution(region, period, task_key, total)
+        record_period_execution(cleaning_file_id, period, task_key, total)
         _log(log, f"✅ PDF產出完成：成功 {total} 份，失敗 {failed} 份")
         if result["pdfs"]:
             _log(log, f"    請點擊下方下載按鈕儲存 PDF")
