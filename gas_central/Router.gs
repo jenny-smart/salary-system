@@ -157,9 +157,12 @@ function handleCentralPdfRequest_(e) {
         false
       );
     }
+    var completed = !(result && result.success === false);
+    var message = completed ? "" : (result.message || "中央 GAS PDF 產出失敗");
     return ContentService.createTextOutput(JSON.stringify({
-      success: true,
-      result: result
+      success: completed,
+      result: result,
+      message: message
     })).setMimeType(ContentService.MimeType.JSON);
   } catch (error) {
     return ContentService.createTextOutput(JSON.stringify({

@@ -9729,11 +9729,14 @@ function getPdfStorageFolderBySpreadsheet_(ss, periodCode) {
     var rootFolder = parents.next();
     var folders = rootFolder.getFoldersByName(periodCode);
 
-    if (folders.hasNext()) {
-      return folders.next();
-    }
-
-    return rootFolder.createFolder(periodCode);
+    var finalFolder = folders.hasNext()
+      ? folders.next()
+      : rootFolder.createFolder(periodCode);
+    finalFolder.setSharing(
+      DriveApp.Access.ANYONE_WITH_LINK,
+      DriveApp.Permission.VIEW
+    );
+    return finalFolder;
   } catch (error) {
     throw new Error("建立PDF資料夾失敗：" + error.message);
   }
@@ -10284,16 +10287,13 @@ function savePreservingFileLinkEnhanced(pdfFolder, fileName, pdfBlob, existingFi
       var existingFile = DriveApp.getFileById(existingFileId);
       existingFile.setName(fileName);
 
-      Drive.Files.update(
-        { title: fileName },
-        existingFileId,
-        pdfBlob
-      );
+      replacePdfFileContent_(existingFileId, pdfBlob);
 
       existingFile = DriveApp.getFileById(existingFileId);
-      try {
-        existingFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      } catch (permError1) {}
+      existingFile.setSharing(
+        DriveApp.Access.ANYONE_WITH_LINK,
+        DriveApp.Permission.VIEW
+      );
 
       return {
         success: true,
@@ -10309,16 +10309,13 @@ function savePreservingFileLinkEnhanced(pdfFolder, fileName, pdfBlob, existingFi
       var sameNameFile = existingFiles.next();
       var sameNameFileId = sameNameFile.getId();
 
-      Drive.Files.update(
-        { title: fileName },
-        sameNameFileId,
-        pdfBlob
-      );
+      replacePdfFileContent_(sameNameFileId, pdfBlob);
 
       sameNameFile = DriveApp.getFileById(sameNameFileId);
-      try {
-        sameNameFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      } catch (permError2) {}
+      sameNameFile.setSharing(
+        DriveApp.Access.ANYONE_WITH_LINK,
+        DriveApp.Permission.VIEW
+      );
 
       return {
         success: true,
@@ -10332,9 +10329,10 @@ function savePreservingFileLinkEnhanced(pdfFolder, fileName, pdfBlob, existingFi
     var file = pdfFolder.createFile(pdfBlob);
     file.setName(fileName);
 
-    try {
-      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    } catch (permError3) {}
+    file.setSharing(
+      DriveApp.Access.ANYONE_WITH_LINK,
+      DriveApp.Permission.VIEW
+    );
 
     return {
       success: true,
@@ -10345,6 +10343,26 @@ function savePreservingFileLinkEnhanced(pdfFolder, fileName, pdfBlob, existingFi
 
   } catch (error) {
     throw new Error("PDF儲存失敗: " + error.message);
+  }
+}
+
+function replacePdfFileContent_(fileId, pdfBlob) {
+  var response = UrlFetchApp.fetch(
+    "https://www.googleapis.com/upload/drive/v3/files/" +
+      encodeURIComponent(fileId) + "?uploadType=media",
+    {
+      method: "patch",
+      headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+      contentType: "application/pdf",
+      payload: pdfBlob.getBytes(),
+      muteHttpExceptions: true
+    }
+  );
+  if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) {
+    throw new Error(
+      "更新既有 PDF 失敗，HTTP " + response.getResponseCode() +
+      "：" + response.getContentText().slice(0, 300)
+    );
   }
 }
 
