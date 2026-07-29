@@ -16,30 +16,35 @@ regions:
     billing_sheet_id: ""
     salary_sheet_id: "1AvoUGlFCxaKsPOPavgBmqHoyn-_t4c0I82bIth7SvRQ"
     roster_sheet_id: "1hsmwhA36I0BPXQ8d6OYGGn8R_SETQe4vTR_FB5Sp8Uc"
+    mail_id: "1vbtsEF5_WjQGgmBuVNq9t1zhtgGqsKHpabEVQnuYCNY"
 
   台中:
     root_folder_id: "1peMrCBDFJ2-sSKUzuc0X5p0Mc3g0VPrG"
     billing_sheet_id: ""
     salary_sheet_id: "1q4-S4cbSPXklNfE380_e7lrHYMaQ7Y_0ZGmgTeWfGfI"
     roster_sheet_id: "1MKadGGTkIefcbPpEVCEPo0SS_wnqsmZSfqjcdhxg6Gk"
+    mail_id: "1FaPQhwSV5Qws2do5DSCYYRfFJNyIEN82QId4BbB-Dyw"
 
   桃園:
     root_folder_id: "18Patt1SGG_6CWCqSaNgYNoDC4O0p5Vpm"
     billing_sheet_id: "1Icd5lTTJTCLvHh5posD_QJXvYA561lvgVZwecN-H1AQ"
     salary_sheet_id: "1Icd5lTTJTCLvHh5posD_QJXvYA561lvgVZwecN-H1AQ"
     roster_sheet_id: "1Icd5lTTJTCLvHh5posD_QJXvYA561lvgVZwecN-H1AQ"
+    mail_id: "1WTZ_P_WfQq1Vlpe4YYeH6oKoCJhmbaXb7P1AcIhXc6A"
 
   新竹:
     root_folder_id: "1rnCtWrw3AUvn1PCj1NKsLtbM5UrWKuiI"
     billing_sheet_id: "10I4Qvm4S-vsDUxGhFZgWKfBUvLiDHA6UrVICECug8mE"
     salary_sheet_id: "10I4Qvm4S-vsDUxGhFZgWKfBUvLiDHA6UrVICECug8mE"
     roster_sheet_id: "10I4Qvm4S-vsDUxGhFZgWKfBUvLiDHA6UrVICECug8mE"
+    mail_id: "1XvGuKHY2EXxpAULPvMab4uk0-GbvfezlnbtjbPP2hZA"
 
   高雄:
     root_folder_id: "1nq6vgxVd1DI"
     billing_sheet_id: "1-MI1tm48f0P"
     salary_sheet_id: "1TNBjM5f7dpt"
     roster_sheet_id: "1D9IZc95fr3S"
+    mail_id: "1hCckNt44gBpjh5fO0EITWdIg_NLbjANVG2haWHVswGI"
 
 schedule:
   enabled: true

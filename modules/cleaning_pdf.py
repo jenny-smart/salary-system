@@ -91,6 +91,14 @@ def run_pdf(
         gas_result = generate_pdf(cleaning_file_id, region, period, job_type)
         if gas_result.get("success"):
             _log(log, "✅ 中控 GAS 已完成 PDF 產出並存入期別資料夾")
+            from modules.service_fee_mail import sync_service_fee_mail
+            sync_service_fee_mail(
+                root_folder_id=root_folder_id, period=period, region=region,
+                cleaning_file_id=cleaning_file_id,
+                mail_id=str((region_cfg or {}).get("mail_id", "") or ""),
+                roster_id=str((region_cfg or {}).get("roster_id", "") or ""),
+                log=lambda msg: _log(log, msg),
+            )
             result["gas_result"] = gas_result.get("result")
             return result
         _log(log, f"⚠️ 中控 GAS 未完成，改用 Python：{gas_result.get('message', '')}")
