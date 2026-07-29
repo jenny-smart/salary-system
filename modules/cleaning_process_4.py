@@ -133,6 +133,8 @@ def run_tool_deposit(
     period: str,
     is_first_half: bool,
     log: List[str],
+    region_cfg: dict = None,
+    **kwargs,
 ) -> bool:
     """
     工具包押金 & 介紹獎金。
@@ -145,31 +147,128 @@ def run_tool_deposit(
         ss = gc.open_by_key(cleaning_file_id)
 
         ws_summary = ss.worksheet("場次時數薪資總表")
-        ws_deposit  = ss.worksheet("工具包押金")
         ws_intro    = ss.worksheet("介紹獎金")
 
         if is_first_half:
             _tool_clear(ws_summary, ws_intro, log)
+            dep_count = 0
         else:
-            # 判斷地區決定押金金額
+            salary_id = str((region_cfg or {}).get("salary_id", "") or "").strip()
+            if not salary_id:
+                raise ValueError("地區設定缺少 salary_id")
+            salary_ss = gc.open_by_key(salary_id)
+            ws_deposit = salary_ss.worksheet("工具包押金")
+            ws_counts = salary_ss.worksheet("場次和時數")
+
+            month = int(period[4:6])
+            id_col = 5 + (month - 1) * 3  # 1月E、2月H、3月K...
+            ws_counts.update_cell(1, id_col, cleaning_file_id)
+            _log(log, f"  清潔承攬 ID 已寫入場次和時數 {_col_letter(id_col)}1")
+
             deposit_amount = DEPOSIT_TAICHUNG if "台中" in region else DEPOSIT_OTHER
-
-            dep_count, intro_count = _tool_process(
-                ws_deposit, ws_summary, ws_intro,
-                deposit_amount, log
+            dep_count = _tool_process_v2(
+                ws_deposit, ws_summary, deposit_amount, period, log
             )
-            _log(log, f"  工具包押金：{dep_count} 筆，介紹獎金：{intro_count} 筆")
+            _log(log, f"  工具包押金：{dep_count} 筆")
 
-        ts = _punch("工具包押金", region, period)
+        ts = _now_ts()
+        record_execution(region, period, "工具包押金", dep_count)
         _log(log, f"✅ 工具包押金 {label} 完成｜{ts}")
-
-        ts2 = _punch("介紹獎金", region, period)
-        _log(log, f"✅ 介紹獎金 {label} 完成｜{ts2}")
         return True
 
     except Exception as e:
         _log(log, f"❌ 工具包押金失敗：{e}")
         return False
+
+
+def _tool_process_v2(
+    ws_deposit: gspread.Worksheet,
+    ws_summary: gspread.Worksheet,
+    deposit_amount: int,
+    period: str,
+    log: List[str],
+) -> int:
+    """依 salary_id 工具包押金表處理下半月押金。"""
+    rows = ws_deposit.get("A2:I") or []
+    year, month = int(period[:4]), int(period[4:6])
+    if month == 12:
+        due = datetime.date(year + 1, 1, 10)
+    else:
+        due = datetime.date(year, month + 1, 10)
+
+    selected = []
+    updates = []
+    for offset, row in enumerate(rows, start=2):
+        row += [""] * (9 - len(row))
+        name = str(row[0]).strip()
+        current_due = str(row[6]).strip().replace("-", "/")
+        due_text = due.strftime("%Y/%m/%d")
+        try:
+            current_due = datetime.datetime.strptime(
+                current_due, "%Y/%m/%d"
+            ).strftime("%Y/%m/%d")
+        except ValueError:
+            pass
+        if (
+            name
+            and _to_num(row[8]) >= DEPOSIT_THRESHOLD
+            and (not current_due or current_due == due_text)
+        ):
+            selected.append((name, due))
+            if not current_due:
+                updates.append({
+                    "range": f"'{ws_deposit.title}'!G{offset}",
+                    "values": [[due_text]],
+                })
+    if updates:
+        ws_deposit.spreadsheet.values_batch_update({
+            "valueInputOption": "USER_ENTERED", "data": updates
+        })
+
+    # 清除上次由本功能追加的列，避免重跑重複。
+    old_ae = ws_summary.get("AE4:AE120") or []
+    old_names = {str(r[0]).strip() for r in old_ae if r and str(r[0]).strip()}
+    old_names.update(name for name, _due in selected)
+    existing = ws_summary.get("A4:B120") or []
+    clear_ranges = []
+    for i, row in enumerate(existing, start=4):
+        if row and str(row[0]).strip() in old_names and len(row) > 1 and str(row[1]).strip():
+            clear_ranges.append(f"A{i}:B{i}")
+    if clear_ranges:
+        ws_summary.batch_clear(clear_ranges)
+    ws_summary.batch_clear(["AB4:AE120"])
+
+    a_values = ws_summary.get("A4:A120") or []
+    last_row = 3
+    for idx, row in enumerate(a_values, start=4):
+        if row and str(row[0]).strip():
+            last_row = idx
+    append_start = last_row + 5
+    if selected:
+        ws_summary.update(
+            f"A{append_start}:B{append_start + len(selected) - 1}",
+            [[name, due.strftime("%Y/%m/%d")] for name, due in selected],
+            value_input_option="USER_ENTERED",
+        )
+
+    # AB/AC 由 H 姓名比對 I/J；AD 押金、AE 姓名。
+    hij = ws_summary.get("H4:J120") or []
+    account = {
+        str(r[0]).strip(): (
+            r[1] if len(r) > 1 else "", r[2] if len(r) > 2 else ""
+        )
+        for r in hij if r and str(r[0]).strip()
+    }
+    output = []
+    for name, _due in selected:
+        i_val, j_val = account.get(name, ("", ""))
+        output.append([i_val, j_val, deposit_amount, name])
+    if output:
+        ws_summary.update(
+            f"AB4:AE{3 + len(output)}", output, value_input_option="USER_ENTERED"
+        )
+    _log(log, f"  工具包押金回填 {len(selected)} 筆，起始列 A{append_start}")
+    return len(selected)
 
 
 def _tool_clear(
@@ -267,6 +366,8 @@ def run_yuanta(
     period: str,
     is_first_half: bool,
     log: List[str],
+    region_cfg: dict = None,
+    **kwargs,
 ) -> bool:
     """
     元大帳戶。
@@ -279,46 +380,13 @@ def run_yuanta(
     label = "上半月" if is_first_half else "下半月"
     _log(log, f"▶ 元大帳戶 {label} 開始")
     try:
-        gc = get_gspread_client()
-        ss = gc.open_by_key(cleaning_file_id)
-
-        ws_exec    = ss.worksheet("執行")
-        ws_summary = ss.worksheet("場次時數薪資總表")
-
-        yyyymm = str(ws_exec.acell("B1").value or "").strip()
-        target = _target_date(is_first_half)
-        target_str = target.strftime("%Y/%m/%d")
-
-        # 讀取來源資料
-        if is_first_half:
-            src_range = "N4:Q"
-            _log(log, f"    來源：場次時數薪資總表 N4:Q，目標日期：{target_str}")
-        else:
-            src_range = "U4:X"
-            _log(log, f"    來源：場次時數薪資總表 U4:X，目標日期：{target_str}")
-
-        src_data = ws_summary.get(src_range) or []
-        src_data = [r for r in src_data if r and any(str(v).strip() for v in r)]
-
-        if not src_data:
-            _log(log, f"    ⚠️ {src_range} 無資料")
-        else:
-            _log(log, f"    讀取 {len(src_data)} 筆")
-            # TODO: 寫入期別元大帳戶試算表 A3:E 並存檔 xlsx
-            # 需要取得元大帳戶試算表 ID（來源待確認）
-            _log(log, f"    ⚠️ 寫入元大帳戶試算表及存檔 xlsx 待實作")
-
-        # 下半月：額外處理 AB4:AE（工具包押金）
-        if not is_first_half:
-            ab_data = ws_summary.get("AB4:AE") or []
-            ab_data = [r for r in ab_data if r and any(str(v).strip() for v in r)]
-            if ab_data:
-                _log(log, f"    AB4:AE 有 {len(ab_data)} 筆工具包押金資料")
-                # TODO: 另存 {period}元大工具包押金-{region}.xlsx
-                _log(log, "    ⚠️ 工具包押金存檔 xlsx 待實作")
-
-        ts = _punch("元大帳戶", region, period)
-        _log(log, f"✅ 元大帳戶 {label} 完成｜{ts}")
+        from modules.gas_pdf_client import run_yuanta as run_yuanta_gas
+        gas_result = run_yuanta_gas(cleaning_file_id, region, period)
+        if not gas_result.get("success"):
+            raise RuntimeError(gas_result.get("message", "中控 GAS 元大帳戶執行失敗"))
+        ts = _now_ts()
+        record_execution(region, period, "元大帳戶", None)
+        _log(log, f"✅ 中控 GAS 已完成元大承攬費／工具包押金 xlsx｜{ts}")
         return True
 
     except Exception as e:

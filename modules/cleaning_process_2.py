@@ -142,11 +142,21 @@ def _punch(
     task_key: str,
     region: str,
     period: str,
+    value=None,
 ) -> str:
     """打卡至主控試算表。"""
     ts = _now_ts()
-    record_execution(region, period, task_key, ts)
+    record_execution(region, period, task_key, ts if value is None else value)
     return ts
+
+
+def _result_summary(ws: gspread.Worksheet) -> str:
+    """回傳 AA 非空白筆數／AB 金額合計。"""
+    rows = ws.get("AA2:AB", value_render_option="UNFORMATTED_VALUE") or []
+    valid = [row for row in rows if row and str(row[0]).strip()]
+    total = sum(_to_num(row[1] if len(row) > 1 else 0) for row in valid)
+    total_text = str(int(total)) if float(total).is_integer() else str(total)
+    return f"{len(valid)}/{total_text}"
 
 
 # ──────────────────────────────────────────────────────────────
@@ -314,7 +324,7 @@ def run_allowance(
         _calc_qrs_direct(ws_allowance, target_row, num_rows, 2, 6, 8, log)
         _run_common_process(ws_allowance, log)
 
-        ts = _punch("01專員請款", region, period)
+        ts = _punch("01專員請款", region, period, _result_summary(ws_allowance))
         _log(log, f"✅ 01專員請款 {label} 完成｜{ts}")
         return True
 
@@ -371,7 +381,7 @@ def run_voucher(
         num_rows = _wait_and_convert(ws_voucher, f"A{target_row}", log, extra_wait=8)
         if num_rows == 0:
             _log(log, "    ⚠️ 本期無儲值金資料")
-            ts = _punch("02儲值獎金", region, period)
+            ts = _punch("02儲值獎金", region, period, "0/0")
             _log(log, f"✅ 02儲值獎金 {label} 完成（無資料）｜{ts}")
             return True
         _log(log, f"    匯入完成：{num_rows} 筆（原始）")
@@ -387,7 +397,7 @@ def run_voucher(
 
         _run_common_process(ws_voucher, log)
 
-        ts = _punch("02儲值獎金", region, period)
+        ts = _punch("02儲值獎金", region, period, _result_summary(ws_voucher))
         _log(log, f"✅ 02儲值獎金 {label} 完成｜{ts}")
         return True
 
@@ -709,7 +719,7 @@ def _run_salary_module(
         num_rows = _wait_and_convert(ws, f"A{target_row}", log)
         if num_rows == 0:
             _log(log, f"    ⚠️ {task_key} 無資料，結束")
-            ts = _punch(task_key, region, period)
+            ts = _punch(task_key, region, period, "0/0")
             _log(log, f"✅ {task_key} {label} 完成（無資料）｜{ts}")
             return True
         _log(log, f"    匯入完成：{num_rows} 筆")
@@ -717,7 +727,7 @@ def _run_salary_module(
         _calc_qrs_salary(ws, target_row, num_rows, q_idx, r_expr, log)
         _run_common_process(ws, log)
 
-        ts = _punch(task_key, region, period)
+        ts = _punch(task_key, region, period, _result_summary(ws))
         _log(log, f"✅ {task_key} {label} 完成｜{ts}")
         return True
 

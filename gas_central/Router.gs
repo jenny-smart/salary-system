@@ -119,7 +119,27 @@ function doPost(e) {
   if (action === "generatePdf") {
     return handleCentralPdfRequest_(e);
   }
+  if (action === "runYuanta") {
+    return handleCentralYuantaRequest_(e);
+  }
   return routeCentralRequest_(e);
+}
+
+function handleCentralYuantaRequest_(e) {
+  try {
+    var p = (e && e.parameter) || {};
+    CentralContext.setRequest(p.spreadsheetId, p.region, p.period);
+    var result = cleaning_runBankAccountUpdate(
+      String(p.period || "").slice(-2) === "-1"
+    );
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true, result: result
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false, message: error.message || String(error)
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
 }
 
 function handleCentralPdfRequest_(e) {

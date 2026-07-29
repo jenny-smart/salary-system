@@ -8443,6 +8443,14 @@ function executeCompleteYuantaProcess(sheets, isFirstHalf, handler) {
   }
   
   const yuantaAccountSheet = yuantaAccountSpreadsheet.getSheets()[0];
+  // H2 固定記錄執行期別的 YYYYMM，不依目前日期寫死。
+  let centralPeriod = "";
+  try {
+    centralPeriod = CentralContext.getPeriod();
+  } catch (ignore) {
+    centralPeriod = getPeriodPrefix(isFirstHalf);
+  }
+  yuantaAccountSheet.getRange("H2").setValue(String(centralPeriod).slice(0, 6));
   
   // 步驟2：設定表頭
   handler.updateProgress("設定元大帳戶表頭...");

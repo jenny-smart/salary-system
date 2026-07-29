@@ -671,7 +671,11 @@ def run_adjustment(
 
         # ── 步驟12：更新薪資表 L1:1 員工名單 ────────────────
         _log(log, "  步驟12：更新薪資表 L1:1 員工名單")
-        _adj_update_salary_l1(ws_adjust, ws_salary, is_first_half, log)
+        salary_count = _adj_update_salary_l1(
+            ws_adjust, ws_salary, is_first_half, log
+        )
+        time.sleep(3)
+        _adj_validate_hours(ws_salary, log)
 
         # ── 步驟13：設定期別標記 E1 ──────────────────────────
         _log(log, "  步驟13：設定期別標記 E1")
@@ -679,7 +683,7 @@ def run_adjustment(
 
         # ── 打卡 ─────────────────────────────────────────────
         ts = _now_ts()
-        record_execution(region, period, "00調薪", ts)
+        record_execution(region, period, "00調薪", f"{num_rows}/{salary_count}")
         _log(log, f"✅ 00調薪 {label} 完成｜{ts}")
         return True
 
@@ -1059,7 +1063,7 @@ def _adj_update_salary_l1(
     ws_salary: gspread.Worksheet,
     is_first_half: bool,
     log: List[str],
-):
+) -> int:
     # 從 00調薪 S 欄（col 19）取非空白姓名（跳過前兩列）
     s_vals    = ws_adjust.col_values(19)
     names     = [v for v in s_vals[2:] if v and str(v).strip()]
@@ -1067,7 +1071,7 @@ def _adj_update_salary_l1(
 
     if new_count == 0:
         _log(log, "    ⚠️ S 欄無有效姓名，跳過 L1:1 更新")
-        return
+        return 0
 
     # 目前 L1:1 員工數（L = col 12, index 11）
     l1_row   = ws_salary.row_values(1)
@@ -1094,11 +1098,16 @@ def _adj_update_salary_l1(
         e_col   = s_col + diff - 1
         s_ltr   = _col_letter(s_col)
         e_ltr   = _col_letter(e_col)
-        ws_salary.batch_clear([
-            f"{s_ltr}2039:{e_ltr}2039",
-            f"{s_ltr}2043:{e_ltr}2043",
-        ])
-        _log(log, "    下半月：已清空新增欄位的列 2039 及 2043")
+        source = ws_salary.batch_get(["L2041", "L2045"])
+        for row_num, value_range in zip((2041, 2045), source):
+            value = value_range[0][0] if value_range and value_range[0] else 0
+            if _to_num(value) != 0:
+                ws_salary.update(
+                    f"{s_ltr}{row_num}:{e_ltr}{row_num}",
+                    [[0] * diff], value_input_option="USER_ENTERED"
+                )
+        _log(log, "    下半月：新增欄位 L2041/L2045 依規則設為 0")
+    return new_count
 
 
 def _copy_salary_formulas(
@@ -1113,12 +1122,11 @@ def _copy_salary_formulas(
     L 欄公式範例：=IF(ISNUMBER(FIND(L$1,$F2)),$G2,"")
     - L$1 是混合參照（列固定），需連同 L$數字 一起替換欄字母
     - $L1 是欄固定，不需替換
-    下半月跳過列 2039、2043。
+    複製範圍固定為 L3:L2046。
     """
-    SKIP      = {2039, 2043} if not is_first_half else set()
     SRC_COL   = 12    # L = col 12
-    START_ROW = 2
-    END_ROW   = 2048
+    START_ROW = 3
+    END_ROW   = 2046
 
     # FORMULA 模式取得公式
     src_formulas = ws_salary.get(
@@ -1137,8 +1145,6 @@ def _copy_salary_formulas(
 
         for i, row_f in enumerate(src_formulas):
             actual_row = START_ROW + i
-            if actual_row in SKIP:
-                continue
             formula = row_f[0] if row_f else ""
             if not formula or not str(formula).startswith("="):
                 continue
@@ -1165,3 +1171,24 @@ def _copy_salary_formulas(
             })
         _log(log, f"    公式複製完成：{diff} 欄，共 {len(batch)} 格")
         _log(log, f"    薪資公式複製完成（{diff} 欄，{len(batch)} 格）")
+
+
+def _adj_validate_hours(ws_salary: gspread.Worksheet, log: List[str]) -> None:
+    """L1996 起至最後人員欄不得有非 0 時數。"""
+    headers = ws_salary.row_values(1)[11:]
+    if not headers:
+        return
+    end_col = _col_letter(11 + len(headers))
+    values = ws_salary.get(
+        f"L1996:{end_col}1996", value_render_option="UNFORMATTED_VALUE"
+    ) or [[]]
+    row = values[0] if values else []
+    errors = []
+    for idx, name in enumerate(headers):
+        value = row[idx] if idx < len(row) else 0
+        if str(name).strip() and _to_num(value) != 0:
+            errors.append(f"{_col_letter(12 + idx)}{str(name).strip()}")
+    if errors:
+        message = "請檢查 " + "、".join(errors) + " 的時數"
+        _log(log, f"❌ {message}")
+        raise ValueError(message)
