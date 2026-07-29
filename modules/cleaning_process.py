@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import re
 import time
+import unicodedata
 from datetime import datetime
 from typing import List, Tuple
 
@@ -44,6 +45,14 @@ from modules.master_sheet import record_execution
 
 SUMMARY_START = 4     # 場次時數薪資總表資料起始列
 SUMMARY_END   = 120   # 場次時數薪資總表資料結束列
+
+
+def _name_key(value) -> str:
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    return "".join(
+        ch for ch in text
+        if not ch.isspace() and ch not in "\u200b\u200c\u200d\ufeff"
+    )
 
 TS_FMT = "%Y/%m/%d %H:%M"
 
@@ -969,7 +978,7 @@ def _adj_set_summary_no_or_uv(
     # H 欄姓名 → 行索引
     h_map: dict[str, int] = {}
     for idx, row in enumerate(h_col):
-        name = str(row[0]).strip() if row else ""
+        name = _name_key(row[0]) if row else ""
         if name:
             h_map[name] = idx
 
@@ -979,7 +988,7 @@ def _adj_set_summary_no_or_uv(
     matched  = 0
 
     for i in range(count):
-        name = str(ref_col[i][0]).strip() if i < len(ref_col) and ref_col[i] else ""
+        name = _name_key(ref_col[i][0]) if i < len(ref_col) and ref_col[i] else ""
         if not name:
             continue
         h_idx = h_map.get(name)
