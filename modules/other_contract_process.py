@@ -18,7 +18,7 @@ from typing import Callable, List
 import gspread
 
 from modules.auth import get_gspread_client, get_drive_service, get_credentials
-from modules.master_sheet import record_execution, record_batch
+from modules.master_sheet import record_execution, record_batch, get_recorded_values
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,7 @@ SERVICE_CONFIG = {
         "settlement_row":  285,                 # 結算讀取列
         "order_count_row": 40,                  # 主控試算表當期搬運筆數列號
         "preprocess_key":  "水洗前置",
+        "classification_key": "複製水洗訂單列數",
         "settlement_key":  "水洗結算",
         "pdf_key":         "水洗薪資單",
         "file_title":      "水洗承攬服務費",
@@ -54,6 +55,7 @@ SERVICE_CONFIG = {
         "settlement_row":  254,
         "order_count_row": 41,
         "preprocess_key":  "家電前置",
+        "classification_key": "複製家電訂單列數",
         "settlement_key":  "家電結算",
         "pdf_key":         "家電薪資單",
         "file_title":      "家電承攬服務費",
@@ -71,6 +73,7 @@ SERVICE_CONFIG = {
         "settlement_row":  254,
         "order_count_row": 42,
         "preprocess_key":  "收納前置",
+        "classification_key": "複製收納訂單列數",
         "settlement_key":  "收納結算",
         "pdf_key":         "收納薪資單",
         "file_title":      "收納承攬服務費",
@@ -88,6 +91,7 @@ SERVICE_CONFIG = {
         "settlement_row":  254,
         "order_count_row": 43,
         "preprocess_key":  "座椅前置",
+        "classification_key": "複製座椅訂單列數",
         "settlement_key":  "座椅結算",
         "pdf_key":         "座椅薪資單",
         "file_title":      "座椅承攬服務費",
@@ -105,6 +109,7 @@ SERVICE_CONFIG = {
         "settlement_row":  254,
         "order_count_row": 44,
         "preprocess_key":  "地毯前置",
+        "classification_key": "複製地毯訂單列數",
         "settlement_key":  "地毯結算",
         "pdf_key":         "地毯薪資單",
         "file_title":      "地毯承攬服務費",
@@ -239,6 +244,32 @@ def _write_backgrounds(ws: gspread.Worksheet, start_row: int, backgrounds: list[
     }]})
 
 
+def _apply_order_date_formats(ws: gspread.Worksheet, start_row: int, row_count: int):
+    """訂單 C／D／H 欄固定為日期格式，避免顯示 Sheets 日期序號。"""
+    if row_count <= 0:
+        return
+    requests = []
+    for col_index in (2, 3, 7):  # C, D, H（0-based）
+        requests.append({
+            "repeatCell": {
+                "range": {
+                    "sheetId": ws.id,
+                    "startRowIndex": start_row - 1,
+                    "endRowIndex": start_row - 1 + row_count,
+                    "startColumnIndex": col_index,
+                    "endColumnIndex": col_index + 1,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "numberFormat": {"type": "DATE", "pattern": "yyyy/m/d"}
+                    }
+                },
+                "fields": "userEnteredFormat.numberFormat",
+            }
+        })
+    ws.spreadsheet.batch_update({"requests": requests})
+
+
 def _get_cell(ws: gspread.Worksheet, row: int, col: int) -> str:
     try:
         return str(ws.cell(row, col).value or "").strip()
@@ -306,6 +337,8 @@ def run_other_preprocess(
     gc    = get_gspread_client()
     other = gc.open_by_key(other_file_id)
     results = {}
+    classification_keys = [SERVICE_CONFIG[s]["classification_key"] for s in svcs]
+    recorded_counts = get_recorded_values(region, period, classification_keys)
 
     for svc in svcs:
         cfg = SERVICE_CONFIG[svc]
@@ -314,7 +347,8 @@ def run_other_preprocess(
             if svc in ("水洗", "家電"):
                 _process_salary_formulas(other, cfg, is_first_half, svc, log)
             count = _process_order_data(
-                other, cfg, is_first_half, svc, region, period, log
+                other, cfg, is_first_half, svc, region, period, log,
+                expected_count=recorded_counts.get(cfg["classification_key"]),
             )
             results[svc] = count
             log(f"  ✅ {svc} 完成（搬入 {count} 筆）")
@@ -377,32 +411,40 @@ def _process_order_data(
     region: str,
     period: str,
     log: Callable,
+    expected_count=None,
 ) -> int:
-    """
-    訂單搬運：依 GAS 的「第一空白列」規則切分上下半月。
-    """
+    """依中控打卡筆數精確搬運本期分類資料，重跑時不重複追加。"""
     income_ws = ss.worksheet(cfg["income_sheet"])
     order_ws  = ss.worksheet(cfg["order_sheet"])
 
+    try:
+        expected_count = int(float(str(expected_count).strip())) if expected_count else 0
+    except (TypeError, ValueError):
+        expected_count = 0
+    if expected_count <= 0:
+        log(f"  {svc} 本期分類貼入列數為 0，略過")
+        return 0
+
+    last_income_row = _last_nonempty_row_b(income_ws)
+    income_start = max(2, last_income_row - expected_count + 1)
+    rows, backgrounds = _read_income_rows_and_backgrounds(ss.id, income_ws, income_start)
+    if len(rows) != expected_count:
+        raise ValueError(
+            f"{svc} 本期應有 {expected_count} 筆，但營收明細尾端只讀到 {len(rows)} 筆"
+        )
+
     if is_first_half:
-        income_start = 2
         paste_start = 2
     else:
-        income_start = _first_empty_row_b(income_ws, 2) + 1
-        paste_start = _first_empty_row_b(order_ws, 2)
-
-    rows, backgrounds = _read_income_rows_and_backgrounds(ss.id, income_ws, income_start)
-    if not is_first_half and not rows:
-        # 有些期別檔只有本期資料，資料會直接位於第 2 列起，沒有分隔空白列。
-        # 此時依金流對帳⑤打卡筆數，從營收明細尾端精確往回抓本期資料。
-        last_income_row = _last_nonempty_row_b(income_ws)
-        if last_income_row >= 2:
-            # 期別檔只有本期資料時直接從第 2 列讀取，避免額外查主控表造成配額超限。
-            income_start = 2
-            log(f"  {svc} 分段區無資料，改讀取第 2–{last_income_row} 列")
-            rows, backgrounds = _read_income_rows_and_backgrounds(
-                ss.id, income_ws, income_start
-            )
+        last_order_row = _last_nonempty_row_b(order_ws)
+        existing_start = max(2, last_order_row - expected_count + 1)
+        existing_ids = order_ws.get(f"B{existing_start}:B{last_order_row}") or []
+        source_ids = [[row[1]] for row in rows]
+        if existing_ids == source_ids:
+            paste_start = existing_start
+            log(f"  {svc} 偵測到本期資料已存在，覆寫第 {paste_start} 列起，不重複追加")
+        else:
+            paste_start = last_order_row + 1
 
     _clear_order_from(order_ws, paste_start)
     if not rows:
@@ -419,6 +461,7 @@ def _process_order_data(
         order_ws.add_rows(end_row - order_ws.row_count)
     order_ws.update(f"A{paste_start}:BJ{end_row}", rows, value_input_option="RAW")
     _write_backgrounds(order_ws, paste_start, backgrounds)
+    _apply_order_date_formats(order_ws, paste_start, len(rows))
     log(f"  {svc} 訂單寫入第 {paste_start}–{end_row} 列（{len(rows)} 筆，含背景色）")
     return len(rows)
 
