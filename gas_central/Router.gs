@@ -62,7 +62,8 @@ var CentralMaster = {
           root_folder_id: values[r][index.root_folder_id] || "",
           allowance_id: values[r][index.allowance_id] || "",
           salary_id: values[r][index.salary_id] || "",
-          roster_id: values[r][index.roster_id] || ""
+          roster_id: values[r][index.roster_id] || "",
+          mail_id: values[r][index.mail_id] || ""
         };
       }
     }

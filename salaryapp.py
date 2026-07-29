@@ -83,7 +83,7 @@ CONFIG_PATH = "config.yaml"
 CONFIG_SHEET_NAME = "Lemon Clean 系統設定"
 REGION_SHEET_NAME = "地區設定"
 SCHEDULE_SHEET_NAME = "排程設定"
-REGION_HEADERS = ["name", "root_folder_id", "allowance_id", "salary_id", "roster_id"]
+REGION_HEADERS = ["name", "root_folder_id", "allowance_id", "salary_id", "roster_id", "mail_id"]
 SCHEDULE_HEADERS = ["key", "value"]
 
 
@@ -113,6 +113,7 @@ def _load_yaml_backup() -> dict:
                         "allowance_id": cfg.get("allowance_id", cfg.get("billing_sheet_id", "")),
                         "salary_id": cfg.get("salary_id", cfg.get("salary_sheet_id", "")),
                         "roster_id": cfg.get("roster_id", cfg.get("roster_sheet_id", "")),
+                        "mail_id": cfg.get("mail_id", ""),
                     }
                     for name, cfg in data["regions"].items()
                     if isinstance(cfg, dict)
@@ -260,7 +261,7 @@ def _read_config_from_sheet(spreadsheet_id: str) -> dict:
 
     region_values = svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
-        range=f"'{REGION_SHEET_NAME}'!A2:E",
+        range=f"'{REGION_SHEET_NAME}'!A2:F",
     ).execute().get("values", [])
 
     regions = []
@@ -275,6 +276,7 @@ def _read_config_from_sheet(spreadsheet_id: str) -> dict:
             "allowance_id": str(row[2]).strip(),
             "salary_id": str(row[3]).strip(),
             "roster_id": str(row[4]).strip(),
+            "mail_id": str(row[5]).strip(),
         })
 
     schedule_values = svc.spreadsheets().values().get(
@@ -325,6 +327,7 @@ def _write_config_to_sheet(spreadsheet_id: str, cfg: dict):
             r.get("allowance_id", ""),
             r.get("salary_id", ""),
             r.get("roster_id", ""),
+            r.get("mail_id", ""),
         ])
 
     schedule = cfg.get("schedule", {}) or {}
@@ -338,7 +341,7 @@ def _write_config_to_sheet(spreadsheet_id: str, cfg: dict):
 
     svc.spreadsheets().values().clear(
         spreadsheetId=spreadsheet_id,
-        range=f"'{REGION_SHEET_NAME}'!A:E",
+        range=f"'{REGION_SHEET_NAME}'!A:F",
         body={},
     ).execute()
     svc.spreadsheets().values().update(
@@ -1287,6 +1290,7 @@ REGION_FIELDS = [
     ("allowance_id",   "請款 ID"),
     ("salary_id",      "薪資 ID"),
     ("roster_id",      "名冊 ID"),
+    ("mail_id",        "承攬服務費 mail ID"),
 ]
 
 col_hdr, col_add = st.columns([3, 1])
@@ -1303,6 +1307,7 @@ if st.session_state.adding_region:
         new_allowance = st.text_input("請款 ID")
         new_salary    = st.text_input("薪資 ID")
         new_roster    = st.text_input("名冊 ID")
+        new_mail      = st.text_input("承攬服務費 mail ID")
 
         s1, s2 = st.columns(2)
         with s1:
@@ -1323,6 +1328,7 @@ if st.session_state.adding_region:
                         "allowance_id":   new_allowance,
                         "salary_id":      new_salary,
                         "roster_id":      new_roster,
+                        "mail_id":        new_mail,
                     })
                     config["regions"] = regions
                     save_config(config)
@@ -1356,6 +1362,7 @@ for i, region in enumerate(regions):
             e_allowance = st.text_input("請款 ID",    value=region.get("allowance_id",   ""))
             e_salary    = st.text_input("薪資 ID",    value=region.get("salary_id",      ""))
             e_roster    = st.text_input("名冊 ID",    value=region.get("roster_id",      ""))
+            e_mail      = st.text_input("承攬服務費 mail ID", value=region.get("mail_id", ""))
 
             es1, es2 = st.columns(2)
             with es1:
@@ -1370,6 +1377,7 @@ for i, region in enumerate(regions):
                     "allowance_id":   e_allowance,
                     "salary_id":      e_salary,
                     "roster_id":      e_roster,
+                    "mail_id":        e_mail,
                 }
                 config["regions"] = regions
                 save_config(config)
