@@ -108,6 +108,13 @@ var CentralMaster = {
 };
 
 function doGet(e) {
+  var action = e && e.parameter && e.parameter.action;
+  if (action === "generatePdf") {
+    return handleCentralPdfRequest_(e);
+  }
+  if (action === "runYuanta") {
+    return handleCentralYuantaRequest_(e);
+  }
   return routeCentralRequest_(e);
 }
 
@@ -162,7 +169,8 @@ function handleCentralPdfRequest_(e) {
     return ContentService.createTextOutput(JSON.stringify({
       success: completed,
       result: result,
-      message: message
+      message: message,
+      pdfApiVersion: "2026-07-29-v2"
     })).setMimeType(ContentService.MimeType.JSON);
   } catch (error) {
     return ContentService.createTextOutput(JSON.stringify({
