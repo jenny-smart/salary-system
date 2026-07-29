@@ -94,7 +94,7 @@ def run_pdf(
             result["gas_result"] = gas_result.get("result")
             return result
         gas_message = gas_result.get("message") or "中央 GAS PDF API 未完成"
-        _log(log, f"❌ {gas_message}")
+        _log(log, f"❌ 中央 GAS PDF 未完成：{gas_message}")
         result["failed"].append(f"中控 GAS：{gas_message}")
         return result
 
