@@ -79,13 +79,15 @@ def sync_service_fee_mail(
         root_folder_id, period, "其他承攬", region
     )
     mail_ss = gc.open_by_key(mail_id)
-    data = []
+    cleaning_data = []
+    other_data = []
     if cleaning_file_id:
         cleaning = gc.open_by_key(cleaning_file_id)
-        data += _pairs(cleaning, "PDF產出")
-        data += _pairs(cleaning, "專案PDF產出")
+        cleaning_data += _pairs(cleaning, "PDF產出")
+        cleaning_data += _pairs(cleaning, "專案PDF產出")
     if other_file_id:
-        data += _pairs(gc.open_by_key(other_file_id), "PDF產出")
+        other_data += _pairs(gc.open_by_key(other_file_id), "PDF產出")
+    data = cleaning_data + other_data
 
     period_ws = _worksheet(mail_ss, period)
     period_ws.batch_clear(["B2:C"])
@@ -131,5 +133,6 @@ def sync_service_fee_mail(
                 value_input_option="USER_ENTERED",
             )
     log(f"承攬服務費 mail 已同步 {len(data)} 筆")
-    record_execution(region, period, "承攬mail", len(data))
+    record_execution(region, period, "清潔承攬mail", len(cleaning_data))
+    record_execution(region, period, "其他承攬mail", len(other_data))
     return len(data)
