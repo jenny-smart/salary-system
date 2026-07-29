@@ -10648,6 +10648,18 @@ function getPanelInitData() {
   const period = getPeriodInfo();
   const sheetNames = getSheetNames();
   const execSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetNames.exec);
+
+  // 中央 GAS 面板直接讀取主控表「地區設定」，不再使用舊面板的本機設定。
+  if (typeof CentralMaster !== 'undefined' && typeof CentralContext !== 'undefined') {
+    return {
+      periodCode: CentralContext.getPeriod(),
+      periodDisplay: period.display || '未設定',
+      region: CentralContext.getRegion(),
+      selectedRegion: CentralContext.getRegion(),
+      regions: CentralMaster.getRegionConfigs(),
+      sheetNames: sheetNames
+    };
+  }
   
   // 從執行工作表讀取各種 ID
   const folderId = execSheet?.getRange('C2').getValue() || '';

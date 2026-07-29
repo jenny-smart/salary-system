@@ -752,6 +752,9 @@
       
       renderRegions();
       updateRegionSelect();
+      if (data.selectedRegion || data.region) {
+        document.getElementById('regionSelect').value = data.selectedRegion || data.region;
+      }
       
       addLog(`✅ 初始化完成，共 ${regions.length} 個區域`);
     }
