@@ -785,7 +785,12 @@ def _adj_convert_to_values(
         return 0
 
     end_row = 2 + num_rows               # row 3 = index 2, end = 2 + num_rows
-    data = ws_adjust.get(f"S3:AX{end_row}") or []
+    # 必須讀取試算表的原始型別；預設會取回格式化文字，
+    # 再用 RAW 寫回時會把 340 之類的數值存成文字（顯示為 '340）。
+    data = ws_adjust.get(
+        f"S3:AX{end_row}",
+        value_render_option="UNFORMATTED_VALUE",
+    ) or []
     ws_adjust.update(f"S3:AX{end_row}", data, value_input_option="RAW")
     _log(log, f"    S3:AX 轉靜態值完成（{num_rows} 列）")
     return num_rows
