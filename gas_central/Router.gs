@@ -70,6 +70,32 @@ var CentralMaster = {
     throw new Error("中控表找不到地區設定：" + region);
   },
 
+  getRegionConfigs: function () {
+    var sheet = this.getSpreadsheet().getSheetByName("地區設定");
+    if (!sheet) throw new Error("中控表缺少「地區設定」");
+    var values = sheet.getDataRange().getDisplayValues();
+    var headers = values[0] || [];
+    var index = {};
+    headers.forEach(function (header, i) { index[String(header).trim()] = i; });
+    return values.slice(1).filter(function (row) {
+      return String(row[index.name] || "").trim();
+    }).map(function (row) {
+      var name = String(row[index.name]).trim();
+      return {
+        id: name,
+        name: name,
+        rootFolderId: row[index.root_folder_id] || "",
+        folderId: row[index.allowance_id] || "",
+        allowanceId: row[index.allowance_id] || "",
+        salaryId: row[index.salary_id] || "",
+        rosterId: row[index.roster_id] || "",
+        mailId: row[index.mail_id] || "",
+        enabled: true,
+        isExpanded: false
+      };
+    });
+  },
+
   recordExecution: function (task, count, period) {
     var region = CentralContext.getRegion();
     period = period || CentralContext.getPeriod();
