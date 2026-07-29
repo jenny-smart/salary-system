@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><base target="_top"><meta charset="utf-8">
+<style>
+body{font-family:Arial,sans-serif;background:#f4f8fc;color:#123;padding:24px}
+.card{max-width:720px;margin:auto;background:#fff;border-radius:18px;padding:24px;box-shadow:0 8px 24px #1232}
+button{width:100%;padding:14px;border:0;border-radius:12px;background:#1677a8;color:#fff;font-size:18px}
+#log{margin-top:18px;padding:16px;background:#082f3c;color:#bff7e5;border-radius:12px;white-space:pre-wrap}
+</style></head><body><div class="card">
+<h2>✉️ 承攬服務費 mail</h2>
+<button onclick="run()">▶ 同步承攬服務費 mail</button>
+<div id="log">系統已就緒</div>
+</div><script>
+function run(){
+  document.getElementById("log").textContent="同步中...";
+  google.script.run.withSuccessHandler(function(r){
+    document.getElementById("log").textContent="✅ "+r.message;
+  }).withFailureHandler(function(e){
+    document.getElementById("log").textContent="❌ "+e.message;
+  }).mail_syncServiceFeeMail();
+}
+</script></body></html>

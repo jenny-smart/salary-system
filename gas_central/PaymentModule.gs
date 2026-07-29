@@ -342,6 +342,19 @@ const SettingsManager = {
   },
 
   getCurrentSettings() {
+    if (typeof CentralMaster !== "undefined" && typeof CentralContext !== "undefined") {
+      const centralConfig = CentralMaster.getPanelRegionConfig();
+      return {
+        rootFolderId: centralConfig.root_folder_id || "",
+        region: centralConfig.name || CentralContext.getRegion(),
+        allowanceId: centralConfig.allowance_id || "",
+        salaryId: centralConfig.salary_id || "",
+        rosterId: centralConfig.roster_id || "",
+        mailId: centralConfig.mail_id || "",
+        lineToken: scriptProperties.getProperty(PROPERTY_KEYS.LINE_TOKEN) || "",
+        lineUsers: scriptProperties.getProperty(PROPERTY_KEYS.LINE_USERS) || ""
+      };
+    }
     return {
       rootFolderId: scriptProperties.getProperty(PROPERTY_KEYS.ROOT_FOLDER_ID) || "",
       region: scriptProperties.getProperty(PROPERTY_KEYS.REGION_NAME) || "",
