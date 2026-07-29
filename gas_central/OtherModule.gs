@@ -129,6 +129,20 @@ function showSidebar() {
 }
 
 function api_getOtherContractSettings() {
+  if (typeof CentralMaster !== "undefined" && typeof CentralContext !== "undefined") {
+    var centralConfig = CentralMaster.getPanelRegionConfig();
+    var centralPeriod = "";
+    try { centralPeriod = CentralContext.getPeriod(); } catch (e) {}
+    return {
+      rootFolderId: centralConfig.root_folder_id || "",
+      regionName: centralConfig.name || CentralContext.getRegion(),
+      allowanceId: centralConfig.allowance_id || "",
+      salaryId: centralConfig.salary_id || "",
+      rosterId: centralConfig.roster_id || "",
+      mailId: centralConfig.mail_id || "",
+      detectedPeriod: centralPeriod
+    };
+  }
   var props = PropertiesService.getScriptProperties();
   return {
     rootFolderId: props.getProperty(OTHER_CONTRACT_PDF_CONFIG.ROOT_FOLDER_ID_KEY) || "",

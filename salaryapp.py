@@ -653,8 +653,11 @@ if run_clicked and execution_engine == "GAS":
             from modules.other_contract_process import _find_other_file
             target_id = _find_other_file(root_id, period, selected_name)
             app_name = "other"
+        elif system == "✉️ 承攬 mail":
+            target_id = ""
+            app_name = "mail"
         else:
-            raise RuntimeError("承攬 mail 請使用 PYTHON 執行引擎")
+            raise RuntimeError("不支援的 GAS 系統")
 
         query = urlencode({
             "app": app_name,

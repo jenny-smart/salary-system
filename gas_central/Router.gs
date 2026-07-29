@@ -44,7 +44,11 @@ var CentralMaster = {
   getSpreadsheet: function () {
     var id = PropertiesService.getScriptProperties().getProperty("MASTER_SHEET_ID")
       || (typeof MASTER_SHEET_ID !== "undefined" ? MASTER_SHEET_ID : "");
-    if (!id) throw new Error("尚未設定 Script Property：MASTER_SHEET_ID");
+    if (!id) {
+      var active = SpreadsheetApp.getActiveSpreadsheet();
+      if (active) return active;
+      throw new Error("尚未設定 Script Property：MASTER_SHEET_ID");
+    }
     return SpreadsheetApp.openById(id);
   },
 
@@ -94,6 +98,14 @@ var CentralMaster = {
         isExpanded: false
       };
     });
+  },
+
+  getPanelRegionConfig: function () {
+    var configs = this.getRegionConfigs();
+    var selected = CentralContext.getRegion();
+    return configs.filter(function (cfg) {
+      return cfg.name === selected;
+    })[0] || configs[0] || {};
   },
 
   recordExecution: function (task, count, period) {
@@ -223,7 +235,8 @@ function routeCentralRequest_(e) {
   var files = {
     payment: ["PaymentPanel", "金流對帳中央面板"],
     cleaning: ["CleaningPanel", "清潔承攬中央面板"],
-    other: ["OtherPanel", "其他承攬中央面板"]
+    other: ["OtherPanel", "其他承攬中央面板"],
+    mail: ["MailPanel", "承攬服務費 mail"]
   };
   if (!files[app]) {
     return HtmlService.createHtmlOutput(
@@ -231,11 +244,14 @@ function routeCentralRequest_(e) {
     );
   }
 
-  CentralContext.setRequest(
-    params.spreadsheetId,
-    params.region,
-    params.period
-  );
+  if (params.spreadsheetId) {
+    CentralContext.setRequest(params.spreadsheetId, params.region, params.period);
+  } else {
+    PropertiesService.getUserProperties().setProperties({
+      CENTRAL_REGION: String(params.region || ""),
+      CENTRAL_PERIOD: String(params.period || "")
+    });
+  }
   return HtmlService.createHtmlOutputFromFile(files[app][0])
     .setTitle(files[app][1]);
 }

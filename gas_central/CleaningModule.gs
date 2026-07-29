@@ -3311,6 +3311,21 @@ if (!isFirstHalf && diff > 0) {
   SpreadsheetApp.flush();
   Utilities.sleep(handler.config.PROCESS_DELAY || 2000);
 
+  // 驗證薪資表第 1996 列：L 欄至最後一位專員不得有非 0 時數。
+  const hourWarnings = [];
+  if (nValues.length) {
+    const hourValues = salarySheet.getRange(1996, 12, 1, nValues.length).getValues()[0];
+    hourValues.forEach((value, index) => {
+      const numeric = Number(String(value || "0").replace(/,/g, ""));
+      if (numeric !== 0) {
+        hourWarnings.push(getColumnLetter(12 + index) + nValues[index]);
+      }
+    });
+  }
+  if (hourWarnings.length) {
+    throw new Error("請檢查 " + hourWarnings.join("、") + " 的時數");
+  }
+
   // 返回處理結果
   return {
     processedRows: numRows,
@@ -10651,8 +10666,10 @@ function getPanelInitData() {
 
   // 中央 GAS 面板直接讀取主控表「地區設定」，不再使用舊面板的本機設定。
   if (typeof CentralMaster !== 'undefined' && typeof CentralContext !== 'undefined') {
+    let centralPeriod = '';
+    try { centralPeriod = CentralContext.getPeriod(); } catch (e) {}
     return {
-      periodCode: CentralContext.getPeriod(),
+      periodCode: centralPeriod,
       periodDisplay: period.display || '未設定',
       region: CentralContext.getRegion(),
       selectedRegion: CentralContext.getRegion(),
