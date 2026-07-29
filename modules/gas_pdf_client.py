@@ -1,5 +1,6 @@
 """由中控 GAS（以部署者權限）產出並儲存 PDF。"""
 
+import json
 import os
 import requests
 
@@ -43,6 +44,14 @@ def generate_pdf(spreadsheet_id, region, period, kind) -> dict:
     if response.status_code >= 400:
         data["success"] = False
         data["message"] = data.get("message") or f"HTTP {response.status_code}"
+    message = str(data.get("message") or "").strip()
+    if not data.get("success") and message.strip("❌⚠️ ：:") == "":
+        data["message"] = (
+            f"中央 GAS PDF 失敗（HTTP {response.status_code}；"
+            f"Content-Type={response.headers.get('content-type', '')}）："
+            f"{json.dumps(data, ensure_ascii=False)[:800]}；"
+            f"原始回應={response.text[:500]!r}"
+        )
     return data
 
 

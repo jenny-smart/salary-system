@@ -150,11 +150,14 @@ function handleCentralYuantaRequest_(e) {
 }
 
 function handleCentralPdfRequest_(e) {
+  var stage = "讀取請求參數";
   try {
     var p = (e && e.parameter) || {};
+    stage = "設定目標試算表與地區";
     CentralContext.setRequest(p.spreadsheetId, p.region, p.period);
     var kind = String(p.kind || "CLEANING").toUpperCase();
     var result;
+    stage = "執行 " + kind + " PDF";
     if (kind === "OTHER") {
       result = other_generateAllSalaryPDFs_v2025();
     } else {
@@ -173,9 +176,13 @@ function handleCentralPdfRequest_(e) {
       pdfApiVersion: "2026-07-29-v2"
     })).setMimeType(ContentService.MimeType.JSON);
   } catch (error) {
+    var detail = error && error.message ? error.message : String(error);
+    if (!detail || detail === "❌") detail = JSON.stringify(error);
+    if (error && error.stack) detail += "｜" + error.stack;
     return ContentService.createTextOutput(JSON.stringify({
       success: false,
-      message: error.message || String(error)
+      message: "中央 GAS PDF 失敗（" + stage + "）：" + detail,
+      pdfApiVersion: "2026-07-29-v2"
     })).setMimeType(ContentService.MimeType.JSON);
   }
 }
