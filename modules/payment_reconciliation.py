@@ -322,7 +322,7 @@ def _date_sort_key(value):
     return dt
 
 
-ABNORMAL_KEYWORDS = ["異動", "加時", "減時", "請假", "補做", "遲到", "薪資", "未服務", "加洗", "未洗", "加收", "退款"]
+ABNORMAL_KEYWORDS = ["異動", "加時", "減時", "請假", "補做", "遲到", "薪資", "未服務", "加洗", "未洗", "加收", "退款", "颱風", "停班", "停課"]
 EXPANDABLE_TYPES  = ["水洗", "家電", "座椅", "收納", "地毯", "其他"]
 
 SERVICE_KEYWORDS = {
