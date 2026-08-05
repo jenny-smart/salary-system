@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 import time
+import traceback
 import unicodedata
 from datetime import datetime
 from typing import List, Tuple
@@ -53,6 +54,14 @@ def _name_key(value) -> str:
         ch for ch in text
         if not ch.isspace() and ch not in "\u200b\u200c\u200d\ufeff"
     )
+
+
+def _to_num(value) -> float:
+    """將試算表值安全轉成數字；空白或非數字視為 0。"""
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return 0.0
 
 
 # ──────────────────────────────────────────────────────────────
@@ -690,6 +699,7 @@ def run_adjustment(
 
     except Exception as e:
         _log(log, f"❌ 00調薪失敗：{e}")
+        _log(log, traceback.format_exc())
         if str(e).startswith("請檢查 "):
             raise
         return False
@@ -1072,14 +1082,28 @@ def _adj_update_salary_l1(
     names     = [v for v in s_vals[2:] if v and str(v).strip()]
     new_count = len(names)
 
+    # 先讀取原名單，所有安全檢查都必須於清空前完成。
+    l1_row = ws_salary.row_values(1)
+    old_count = sum(1 for v in l1_row[11:] if v and str(v).strip())
+
     if new_count == 0:
-        _log(log, "    ⚠️ S 欄無有效姓名，跳過 L1:1 更新")
+        if old_count > 0:
+            raise ValueError(
+                f"薪資表員工名單異常縮減：{old_count} → 0 人，"
+                "已中止更新並保留原名單"
+            )
+        _log(log, "    ⚠️ S 欄無有效姓名，無 L1:1 原名單可更新")
         return 0
 
-    # 目前 L1:1 員工數（L = col 12, index 11）
-    l1_row   = ws_salary.row_values(1)
-    old_count = sum(1 for v in l1_row[11:] if v and str(v).strip())
     diff      = new_count - old_count
+
+    # IMPORTRANGE 尚未完全展開時，S 欄可能暫時只有少數資料。
+    # 大幅縮減視為資料異常，務必在清空原名單前中止。
+    if old_count >= 2 and new_count * 2 < old_count:
+        raise ValueError(
+            f"薪資表員工名單異常縮減：{old_count} → {new_count} 人，"
+            "已中止更新並保留原名單"
+        )
 
     # 清空舊的 L1:1
     if old_count > 0:
