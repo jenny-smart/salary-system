@@ -1068,7 +1068,7 @@ if run_clicked and execution_engine == "PYTHON":
                 elif _system == "📨 承攬作業":
 
                     if _func == "承攬費通知信":
-                        import sync_service_fee_mail
+                        from modules.service_fee_mail import sync_service_fee_mail
                         
                         def contract_log(message):
                             level = (
