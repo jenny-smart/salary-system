@@ -519,23 +519,35 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
             _log(log, message)
 
     def _detail(exc: Exception) -> str:
+        """完整展開 Google API 錯誤，避免只看到空白 HttpError。"""
+        parts = [type(exc).__name__]
         text = str(exc).strip()
         if text:
-            return f"{type(exc).__name__}: {text}"
-        # HttpError 有時 str(exc) 為空，盡量把 resp/content 帶出來。
-        parts = [f"{type(exc).__name__}: {exc!r}"]
+            parts.append(text)
+
         resp = getattr(exc, "resp", None)
         if resp is not None:
             status = getattr(resp, "status", None)
             reason = getattr(resp, "reason", None)
-            if status or reason:
-                parts.append(f"status={status}, reason={reason}")
+            if status is not None:
+                parts.append(f"HTTP status={status}")
+            if reason:
+                parts.append(f"HTTP reason={reason}")
+
         content = getattr(exc, "content", None)
         if content:
             try:
-                parts.append(content.decode("utf-8", errors="replace"))
+                decoded = content.decode("utf-8", errors="replace") if isinstance(content, (bytes, bytearray)) else str(content)
+                if decoded.strip():
+                    parts.append(f"API content={decoded.strip()}")
             except Exception:
-                parts.append(repr(content))
+                parts.append(f"API content={content!r}")
+
+        # googleapiclient.errors.HttpError 常可從 error_details 取得 reason/message。
+        details = getattr(exc, "error_details", None)
+        if details:
+            parts.append(f"error_details={details}")
+
         return " | ".join(parts)
 
     drive = get_drive_service()
@@ -594,15 +606,15 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
             raise RuntimeError(f"覆蓋同名 xlsx 失敗（{output_name}）｜{_detail(exc)}") from exc
 
     # 3. 沒有有效同名檔時，再找是否有先前被移到垃圾桶的同名檔。
+    #    不限制 parent，避免檔案進垃圾桶後因父層查詢條件而找不到。
     #    若有，還原後覆蓋；這不需要建立新檔的權限。
     trashed_q = (
-        f"'{folder_id}' in parents and name = '{safe_name}' "
-        "and trashed = true"
+        f"name = '{safe_name}' and trashed = true"
     )
     try:
         trashed = drive.files().list(
             q=trashed_q,
-            fields="files(id,name,modifiedTime,trashed)",
+            fields="files(id,name,modifiedTime,trashed,parents)",
             supportsAllDrives=True,
             includeItemsFromAllDrives=True,
             orderBy="modifiedTime desc",
@@ -614,7 +626,7 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
 
     if trashed:
         target = trashed[0]
-        _elog(f"  匯出 xlsx：找到垃圾桶內同名檔，還原並覆蓋（{target.get('id', '')}）")
+        _elog(f"  匯出 xlsx：找到垃圾桶內同名檔，直接還原並覆蓋（{target.get('id', '')}）")
         try:
             # 先還原，再覆蓋內容。
             drive.files().update(
@@ -641,19 +653,60 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
             raise RuntimeError(f"還原／覆蓋同名 xlsx 失敗（{output_name}）｜{_detail(exc)}") from exc
 
     # 4. 完全沒有同名檔才建立新檔。
+    #    建立前先把「目前 API 身分」與「目標資料夾 capabilities」寫入 log，
+    #    讓 create 失敗時可以直接判斷是權限、Shared Drive 或 Service Account 儲存空間限制。
     _elog(f"  匯出 xlsx：無同名檔，建立新檔 {output_name}")
+
+    try:
+        about = drive.about().get(fields="user").execute()
+        user = about.get("user", {}) or {}
+        identity = user.get("emailAddress") or user.get("displayName") or "未知"
+        _elog(f"  Drive API 執行身分：{identity}")
+    except Exception as exc:
+        _elog(f"  ⚠️ 無法取得 Drive API 執行身分：{_detail(exc)}")
+
+    try:
+        folder_meta = drive.files().get(
+            fileId=folder_id,
+            fields=(
+                "id,name,mimeType,driveId,parents,trashed,"
+                "capabilities(canAddChildren,canEdit,canTrashChildren,canDeleteChildren)"
+            ),
+            supportsAllDrives=True,
+        ).execute()
+        caps = folder_meta.get("capabilities", {}) or {}
+        _elog(
+            "  目標期別資料夾："
+            f"name={folder_meta.get('name','')}；id={folder_meta.get('id',folder_id)}；"
+            f"driveId={folder_meta.get('driveId','MyDrive/無')}；"
+            f"canAddChildren={caps.get('canAddChildren')}；"
+            f"canEdit={caps.get('canEdit')}；"
+            f"canTrashChildren={caps.get('canTrashChildren')}；"
+            f"canDeleteChildren={caps.get('canDeleteChildren')}"
+        )
+    except Exception as exc:
+        _elog(f"  ⚠️ 無法取得期別資料夾權限資訊：{_detail(exc)}")
+
+    # MediaIoBaseUpload 可能已被前面的 update 嘗試讀取過；create 前重新建立最保險。
+    create_media = MediaIoBaseUpload(
+        io.BytesIO(data),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        resumable=False,
+    )
     try:
         created = drive.files().create(
             body={"name": output_name, "parents": [folder_id]},
-            media_body=media,
-            fields="id,name",
+            media_body=create_media,
+            fields="id,name,parents,driveId",
             supportsAllDrives=True,
         ).execute()
-        _elog(f"  匯出 xlsx：新檔建立完成 {created.get('name', output_name)}")
+        _elog(
+            f"  匯出 xlsx：新檔建立完成 {created.get('name', output_name)} "
+            f"（id={created.get('id','')}）"
+        )
     except Exception as exc:
         raise RuntimeError(
-            f"建立新 xlsx 失敗（{output_name}）｜{_detail(exc)}。"
-            "若可讀寫既有檔但無法建立新檔，請確認執行帳號對期別資料夾具有新增檔案權限。"
+            f"建立新 xlsx 失敗（{output_name}）｜{_detail(exc)}"
         ) from exc
 
 
