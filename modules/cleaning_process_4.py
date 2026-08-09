@@ -558,21 +558,31 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
     except Exception as exc:
         raise RuntimeError(f"查詢同名 xlsx 失敗｜{_detail(exc)}") from exc
 
-    # 3. 有同名檔時，先全部刪除；任一筆刪除失敗即停止。
+    # 3. 有同名檔時，不做永久刪除，直接移至垃圾桶。
     for item in existing:
         try:
-            _elog(f"  匯出 xlsx：刪除舊檔 {item.get('name', output_name)}（{item.get('id', '')}）")
-            drive.files().delete(
+            _elog(
+                f"  匯出 xlsx：將舊檔移至垃圾桶 "
+                f"{item.get('name', output_name)}（{item.get('id', '')}）"
+            )
+            drive.files().update(
                 fileId=item["id"],
+                body={"trashed": True},
                 supportsAllDrives=True,
+                fields="id,name,trashed",
             ).execute()
+            _elog(
+                f"  匯出 xlsx：舊檔已移至垃圾桶 "
+                f"{item.get('name', output_name)}（{item.get('id', '')}）"
+            )
         except Exception as exc:
             raise RuntimeError(
-                f"刪除同名舊 xlsx 失敗（{item.get('name', output_name)}）｜{_detail(exc)}"
+                f"無法將同名舊 xlsx 移至垃圾桶（{item.get('name', output_name)}）｜{_detail(exc)}。"
+                "請確認執行帳號對該舊檔或共享雲端硬碟具有移至垃圾桶權限。"
             ) from exc
 
     if existing:
-        _elog(f"  匯出 xlsx：同名舊檔已全部刪除，共 {len(existing)} 個")
+        _elog(f"  匯出 xlsx：同名舊檔已全部移至垃圾桶，共 {len(existing)} 個")
 
     # 4. 舊檔刪除完成後，再建立全新的同名 xlsx。
     media = MediaIoBaseUpload(
