@@ -504,13 +504,12 @@ def _yuanta_find_period_file(root_folder_id: str, period: str, file_name: str) -
 
 
 def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, log: List[str] | None = None) -> None:
-    """將 Google 試算表匯出 xlsx，存回期別資料夾。
+    """將 Google 試算表匯出成指定檔名的 xlsx，存回期別資料夾。
 
-    若期別資料夾內已有相同檔名：
-      1. 先刪除所有同名舊 xlsx。
-      2. 確認刪除完成後，再建立全新的同名 xlsx。
-
-    若刪除失敗，流程直接停止，不會用 update 覆蓋，也不會建立重複檔名。
+    規則：
+      - 若期別資料夾已有同名有效檔案：直接覆蓋該檔內容，不刪除、不重建。
+      - 若同名檔先前被移到垃圾桶：還原該檔並覆蓋內容，避免因沒有 create 權限而失敗。
+      - 若完全沒有同名檔：才建立新檔。
     """
     from modules.auth import get_drive_service
     from googleapiclient.http import MediaIoBaseUpload
@@ -523,13 +522,27 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
         text = str(exc).strip()
         if text:
             return f"{type(exc).__name__}: {text}"
-        return f"{type(exc).__name__}: {exc!r}"
+        # HttpError 有時 str(exc) 為空，盡量把 resp/content 帶出來。
+        parts = [f"{type(exc).__name__}: {exc!r}"]
+        resp = getattr(exc, "resp", None)
+        if resp is not None:
+            status = getattr(resp, "status", None)
+            reason = getattr(resp, "reason", None)
+            if status or reason:
+                parts.append(f"status={status}, reason={reason}")
+        content = getattr(exc, "content", None)
+        if content:
+            try:
+                parts.append(content.decode("utf-8", errors="replace"))
+            except Exception:
+                parts.append(repr(content))
+        return " | ".join(parts)
 
     drive = get_drive_service()
 
-    # 1. 先下載目前 Google 試算表內容。
+    # 1. 先從 Google 試算表下載目前內容；下載完成後直接以 output_name 存入 Drive。
     try:
-        _elog(f"  匯出 xlsx：開始下載 Google 試算表 -> {output_name}")
+        _elog(f"  匯出 xlsx：下載並準備存成 {output_name}")
         request = drive.files().export_media(
             fileId=spreadsheet_id,
             mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -539,57 +552,96 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
     except Exception as exc:
         raise RuntimeError(f"匯出 Google 試算表失敗｜{_detail(exc)}") from exc
 
-    # 2. 找出期別資料夾內所有同名舊檔。
+    media = MediaIoBaseUpload(
+        io.BytesIO(data),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        resumable=False,
+    )
+
     safe_name = output_name.replace("'", "\\'")
-    q = (
+
+    # 2. 先找目前資料夾內、尚未進垃圾桶的同名檔。
+    active_q = (
         f"'{folder_id}' in parents and name = '{safe_name}' "
         "and trashed = false"
     )
     try:
-        existing = drive.files().list(
-            q=q,
+        active = drive.files().list(
+            q=active_q,
             fields="files(id,name,modifiedTime)",
             supportsAllDrives=True,
             includeItemsFromAllDrives=True,
             orderBy="modifiedTime desc",
             pageSize=100,
         ).execute().get("files", [])
-        _elog(f"  匯出 xlsx：找到同名舊檔 {len(existing)} 個")
     except Exception as exc:
         raise RuntimeError(f"查詢同名 xlsx 失敗｜{_detail(exc)}") from exc
 
-    # 3. 有同名檔時，不做永久刪除，直接移至垃圾桶。
-    for item in existing:
+    if active:
+        target = active[0]
+        _elog(f"  匯出 xlsx：找到同名檔，直接覆蓋 {target.get('name', output_name)}（{target.get('id', '')}）")
         try:
-            _elog(
-                f"  匯出 xlsx：將舊檔移至垃圾桶 "
-                f"{item.get('name', output_name)}（{item.get('id', '')}）"
-            )
+            updated = drive.files().update(
+                fileId=target["id"],
+                media_body=media,
+                body={"name": output_name},
+                supportsAllDrives=True,
+                fields="id,name",
+            ).execute()
+            _elog(f"  匯出 xlsx：覆蓋完成 {updated.get('name', output_name)}")
+            return
+        except Exception as exc:
+            raise RuntimeError(f"覆蓋同名 xlsx 失敗（{output_name}）｜{_detail(exc)}") from exc
+
+    # 3. 沒有有效同名檔時，再找是否有先前被移到垃圾桶的同名檔。
+    #    若有，還原後覆蓋；這不需要建立新檔的權限。
+    trashed_q = (
+        f"'{folder_id}' in parents and name = '{safe_name}' "
+        "and trashed = true"
+    )
+    try:
+        trashed = drive.files().list(
+            q=trashed_q,
+            fields="files(id,name,modifiedTime,trashed)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+            orderBy="modifiedTime desc",
+            pageSize=100,
+        ).execute().get("files", [])
+    except Exception:
+        # 某些 Drive 搜尋情境不允許直接查 trashed=true；此時直接走建立新檔。
+        trashed = []
+
+    if trashed:
+        target = trashed[0]
+        _elog(f"  匯出 xlsx：找到垃圾桶內同名檔，還原並覆蓋（{target.get('id', '')}）")
+        try:
+            # 先還原，再覆蓋內容。
             drive.files().update(
-                fileId=item["id"],
-                body={"trashed": True},
+                fileId=target["id"],
+                body={"trashed": False, "name": output_name},
                 supportsAllDrives=True,
                 fields="id,name,trashed",
             ).execute()
-            _elog(
-                f"  匯出 xlsx：舊檔已移至垃圾桶 "
-                f"{item.get('name', output_name)}（{item.get('id', '')}）"
+            # MediaIoBaseUpload 不重複使用，重新建立一次。
+            restore_media = MediaIoBaseUpload(
+                io.BytesIO(data),
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                resumable=False,
             )
+            updated = drive.files().update(
+                fileId=target["id"],
+                media_body=restore_media,
+                supportsAllDrives=True,
+                fields="id,name",
+            ).execute()
+            _elog(f"  匯出 xlsx：還原並覆蓋完成 {updated.get('name', output_name)}")
+            return
         except Exception as exc:
-            raise RuntimeError(
-                f"無法將同名舊 xlsx 移至垃圾桶（{item.get('name', output_name)}）｜{_detail(exc)}。"
-                "請確認執行帳號對該舊檔或共享雲端硬碟具有移至垃圾桶權限。"
-            ) from exc
+            raise RuntimeError(f"還原／覆蓋同名 xlsx 失敗（{output_name}）｜{_detail(exc)}") from exc
 
-    if existing:
-        _elog(f"  匯出 xlsx：同名舊檔已全部移至垃圾桶，共 {len(existing)} 個")
-
-    # 4. 舊檔刪除完成後，再建立全新的同名 xlsx。
-    media = MediaIoBaseUpload(
-        io.BytesIO(data),
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        resumable=False,
-    )
+    # 4. 完全沒有同名檔才建立新檔。
+    _elog(f"  匯出 xlsx：無同名檔，建立新檔 {output_name}")
     try:
         created = drive.files().create(
             body={"name": output_name, "parents": [folder_id]},
@@ -599,7 +651,10 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
         ).execute()
         _elog(f"  匯出 xlsx：新檔建立完成 {created.get('name', output_name)}")
     except Exception as exc:
-        raise RuntimeError(f"建立新 xlsx 失敗（{output_name}）｜{_detail(exc)}") from exc
+        raise RuntimeError(
+            f"建立新 xlsx 失敗（{output_name}）｜{_detail(exc)}。"
+            "若可讀寫既有檔但無法建立新檔，請確認執行帳號對期別資料夾具有新增檔案權限。"
+        ) from exc
 
 
 def _yuanta_nonempty_rows(rows: list[list], width: int = 4) -> list[list]:
