@@ -68,8 +68,13 @@ from modules.period_utils import format_taipei_time, get_current_taipei_time
 TS_FMT = "%Y/%m/%d %H:%M"
 
 DEPOSIT_THRESHOLD = 80    # I 欄 >= 80
-DEPOSIT_TAICHUNG  = 1500
-DEPOSIT_OTHER     = 2000
+DEPOSIT_BY_REGION = {
+    "台北": 2000,
+    "桃園": 2000,
+    "新竹": 2000,
+    "台中": 1500,
+}
+DEPOSIT_OTHER = 2000  # 未列地區沿用既有金額
 INTRO_BONUS       = 1000
 
 TOOL_DEPOSIT_START_ROW = 121   # 場次時數薪資總表：工具包押金資料寫入起始列
@@ -168,7 +173,10 @@ def run_tool_deposit(
             ws_counts.update_cell(1, id_col, cleaning_file_id)
             _log(log, f"  清潔承攬 ID 已寫入場次和時數 {_col_letter(id_col)}1")
 
-            deposit_amount = DEPOSIT_TAICHUNG if "台中" in region else DEPOSIT_OTHER
+            deposit_amount = next(
+                (amount for key, amount in DEPOSIT_BY_REGION.items() if key in region),
+                DEPOSIT_OTHER,
+            )
             dep_count = _tool_process_v2(
                 ws_deposit, ws_summary, ws_intro,
                 deposit_amount, period, log
@@ -450,19 +458,14 @@ def _yuanta_business_day(date_value: datetime.date, region_cfg: dict | None = No
 
 def _yuanta_target_date(period: str, is_first_half: bool, region_cfg: dict | None = None) -> datetime.date:
     """
-    期別 YYYYMM-1：隔月 10 日；期別 YYYYMM-2：當月 20 日。
+    期別 YYYYMM-1：YYYYMM 當月 20 日；期別 YYYYMM-2：YYYYMM 當月 10 日。
     期別月份取自 period，不以程式執行當下日期判斷。
     遇週末／holiday_dates 中的例假日，提前至前一工作日。
     """
     year = int(period[:4])
     month = int(period[4:6])
-    if is_first_half:
-        if month == 12:
-            target = datetime.date(year + 1, 1, 10)
-        else:
-            target = datetime.date(year, month + 1, 10)
-    else:
-        target = datetime.date(year, month, 20)
+    day = 20 if is_first_half else 10
+    target = datetime.date(year, month, day)
     return _yuanta_business_day(target, region_cfg)
 
 
@@ -564,14 +567,14 @@ def run_yuanta(
     上半月：
       1. 場次時數薪資總表 N4:Q -> 元大帳戶「all」A2:D
       2. all 中 C 欄 !=「現金」 -> 「元大」B3:E
-      3. 元大 A 欄 = 隔月 10 日，例假日提前至工作日
+      3. 元大 A 欄 = YYYYMM20（無斜線），若 20 日非工作日則提前至前一工作日
       4. 元大 H 欄 = YYYYMM
       5. 匯出 {period}元大承攬費-{region}.xlsx
 
     下半月：
       1. 場次時數薪資總表 U4:X -> 元大帳戶「all」A2:D
       2. all 中 C 欄 !=「現金」 -> 「元大」B3:E
-      3. 元大 A 欄 = 當月 20 日，例假日提前至工作日
+      3. 元大 A 欄 = YYYYMM10（無斜線），若 10 日非工作日則提前至前一工作日
       4. 元大 H 欄 = YYYYMM
       5. 匯出 {period}元大承攬費-{region}.xlsx
       6. 若場次時數薪資總表 A121 非空白，AB4:AE -> 元大 B4:E，
@@ -639,7 +642,7 @@ def run_yuanta(
             )
             ws_yuanta.update(
                 f"A3:A{end}",
-                [[target_date.strftime("%Y/%m/%d")]] * n,
+                [[target_date.strftime("%Y%m%d")]] * n,
                 value_input_option="USER_ENTERED",
             )
             ws_yuanta.update(
@@ -648,7 +651,7 @@ def run_yuanta(
             _log(
                 log,
                 f"  all C欄≠現金：{n} 筆 -> 元大 B3:E；"
-                f"A欄={target_date:%Y/%m/%d}；H欄={yyyymm}",
+                f"A欄={target_date:%Y%m%d}；H欄={yyyymm}",
             )
         else:
             _log(log, "  all C欄≠現金：0 筆")
