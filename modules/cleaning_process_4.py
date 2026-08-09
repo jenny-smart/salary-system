@@ -458,14 +458,22 @@ def _yuanta_business_day(date_value: datetime.date, region_cfg: dict | None = No
 
 def _yuanta_target_date(period: str, is_first_half: bool, region_cfg: dict | None = None) -> datetime.date:
     """
-    期別 YYYYMM-1：YYYYMM 當月 20 日；期別 YYYYMM-2：YYYYMM 當月 10 日。
-    期別月份取自 period，不以程式執行當下日期判斷。
-    遇週末／holiday_dates 中的例假日，提前至前一工作日。
+    期別 YYYYMM-1：YYYYMM 當月 20 日。
+    期別 YYYYMM-2：隔月 10 日。
+    例如 202607-1 -> 20260720；202607-2 -> 20260810。
+    遇週末／holiday_dates 中的例假日，往前提前至最近工作日。
     """
     year = int(period[:4])
     month = int(period[4:6])
-    day = 20 if is_first_half else 10
-    target = datetime.date(year, month, day)
+
+    if is_first_half:
+        target = datetime.date(year, month, 20)
+    else:
+        if month == 12:
+            target = datetime.date(year + 1, 1, 10)
+        else:
+            target = datetime.date(year, month + 1, 10)
+
     return _yuanta_business_day(target, region_cfg)
 
 
@@ -504,14 +512,12 @@ def _yuanta_find_period_file(root_folder_id: str, period: str, file_name: str) -
 
 
 def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, log: List[str] | None = None) -> None:
-    """將 Google 試算表匯出成指定檔名的 xlsx，存回期別資料夾。
+    """將 Google 試算表匯出 xlsx，並由 Jenny OAuth 寫入期別資料夾。
 
-    規則：
-      - 若期別資料夾已有同名有效檔案：直接覆蓋該檔內容，不刪除、不重建。
-      - 若同名檔先前被移到垃圾桶：還原該檔並覆蓋內容，避免因沒有 create 權限而失敗。
-      - 若完全沒有同名檔：才建立新檔。
+    Service Account 只負責 export 原始 Google Sheet；
+    搜尋／覆蓋／建立 xlsx 一律使用 Jenny OAuth，避免 Service Account storageQuotaExceeded。
     """
-    from modules.auth import get_drive_service
+    from modules.auth import get_drive_service, get_jenny_drive_service
     from googleapiclient.http import MediaIoBaseUpload
 
     def _elog(message: str) -> None:
@@ -519,12 +525,10 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
             _log(log, message)
 
     def _detail(exc: Exception) -> str:
-        """完整展開 Google API 錯誤，避免只看到空白 HttpError。"""
         parts = [type(exc).__name__]
         text = str(exc).strip()
         if text:
             parts.append(text)
-
         resp = getattr(exc, "resp", None)
         if resp is not None:
             status = getattr(resp, "status", None)
@@ -533,7 +537,6 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
                 parts.append(f"HTTP status={status}")
             if reason:
                 parts.append(f"HTTP reason={reason}")
-
         content = getattr(exc, "content", None)
         if content:
             try:
@@ -542,20 +545,25 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
                     parts.append(f"API content={decoded.strip()}")
             except Exception:
                 parts.append(f"API content={content!r}")
-
-        # googleapiclient.errors.HttpError 常可從 error_details 取得 reason/message。
         details = getattr(exc, "error_details", None)
         if details:
             parts.append(f"error_details={details}")
-
         return " | ".join(parts)
 
-    drive = get_drive_service()
+    source_drive = get_drive_service()          # Service Account: 只下載既有 Google Sheet
+    drive = get_jenny_drive_service()           # Jenny OAuth: 搜尋/覆蓋/建立實體 xlsx
 
-    # 1. 先從 Google 試算表下載目前內容；下載完成後直接以 output_name 存入 Drive。
+    try:
+        about = drive.about().get(fields="user").execute()
+        user = about.get("user", {}) or {}
+        identity = user.get("emailAddress") or user.get("displayName") or "未知"
+        _elog(f"  xlsx 寫入身分（Jenny OAuth）：{identity}")
+    except Exception as exc:
+        raise RuntimeError(f"Jenny OAuth Drive 驗證失敗｜{_detail(exc)}") from exc
+
     try:
         _elog(f"  匯出 xlsx：下載並準備存成 {output_name}")
-        request = drive.files().export_media(
+        request = source_drive.files().export_media(
             fileId=spreadsheet_id,
             mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
@@ -564,22 +572,14 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
     except Exception as exc:
         raise RuntimeError(f"匯出 Google 試算表失敗｜{_detail(exc)}") from exc
 
-    media = MediaIoBaseUpload(
-        io.BytesIO(data),
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        resumable=False,
-    )
-
     safe_name = output_name.replace("'", "\\'")
-
-    # 2. 先找目前資料夾內、尚未進垃圾桶的同名檔。
-    active_q = (
+    q = (
         f"'{folder_id}' in parents and name = '{safe_name}' "
         "and trashed = false"
     )
     try:
         active = drive.files().list(
-            q=active_q,
+            q=q,
             fields="files(id,name,modifiedTime)",
             supportsAllDrives=True,
             includeItemsFromAllDrives=True,
@@ -587,11 +587,16 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
             pageSize=100,
         ).execute().get("files", [])
     except Exception as exc:
-        raise RuntimeError(f"查詢同名 xlsx 失敗｜{_detail(exc)}") from exc
+        raise RuntimeError(f"Jenny OAuth 查詢同名 xlsx 失敗｜{_detail(exc)}") from exc
 
     if active:
         target = active[0]
-        _elog(f"  匯出 xlsx：找到同名檔，直接覆蓋 {target.get('name', output_name)}（{target.get('id', '')}）")
+        _elog(f"  匯出 xlsx：找到同名檔，Jenny OAuth 直接覆蓋 {target.get('name', output_name)}")
+        media = MediaIoBaseUpload(
+            io.BytesIO(data),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            resumable=False,
+        )
         try:
             updated = drive.files().update(
                 fileId=target["id"],
@@ -603,92 +608,25 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
             _elog(f"  匯出 xlsx：覆蓋完成 {updated.get('name', output_name)}")
             return
         except Exception as exc:
-            raise RuntimeError(f"覆蓋同名 xlsx 失敗（{output_name}）｜{_detail(exc)}") from exc
+            raise RuntimeError(f"Jenny OAuth 覆蓋同名 xlsx 失敗（{output_name}）｜{_detail(exc)}") from exc
 
-    # 3. 沒有有效同名檔時，再找是否有先前被移到垃圾桶的同名檔。
-    #    不限制 parent，避免檔案進垃圾桶後因父層查詢條件而找不到。
-    #    若有，還原後覆蓋；這不需要建立新檔的權限。
-    trashed_q = (
-        f"name = '{safe_name}' and trashed = true"
-    )
-    try:
-        trashed = drive.files().list(
-            q=trashed_q,
-            fields="files(id,name,modifiedTime,trashed,parents)",
-            supportsAllDrives=True,
-            includeItemsFromAllDrives=True,
-            orderBy="modifiedTime desc",
-            pageSize=100,
-        ).execute().get("files", [])
-    except Exception:
-        # 某些 Drive 搜尋情境不允許直接查 trashed=true；此時直接走建立新檔。
-        trashed = []
-
-    if trashed:
-        target = trashed[0]
-        _elog(f"  匯出 xlsx：找到垃圾桶內同名檔，直接還原並覆蓋（{target.get('id', '')}）")
-        try:
-            # 先還原，再覆蓋內容。
-            drive.files().update(
-                fileId=target["id"],
-                body={"trashed": False, "name": output_name},
-                supportsAllDrives=True,
-                fields="id,name,trashed",
-            ).execute()
-            # MediaIoBaseUpload 不重複使用，重新建立一次。
-            restore_media = MediaIoBaseUpload(
-                io.BytesIO(data),
-                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                resumable=False,
-            )
-            updated = drive.files().update(
-                fileId=target["id"],
-                media_body=restore_media,
-                supportsAllDrives=True,
-                fields="id,name",
-            ).execute()
-            _elog(f"  匯出 xlsx：還原並覆蓋完成 {updated.get('name', output_name)}")
-            return
-        except Exception as exc:
-            raise RuntimeError(f"還原／覆蓋同名 xlsx 失敗（{output_name}）｜{_detail(exc)}") from exc
-
-    # 4. 完全沒有同名檔才建立新檔。
-    #    建立前先把「目前 API 身分」與「目標資料夾 capabilities」寫入 log，
-    #    讓 create 失敗時可以直接判斷是權限、Shared Drive 或 Service Account 儲存空間限制。
-    _elog(f"  匯出 xlsx：無同名檔，建立新檔 {output_name}")
-
-    try:
-        about = drive.about().get(fields="user").execute()
-        user = about.get("user", {}) or {}
-        identity = user.get("emailAddress") or user.get("displayName") or "未知"
-        _elog(f"  Drive API 執行身分：{identity}")
-    except Exception as exc:
-        _elog(f"  ⚠️ 無法取得 Drive API 執行身分：{_detail(exc)}")
-
+    _elog(f"  匯出 xlsx：無同名檔，Jenny OAuth 建立新檔 {output_name}")
     try:
         folder_meta = drive.files().get(
             fileId=folder_id,
-            fields=(
-                "id,name,mimeType,driveId,parents,trashed,"
-                "capabilities(canAddChildren,canEdit,canTrashChildren,canDeleteChildren)"
-            ),
+            fields="id,name,driveId,capabilities(canAddChildren,canEdit)",
             supportsAllDrives=True,
         ).execute()
         caps = folder_meta.get("capabilities", {}) or {}
         _elog(
-            "  目標期別資料夾："
-            f"name={folder_meta.get('name','')}；id={folder_meta.get('id',folder_id)}；"
-            f"driveId={folder_meta.get('driveId','MyDrive/無')}；"
-            f"canAddChildren={caps.get('canAddChildren')}；"
-            f"canEdit={caps.get('canEdit')}；"
-            f"canTrashChildren={caps.get('canTrashChildren')}；"
-            f"canDeleteChildren={caps.get('canDeleteChildren')}"
+            f"  Jenny OAuth 目標資料夾：name={folder_meta.get('name','')}；"
+            f"id={folder_meta.get('id',folder_id)}；driveId={folder_meta.get('driveId','MyDrive/無')}；"
+            f"canAddChildren={caps.get('canAddChildren')}；canEdit={caps.get('canEdit')}"
         )
     except Exception as exc:
-        _elog(f"  ⚠️ 無法取得期別資料夾權限資訊：{_detail(exc)}")
+        _elog(f"  ⚠️ Jenny OAuth 無法取得目標資料夾資訊：{_detail(exc)}")
 
-    # MediaIoBaseUpload 可能已被前面的 update 嘗試讀取過；create 前重新建立最保險。
-    create_media = MediaIoBaseUpload(
+    media = MediaIoBaseUpload(
         io.BytesIO(data),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         resumable=False,
@@ -696,19 +634,13 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
     try:
         created = drive.files().create(
             body={"name": output_name, "parents": [folder_id]},
-            media_body=create_media,
+            media_body=media,
             fields="id,name,parents,driveId",
             supportsAllDrives=True,
         ).execute()
-        _elog(
-            f"  匯出 xlsx：新檔建立完成 {created.get('name', output_name)} "
-            f"（id={created.get('id','')}）"
-        )
+        _elog(f"  匯出 xlsx：Jenny OAuth 新檔建立完成 {created.get('name', output_name)}")
     except Exception as exc:
-        raise RuntimeError(
-            f"建立新 xlsx 失敗（{output_name}）｜{_detail(exc)}"
-        ) from exc
-
+        raise RuntimeError(f"Jenny OAuth 建立新 xlsx 失敗（{output_name}）｜{_detail(exc)}") from exc
 
 def _yuanta_nonempty_rows(rows: list[list], width: int = 4) -> list[list]:
     """保留至少一格有值的資料列，並補齊固定欄數。"""
