@@ -55,6 +55,16 @@ def _name_key(value) -> str:
     )
 
 
+def _to_num(value) -> float:
+    """安全轉數字；空白或無法解析時回傳 0。"""
+    if value is None or value == "":
+        return 0.0
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return 0.0
+
+
 # ──────────────────────────────────────────────────────────────
 # 找清潔承攬檔案
 # ──────────────────────────────────────────────────────────────
