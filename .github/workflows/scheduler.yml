@@ -1,6 +1,7 @@
 name: Lemon Clean 期別排程
 
 on:
+  # 手動執行
   workflow_dispatch:
     inputs:
       period:
@@ -14,52 +15,92 @@ on:
         default: ""
 
       action:
-        description: "執行功能，例如 create_period"
+        description: "執行功能"
         required: false
+        type: choice
         default: "create_period"
+        options:
+          - create_period
+
+  # 台灣時間每月 10 日、25 日上午 09:00
+  # GitHub Actions cron 使用 UTC，因此寫成凌晨 01:00
+  schedule:
+    - cron: "0 1 10,25 * *"
 
 jobs:
   run-scheduler:
+    name: 建立期別資料夾
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run scheduler
+      - name: Run period scheduler
+        shell: bash
         env:
+          # Google 驗證
+          JENNY_GOOGLE_TOKEN: ${{ secrets.JENNY_GOOGLE_TOKEN }}
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
-          NOTIFY_EMAIL:           ${{ secrets.NOTIFY_EMAIL }}
+
+          # LINE 通知
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
-          LINE_USER_ID:              ${{ secrets.LINE_USER_ID }}
-          FORCE_PERIOD:           ${{ github.event.inputs.period }}
-          FORCE_REGION:           ${{ github.event.inputs.region }}
-          FORCE_ACTION:           ${{ github.event.inputs.action }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+
+          # Email 通知
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+
+          # 手動執行參數；自動排程時這些值會是空白
+          FORCE_PERIOD: ${{ github.event.inputs.period }}
+          FORCE_REGION: ${{ github.event.inputs.region }}
+          FORCE_ACTION: ${{ github.event.inputs.action }}
+
         run: |
-          CMD="python -m modules.scheduler_service --force"
+          set -Eeuo pipefail
 
-          if [ -n "$FORCE_PERIOD" ]; then
-            CMD="$CMD --period $FORCE_PERIOD"
+          ACTION="${FORCE_ACTION:-create_period}"
+
+          CMD=(
+            python
+            -m
+            modules.scheduler_service
+            --force
+            --action
+            "$ACTION"
+          )
+
+          if [[ -n "${FORCE_PERIOD:-}" ]]; then
+            CMD+=(--period "$FORCE_PERIOD")
           fi
 
-          if [ -n "$FORCE_REGION" ]; then
-            CMD="$CMD --region $FORCE_REGION"
+          if [[ -n "${FORCE_REGION:-}" ]]; then
+            CMD+=(--region "$FORCE_REGION")
           fi
 
-          if [ -n "$FORCE_ACTION" ]; then
-            CMD="$CMD --action $FORCE_ACTION"
+          echo "執行功能：$ACTION"
+
+          if [[ -n "${FORCE_PERIOD:-}" ]]; then
+            echo "指定期別：$FORCE_PERIOD"
+          else
+            echo "指定期別：自動判斷"
           fi
 
-          echo "Execute: $CMD"
-          eval "$CMD"
+          if [[ -n "${FORCE_REGION:-}" ]]; then
+            echo "指定地區：$FORCE_REGION"
+          else
+            echo "指定地區：全部地區"
+          fi
+
+          "${CMD[@]}"
