@@ -163,9 +163,35 @@ def _append_project_people_to_summary(
     ws_project_salary: gspread.Worksheet,
     log: List[str],
 ) -> list[int]:
-    """把專案薪資表有金額的人員追加到總表 A 欄，並寫入專案 D/E 公式。"""
-    last_col = _col_letter(ws_project_salary.col_count)
-    headers = ws_project_salary.get(f"L1:{last_col}1") or [[]]
+    """把專案薪資表有金額的人員追加到總表 A 欄，並寫入專案 D/E 公式。
+
+    專案薪資表若尚未建立到第 2046 列，代表目前沒有可供結算的
+    2045/2046 薪資結果列；此時直接略過專案人員，不讓整個結算失敗。
+    """
+    if ws_project_salary.row_count < 2046:
+        _log(
+            log,
+            f"    ⚠️ 專案薪資表目前只有 {ws_project_salary.row_count} 列，"
+            "未達 2046 列，略過專案人員結算"
+        )
+        return []
+
+    # 不使用 worksheet.col_count 判斷最後欄，因工作表網格欄數不一定等於
+    # 實際人員名單的最後欄。改以第 1 列最後一個非空白儲存格判斷。
+    header_row = ws_project_salary.row_values(1)
+    last_header_idx = 0
+    for idx, value in enumerate(header_row, start=1):
+        if str(value).strip():
+            last_header_idx = idx
+
+    if last_header_idx < 12:  # L=12
+        _log(log, "    專案薪資表第 1 列 L 欄之後無人員資料")
+        return []
+
+    last_col = _col_letter(last_header_idx)
+    headers = [header_row[11:last_header_idx]]  # L1 到第 1 列最後非空白欄
+    _log(log, f"    專案薪資表人員欄範圍：L1:{last_col}1")
+
     row_2045 = ws_project_salary.get(
         f"L2045:{last_col}2045", value_render_option="UNFORMATTED_VALUE"
     ) or [[]]
