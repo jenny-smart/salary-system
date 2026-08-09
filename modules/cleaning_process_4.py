@@ -284,24 +284,57 @@ def _tool_process_v2(
     else:
         _log(log, "  工具包押金無符合資料；A1:B120 完全不變更")
 
-    # AB/AC 由 H 姓名比對 I/J；AD 押金、AE 姓名。
-    # 這區仍供後續元大工具包押金檔使用。
+    # 元大工具包押金區：
+    #   AD = 押金金額
+    #   AE = 工具包押金姓名
+    #   AB/AC = 以同列 AE 姓名去比對 H 欄姓名，取該列 I/J。
+    # 例如 AE4=潘玟均，若 H73=潘玟均，則 AB4=I73、AC4=J73。
+    # 這裡只處理 AB:AE，不改動 H:J 或其他既有資料。
     ws_summary.batch_clear(["AB4:AE120"])
-    hij = ws_summary.get("H4:J120") or []
-    account = {
-        str(r[0]).strip(): (
-            r[1] if len(r) > 1 else "", r[2] if len(r) > 2 else ""
-        )
-        for r in hij if r and str(r[0]).strip()
-    }
-    output = []
-    for name, _i_value in selected:
-        i_val, j_val = account.get(name, ("", ""))
-        output.append([i_val, j_val, deposit_amount, name])
-    if output:
+
+    if selected:
+        n = len(selected)
+        end = 3 + n
+
+        # 先固定寫入 AD/AE，之後 AB/AC 一律以 AE 的實際內容為比對依據。
         ws_summary.update(
-            f"AB4:AE{3 + len(output)}", output, value_input_option="USER_ENTERED"
+            f"AD4:AE{end}",
+            [[deposit_amount, name] for name, _i_value in selected],
+            value_input_option="USER_ENTERED",
         )
+
+        hij = ws_summary.get("H4:J120") or []
+        account = {}
+        for r in hij:
+            if not r:
+                continue
+            h_name = str(r[0]).strip() if len(r) > 0 else ""
+            if not h_name:
+                continue
+            i_val = r[1] if len(r) > 1 else ""
+            j_val = r[2] if len(r) > 2 else ""
+            account[h_name] = (i_val, j_val)
+
+        ae_values = ws_summary.get(f"AE4:AE{end}") or []
+        ab_ac = []
+        missing = []
+        for offset in range(n):
+            ae_name = (
+                str(ae_values[offset][0]).strip()
+                if offset < len(ae_values) and ae_values[offset]
+                else ""
+            )
+            i_val, j_val = account.get(ae_name, ("", ""))
+            ab_ac.append([i_val, j_val])
+            if ae_name and ae_name not in account:
+                missing.append(ae_name)
+
+        ws_summary.update(
+            f"AB4:AC{end}", ab_ac, value_input_option="USER_ENTERED"
+        )
+        _log(log, f"  AB/AC 已依 AE 姓名比對 H 欄並帶入 I/J：{n} 筆")
+        if missing:
+            _log(log, "  ⚠️ H欄找不到姓名：" + "、".join(missing))
 
     _log(log, f"  工具包押金回填完成：{len(selected)} 筆，寫入起始列 A{append_start}")
     return len(selected)
