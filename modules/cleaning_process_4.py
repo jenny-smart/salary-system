@@ -506,9 +506,11 @@ def _yuanta_find_period_file(root_folder_id: str, period: str, file_name: str) -
 def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, log: List[str] | None = None) -> None:
     """將 Google 試算表匯出 xlsx，存回期別資料夾。
 
-    若同名 xlsx 已存在，不再先刪除（Shared Drive 常無刪除權限），
-    而是直接以 Drive files.update() 覆蓋該檔案內容。
-    若不存在才建立新檔。
+    若期別資料夾內已有相同檔名：
+      1. 先刪除所有同名舊 xlsx。
+      2. 確認刪除完成後，再建立全新的同名 xlsx。
+
+    若刪除失敗，流程直接停止，不會用 update 覆蓋，也不會建立重複檔名。
     """
     from modules.auth import get_drive_service
     from googleapiclient.http import MediaIoBaseUpload
@@ -525,6 +527,7 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
 
     drive = get_drive_service()
 
+    # 1. 先下載目前 Google 試算表內容。
     try:
         _elog(f"  匯出 xlsx：開始下載 Google 試算表 -> {output_name}")
         request = drive.files().export_media(
@@ -536,6 +539,7 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
     except Exception as exc:
         raise RuntimeError(f"匯出 Google 試算表失敗｜{_detail(exc)}") from exc
 
+    # 2. 找出期別資料夾內所有同名舊檔。
     safe_name = output_name.replace("'", "\\'")
     q = (
         f"'{folder_id}' in parents and name = '{safe_name}' "
@@ -548,37 +552,34 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
             supportsAllDrives=True,
             includeItemsFromAllDrives=True,
             orderBy="modifiedTime desc",
-            pageSize=20,
+            pageSize=100,
         ).execute().get("files", [])
         _elog(f"  匯出 xlsx：找到同名舊檔 {len(existing)} 個")
     except Exception as exc:
         raise RuntimeError(f"查詢同名 xlsx 失敗｜{_detail(exc)}") from exc
 
+    # 3. 有同名檔時，先全部刪除；任一筆刪除失敗即停止。
+    for item in existing:
+        try:
+            _elog(f"  匯出 xlsx：刪除舊檔 {item.get('name', output_name)}（{item.get('id', '')}）")
+            drive.files().delete(
+                fileId=item["id"],
+                supportsAllDrives=True,
+            ).execute()
+        except Exception as exc:
+            raise RuntimeError(
+                f"刪除同名舊 xlsx 失敗（{item.get('name', output_name)}）｜{_detail(exc)}"
+            ) from exc
+
+    if existing:
+        _elog(f"  匯出 xlsx：同名舊檔已全部刪除，共 {len(existing)} 個")
+
+    # 4. 舊檔刪除完成後，再建立全新的同名 xlsx。
     media = MediaIoBaseUpload(
         io.BytesIO(data),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         resumable=False,
     )
-
-    if existing:
-        # 不刪檔，直接更新最新一個同名 xlsx 的內容。
-        target = existing[0]
-        try:
-            updated = drive.files().update(
-                fileId=target["id"],
-                media_body=media,
-                fields="id,name,modifiedTime",
-                supportsAllDrives=True,
-            ).execute()
-            _elog(f"  匯出 xlsx：已覆蓋同名舊檔 {updated.get('name', output_name)}")
-            if len(existing) > 1:
-                _elog(f"  ⚠️ 同名 xlsx 共 {len(existing)} 個；已覆蓋最新一個，其餘不刪除以避免權限錯誤")
-            return
-        except Exception as exc:
-            raise RuntimeError(
-                f"覆蓋同名 xlsx 失敗（{target.get('name', output_name)}）｜{_detail(exc)}"
-            ) from exc
-
     try:
         created = drive.files().create(
             body={"name": output_name, "parents": [folder_id]},
@@ -586,9 +587,9 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
             fields="id,name",
             supportsAllDrives=True,
         ).execute()
-        _elog(f"  匯出 xlsx：新檔上傳完成 {created.get('name', output_name)}")
+        _elog(f"  匯出 xlsx：新檔建立完成 {created.get('name', output_name)}")
     except Exception as exc:
-        raise RuntimeError(f"上傳 xlsx 至期別資料夾失敗｜{_detail(exc)}") from exc
+        raise RuntimeError(f"建立新 xlsx 失敗（{output_name}）｜{_detail(exc)}") from exc
 
 
 def _yuanta_nonempty_rows(rows: list[list], width: int = 4) -> list[list]:
@@ -652,7 +653,7 @@ def run_yuanta(
 
     承攬費流程：
       1. 清潔承攬：-1 取 N4:Q；-2 取 U4:X -> all!A2:D
-      2. 其他承攬：從「薪資總表」取相同期別範圍，接在 all 的最後一筆非空白列之後
+      2. 其他承攬：從「薪資總表」-1 取 N3:Q；-2 取 U3:X，接在 all 的最後一筆非空白列之後
       3. all C 欄必須非空白且不等於「現金」 -> 元大!B3:E
       4. 元大 A 欄：-1=YYYYMM20；-2=YYYYMM10；非工作日往前移
       5. 元大 H 欄 = YYYYMM
@@ -690,6 +691,7 @@ def run_yuanta(
         _log(log, f"  找到元大帳戶檔案：{yuanta_name}")
 
         source_range = "N4:Q" if is_first_half else "U4:X"
+        other_source_range = "N3:Q" if is_first_half else "U3:X"
 
         # 1) 清潔承攬先放 all A2:D
         cleaning_rows = _yuanta_nonempty_rows(
@@ -712,7 +714,7 @@ def run_yuanta(
         other_ss = gc.open_by_key(other_file_id)
         other_ws = other_ss.worksheet("薪資總表")
         other_rows = _yuanta_nonempty_rows(
-            other_ws.get(source_range, value_render_option="UNFORMATTED_VALUE") or []
+            other_ws.get(other_source_range, value_render_option="UNFORMATTED_VALUE") or []
         )
         if other_rows:
             other_start = next_row
@@ -725,10 +727,10 @@ def run_yuanta(
             next_row = other_end + 1
             _log(
                 log,
-                f"  其他承攬 {source_range} -> all!A{other_start}:D{other_end}，共 {len(other_rows)} 筆",
+                f"  其他承攬 {other_source_range} -> all!A{other_start}:D{other_end}，共 {len(other_rows)} 筆",
             )
         else:
-            _log(log, f"  其他承攬 {source_range} 無有效資料")
+            _log(log, f"  其他承攬 {other_source_range} 無有效資料")
 
         all_rows = cleaning_rows + other_rows
         if all_rows:
