@@ -1,6 +1,6 @@
 """
 modules/payment_reconciliation.py
-金流對帳模組  v2026-08a
+金流對帳模組  v2026-08c-oauth
 
 流程：
 上半月 / 下半月：
@@ -81,13 +81,11 @@ def _find_sheet_by_keyword(folder_id: str, keyword: str) -> str | None:
 # ═══════════════════════════════════════════════════════════════
 
 def create_period(root_folder_id: str, period: str, region_name: str, log_fn=None) -> dict:
-    """使用 OAuth Drive API 建立期別資料夾並複製四個期別檔案。"""
+    """使用 auth.py 提供的使用者 OAuth 建立期別資料夾與檔案。"""
     if log_fn:
         log_fn(f"🔄 Python + OAuth 建立期別：{period}")
 
-    drive = get_drive_service()
     return create_period_folder_and_files(
-        drive,
         root_folder_id,
         period,
         region_name,
@@ -100,13 +98,11 @@ def create_period(root_folder_id: str, period: str, region_name: str, log_fn=Non
 # ═══════════════════════════════════════════════════════════════
 
 def convert_order_file(root_folder_id: str, period: str, region_name: str, log_fn=None) -> dict:
-    """使用 OAuth Drive API 將期別訂單檔轉成 Google 試算表。"""
+    """使用 auth.py 提供的使用者 OAuth 將訂單檔轉成 Google 試算表。"""
     if log_fn:
         log_fn(f"🔄 Python + OAuth 轉檔：{period}訂單-{region_name}")
 
-    drive = get_drive_service()
     return convert_period_order_file(
-        drive,
         root_folder_id,
         period,
         region_name,
@@ -119,13 +115,11 @@ def convert_order_file(root_folder_id: str, period: str, region_name: str, log_f
 # ═══════════════════════════════════════════════════════════════
 
 def convert_payment_file(root_folder_id: str, period: str, region_name: str, log_fn=None) -> dict:
-    """使用 OAuth Drive API 轉換退款、預收、發票與藍新相關檔案。"""
+    """使用 auth.py 提供的使用者 OAuth 轉換金流相關檔案。"""
     if log_fn:
         log_fn(f"🔄 Python + OAuth 金流對帳轉檔：{period}")
 
-    drive = get_drive_service()
     return convert_payment_files(
-        drive,
         root_folder_id,
         period,
         region_name,
