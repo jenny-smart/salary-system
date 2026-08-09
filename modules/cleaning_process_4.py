@@ -504,9 +504,11 @@ def _yuanta_find_period_file(root_folder_id: str, period: str, file_name: str) -
 
 
 def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, log: List[str] | None = None) -> None:
-    """將 Google 試算表匯出 xlsx，存回期別資料夾；同名舊檔先移除。
+    """將 Google 試算表匯出 xlsx，存回期別資料夾。
 
-    每一個 Drive 動作分段記錄，方便定位 export / 查舊檔 / 刪舊檔 / 上傳哪一步失敗。
+    若同名 xlsx 已存在，不再先刪除（Shared Drive 常無刪除權限），
+    而是直接以 Drive files.update() 覆蓋該檔案內容。
+    若不存在才建立新檔。
     """
     from modules.auth import get_drive_service
     from googleapiclient.http import MediaIoBaseUpload
@@ -542,40 +544,49 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
     try:
         existing = drive.files().list(
             q=q,
-            fields="files(id,name)",
+            fields="files(id,name,modifiedTime)",
             supportsAllDrives=True,
             includeItemsFromAllDrives=True,
+            orderBy="modifiedTime desc",
             pageSize=20,
         ).execute().get("files", [])
         _elog(f"  匯出 xlsx：找到同名舊檔 {len(existing)} 個")
     except Exception as exc:
         raise RuntimeError(f"查詢同名 xlsx 失敗｜{_detail(exc)}") from exc
 
-    for item in existing:
+    media = MediaIoBaseUpload(
+        io.BytesIO(data),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        resumable=False,
+    )
+
+    if existing:
+        # 不刪檔，直接更新最新一個同名 xlsx 的內容。
+        target = existing[0]
         try:
-            drive.files().delete(
-                fileId=item["id"], supportsAllDrives=True
+            updated = drive.files().update(
+                fileId=target["id"],
+                media_body=media,
+                fields="id,name,modifiedTime",
+                supportsAllDrives=True,
             ).execute()
-            _elog(f"  匯出 xlsx：已刪除舊檔 {item.get('name', output_name)}")
+            _elog(f"  匯出 xlsx：已覆蓋同名舊檔 {updated.get('name', output_name)}")
+            if len(existing) > 1:
+                _elog(f"  ⚠️ 同名 xlsx 共 {len(existing)} 個；已覆蓋最新一個，其餘不刪除以避免權限錯誤")
+            return
         except Exception as exc:
-            # Shared Drive 或權限不足時，刪除可能失敗。不要留下空白錯誤訊息。
             raise RuntimeError(
-                f"刪除同名舊 xlsx 失敗（{item.get('name', output_name)}）｜{_detail(exc)}"
+                f"覆蓋同名 xlsx 失敗（{target.get('name', output_name)}）｜{_detail(exc)}"
             ) from exc
 
     try:
-        media = MediaIoBaseUpload(
-            io.BytesIO(data),
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            resumable=False,
-        )
         created = drive.files().create(
             body={"name": output_name, "parents": [folder_id]},
             media_body=media,
             fields="id,name",
             supportsAllDrives=True,
         ).execute()
-        _elog(f"  匯出 xlsx：上傳完成 {created.get('name', output_name)}")
+        _elog(f"  匯出 xlsx：新檔上傳完成 {created.get('name', output_name)}")
     except Exception as exc:
         raise RuntimeError(f"上傳 xlsx 至期別資料夾失敗｜{_detail(exc)}") from exc
 
