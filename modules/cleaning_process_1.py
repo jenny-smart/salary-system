@@ -765,44 +765,143 @@ def _adj_import_salary_aa_af(
 def _adj_convert_to_values(
     ws_adjust: gspread.Worksheet,
     log: List[str],
+    timeout: int = 90,
 ) -> int:
     """
-    等待 S3 有值後，將 S3:AL 整段轉為靜態值。
-    回傳有效列數（S 欄非空白列數）。
-    S = col 19，AL = col 38。
+    等待 S3:W、Y3:AF、AG3:AL 三區 IMPORTRANGE 全部成功且穩定後，
+    才將 S3:AL 本次有效資料轉為靜態值；轉值完成並驗證成功後才回傳列數。
+
+    安全規則：
+    1. S3 / Y3 / AG3 不可為空或試算表錯誤。
+    2. S 欄有效員工列數需連續兩次一致，視為 spill 已穩定。
+    3. S3:AL 有任何 #REF! / #N/A / Loading... 等錯誤時不轉值。
+    4. 轉值後重新讀取，確認無錯誤且已無公式，才允許後續步驟執行。
+    5. timeout 時直接失敗，保留公式供人工檢查，不執行後續流程。
     """
-    # 等待 S3 有值（最多 30 秒）
-    deadline = time.time() + 30
+    error_tokens = (
+        "#REF!", "#N/A", "#VALUE!", "#ERROR!",
+        "#NAME?", "#NUM!", "#DIV/0!", "LOADING",
+    )
+
+    def _is_error(value) -> bool:
+        text = str(value or "").strip().upper()
+        return any(token in text for token in error_tokens)
+
+    deadline = time.time() + timeout
+    stable_count = 0
+    previous_rows = None
+    num_rows = 0
+    end_row = 0
+
     while time.time() < deadline:
-        v = ws_adjust.acell("S3").value
-        if v and str(v).strip():
+        checkpoints = {
+            "S3": ws_adjust.acell("S3").value,
+            "Y3": ws_adjust.acell("Y3").value,
+            "AG3": ws_adjust.acell("AG3").value,
+        }
+        waiting = [
+            f"{cell}={value or '空白'}"
+            for cell, value in checkpoints.items()
+            if not str(value or "").strip() or _is_error(value)
+        ]
+        if waiting:
+            _log(log, "    等待調薪匯入：" + "、".join(waiting))
+            stable_count = 0
+            time.sleep(2)
+            continue
+
+        # 以 S 欄連續資料判斷本次有效員工列數。
+        s_vals = ws_adjust.get("S3:S300") or []
+        num_rows = 0
+        for row in s_vals:
+            value = row[0] if row else ""
+            if not str(value).strip() or _is_error(value):
+                break
+            num_rows += 1
+
+        if num_rows <= 0:
+            stable_count = 0
+            time.sleep(2)
+            continue
+
+        end_row = 2 + num_rows
+
+        # 三個匯入區及中間欄位全部檢查，任何錯誤都禁止轉值。
+        block = ws_adjust.get(f"S3:AL{end_row}") or []
+        errors = []
+        for r_off, row in enumerate(block):
+            for c_off, value in enumerate(row):
+                if _is_error(value):
+                    errors.append((3 + r_off, 19 + c_off, value))
+        if errors:
+            sample = ", ".join(
+                f"{_col_letter(col)}{row}={value}"
+                for row, col, value in errors[:3]
+            )
+            _log(log, f"    等待調薪匯入：仍有 {len(errors)} 格錯誤（{sample}）")
+            stable_count = 0
+            time.sleep(2)
+            continue
+
+        if previous_rows == num_rows:
+            stable_count += 1
+        else:
+            previous_rows = num_rows
+            stable_count = 1
+
+        if stable_count >= 2:
             break
+
+        _log(log, f"    調薪匯入已讀到 {num_rows} 列，確認資料穩定中")
         time.sleep(2)
     else:
-        _log(log, "    ⚠️ 等待逾時，S3 仍為空")
+        raise TimeoutError(
+            f"00調薪 IMPORTRANGE 在 {timeout} 秒內未完成，"
+            "已停止流程且未轉靜態值"
+        )
 
-    # 找有效列數
-    s_vals   = ws_adjust.col_values(19)  # S 欄
-    num_rows = 0
-    for i in range(2, len(s_vals)):      # index 0=列1, 1=列2, 2=列3...
-        if str(s_vals[i]).strip():
-            num_rows = i - 1             # 相對第 3 列的偏移數
-        else:
-            break
-
-    if num_rows == 0:
-        _log(log, "    ⚠️ S3:S 無有效資料")
-        return 0
-
-    end_row = 2 + num_rows               # row 3 = index 2, end = 2 + num_rows
-    # 必須讀取試算表的原始型別；預設會取回格式化文字，
-    # 再用 RAW 寫回時會把 340 之類的數值存成文字（顯示為 '340）。
+    # 轉值前最後一次以原始型別讀取，避免把格式化數字轉成文字。
     data = ws_adjust.get(
         f"S3:AL{end_row}",
         value_render_option="UNFORMATTED_VALUE",
     ) or []
-    ws_adjust.update(f"S3:AL{end_row}", data, value_input_option="RAW")
-    _log(log, f"    S3:AL 轉靜態值完成（{num_rows} 列）")
+    if not data:
+        raise RuntimeError("00調薪匯入資料為空，已停止轉靜態值")
+    if any(_is_error(value) for row in data for value in row):
+        raise RuntimeError("00調薪轉值前仍有錯誤，已停止流程")
+
+    ws_adjust.update(
+        f"S3:AL{end_row}",
+        data,
+        value_input_option="RAW",
+    )
+    time.sleep(2)
+
+    # 轉值後驗證：不可有錯誤，且不可殘留公式。
+    verify_values = ws_adjust.get(
+        f"S3:AL{end_row}",
+        value_render_option="UNFORMATTED_VALUE",
+    ) or []
+    if any(_is_error(value) for row in verify_values for value in row):
+        raise RuntimeError("00調薪轉靜態值後仍有錯誤，已停止後續流程")
+
+    verify_formulas = ws_adjust.get(
+        f"S3:AL{end_row}",
+        value_render_option="FORMULA",
+    ) or []
+    formula_cells = [
+        value
+        for row in verify_formulas
+        for value in row
+        if str(value or "").lstrip().startswith("=")
+    ]
+    if formula_cells:
+        raise RuntimeError(
+            f"00調薪轉靜態值驗證失敗：仍有 {len(formula_cells)} 格公式，"
+            "已停止後續流程"
+        )
+
+    _log(log, f"    ✅ S3:AL 轉靜態值並驗證完成（{num_rows} 列）")
     return num_rows
 
 
