@@ -788,11 +788,11 @@ def run_yuanta(
                 ws_all, f"A2:D{1 + len(all_rows)}", all_rows, log
             )
 
-        # 3) C 欄：排除空白與「現金」
+        # 3) B 欄：排除空白與「現金」
         bank_rows = []
         for row in all_rows:
-            c_value = str(row[2] if len(row) > 2 else "").strip()
-            if c_value and c_value != "現金":
+            b_value = str(row[1] if len(row) > 1 else "").strip()
+            if b_value and b_value != "現金":
                 bank_rows.append(row)
 
         ws_yuanta.batch_clear(["A3:H"])
@@ -814,12 +814,12 @@ def run_yuanta(
             )
             _log(
                 log,
-                f"  all C欄非空白且≠現金：{n} 筆 -> 元大 B3:E；"
+                f"  all B欄非空白且≠現金：{n} 筆 -> 元大 B3:E；"
                 f"A欄={target_date:%Y%m%d}；H欄={yyyymm}",
             )
             _yuanta_wait_values(ws_yuanta, f"B3:E{end}", bank_rows, log)
         else:
-            _log(log, "  all C欄非空白且≠現金：0 筆")
+            _log(log, "  all B欄非空白且≠現金：0 筆")
 
         # 4) 確認 all / 元大 都同步完成後才匯出，避免 xlsx 抓到空白舊版本。
         fee_name = f"{period}元大承攬費-{region}.xlsx"
