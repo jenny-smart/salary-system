@@ -1,7 +1,13 @@
 """Google Drive 操作共用模組（金流對帳流程固定使用 Jenny OAuth）。"""
 
 import io
+import json
+import os
 import zipfile
+from datetime import datetime
+from urllib.error import HTTPError, URLError
+from urllib.request import Request as UrlRequest, urlopen
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 from googleapiclient.http import MediaIoBaseUpload
@@ -18,6 +24,8 @@ DRIVE_PARAMS = {
     "supportsAllDrives": True,
 }
 
+LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
+
 
 def _http_error_detail(e) -> str:
     status = getattr(getattr(e, "resp", None), "status", "unknown")
@@ -30,6 +38,69 @@ def _http_error_detail(e) -> str:
 def _drive():
     """只建立 Jenny OAuth Drive service，絕不退回 Service Account。"""
     return get_jenny_drive_service()
+
+
+def _get_secret(name: str) -> str:
+    """依序從環境變數與 Streamlit Secrets 讀取敏感設定。"""
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    try:
+        value = st.secrets.get(name, "")
+        return str(value).strip() if value else ""
+    except Exception:
+        return ""
+
+
+def _send_line_push(message: str) -> None:
+    """使用 LINE Messaging API 對指定使用者發送文字訊息。"""
+    token = _get_secret("LINE_CHANNEL_ACCESS_TOKEN")
+    user_id = _get_secret("LINE_USER_ID")
+    missing = [
+        name
+        for name, value in (
+            ("LINE_CHANNEL_ACCESS_TOKEN", token),
+            ("LINE_USER_ID", user_id),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(f"缺少 Streamlit Secrets：{', '.join(missing)}")
+
+    payload = json.dumps(
+        {"to": user_id, "messages": [{"type": "text", "text": message}]},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    request = UrlRequest(
+        LINE_PUSH_URL,
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urlopen(request, timeout=15) as response:
+            if response.status < 200 or response.status >= 300:
+                raise RuntimeError(f"LINE API 回傳 HTTP {response.status}")
+    except HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"LINE API HTTP {e.code}: {detail}") from e
+    except URLError as e:
+        raise RuntimeError(f"無法連線 LINE API：{e.reason}") from e
+
+
+def _notify_period_ready(period: str, region_name: str) -> None:
+    completed_at = datetime.now(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M")
+    _send_line_push(
+        "✅ 期別建立完成\n\n"
+        f"地區：{region_name}\n"
+        f"期別：{period}\n"
+        "資料夾：已建立\n"
+        "檔案：4/4 複製完成\n"
+        f"完成時間：{completed_at}"
+    )
 
 
 def get_folder_by_name(drive, parent_id: str, name: str) -> dict | None:
@@ -167,11 +238,14 @@ def create_period_folder_and_files(
     existing = get_folder_by_name(drive, root_folder_id, period)
     if existing:
         period_folder_id = existing["id"]
+        folder_created = False
         log(f"📁 {period} 已存在，繼續執行")
     else:
         period_folder_id = get_or_create_folder(drive, root_folder_id, period)
+        folder_created = True
         log(f"✅ 期別資料夾已建立：{period}")
     results["period_folder_id"] = period_folder_id
+    results["folder_created"] = folder_created
 
     log(f"🔍 尋找上一期資料夾：{previous_period}")
     prev_folder = get_folder_by_name(drive, root_folder_id, previous_period)
@@ -181,6 +255,7 @@ def create_period_folder_and_files(
             f"找不到上一期資料夾：{previous_period}，根目錄下找到：{found}"
         )
 
+    copied_count = 0
     for label in PERIOD_FILE_LABELS:
         old_name = get_file_name(previous_period, label, region_name)
         new_name = get_file_name(period, label, region_name)
@@ -201,10 +276,35 @@ def create_period_folder_and_files(
             results[label] = copy_file_to_folder(
                 drive, src["id"], period_folder_id, new_name
             )
+            copied_count += 1
             log(f"✅ 完成：{new_name}")
         except Exception as e:
             log(f"⚠️ {e}")
             results[label] = None
+
+    ready_count = sum(bool(results.get(label)) for label in PERIOD_FILE_LABELS)
+    results["copied_file_count"] = copied_count
+    results["ready_file_count"] = ready_count
+    results["all_files_ready"] = ready_count == len(PERIOD_FILE_LABELS)
+
+    if folder_created and copied_count == len(PERIOD_FILE_LABELS):
+        try:
+            _notify_period_ready(period, region_name)
+            results["line_notified"] = True
+            log("📲 LINE@ 通知已傳送")
+        except Exception as e:
+            results["line_notified"] = False
+            results["line_notification_error"] = str(e)
+            log(f"⚠️ LINE@ 通知失敗：{e}")
+    elif folder_created:
+        results["line_notified"] = False
+        log(
+            f"⚠️ 本次僅複製 {copied_count}/{len(PERIOD_FILE_LABELS)} 個檔案，"
+            "未傳送 LINE@ 通知"
+        )
+    else:
+        results["line_notified"] = False
+        log("ℹ️ 期別資料夾原已存在，不重複傳送 LINE@ 通知")
     return results
 
 
