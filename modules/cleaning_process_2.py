@@ -175,34 +175,155 @@ def _wait_and_convert(
     check_cell: str,
     log: List[str],
     extra_wait: int = 3,
+    timeout: int = 90,
 ) -> int:
     """
-    等待 IMPORTRANGE 載入，轉為靜態值，回傳有效列數（A欄非空，不含標題）。
+    等待 FILTER / IMPORTRANGE 真正載入完成後才轉為靜態值。
+
+    安全規則：
+    1. check_cell 不可為空，也不可是 #REF! / #N/A / Loading... 等錯誤。
+    2. 以 check_cell 所在列為本次匯入起始列，只計算本次新匯入的連續 A 欄資料。
+       下半月不會把上半月既有資料一起算進 num_rows。
+    3. 新匯入區 A:AC 內只要仍有試算表錯誤，就不允許轉靜態值。
+    4. 匯入列數連續兩次檢查一致後，才視為 spill 已穩定。
+    5. timeout 時直接失敗，不轉值，避免把 #REF! 固定成靜態文字。
     """
-    deadline = time.time() + 30
+
+    error_tokens = (
+        "#REF!", "#N/A", "#VALUE!", "#ERROR!",
+        "#NAME?", "#NUM!", "#DIV/0!", "LOADING",
+    )
+
+    def _is_error(value) -> bool:
+        s = str(value or "").strip().upper()
+        return any(token in s for token in error_tokens)
+
+    m = re.search(r"(\d+)$", check_cell)
+    if not m:
+        raise ValueError(f"無法解析檢查儲存格列號：{check_cell}")
+    start_row = int(m.group(1))
+
+    deadline = time.time() + timeout
+    stable_count = 0
+    previous_rows = None
+    last_row = 0
+
     while time.time() < deadline:
-        v = ws.acell(check_cell).value
-        if v and str(v).strip():
+        first = ws.acell(check_cell).value
+        if not first or not str(first).strip():
+            _log(log, f"    等待 IMPORTRANGE：{check_cell} 尚未有資料")
+            stable_count = 0
+            time.sleep(2)
+            continue
+
+        if _is_error(first):
+            _log(log, f"    等待 IMPORTRANGE：{check_cell}={first}")
+            stable_count = 0
+            time.sleep(2)
+            continue
+
+        # 從本次匯入起始列開始，找 A 欄連續非空白資料。
+        a_vals = ws.get(f"A{start_row}:A") or []
+        num_rows = 0
+        for row in a_vals:
+            value = row[0] if row else ""
+            if not str(value).strip() or _is_error(value):
+                break
+            num_rows += 1
+
+        if num_rows <= 0:
+            stable_count = 0
+            time.sleep(2)
+            continue
+
+        last_row = start_row + num_rows - 1
+
+        # 檢查本次匯入區是否仍有任何錯誤。
+        block = ws.get(f"A{start_row}:AC{last_row}") or []
+        errors = []
+        for r_off, row in enumerate(block):
+            for c_off, value in enumerate(row):
+                if _is_error(value):
+                    errors.append((start_row + r_off, c_off + 1, value))
+
+        if errors:
+            sample = ", ".join(
+                f"{_col_letter(col)}{row}={value}"
+                for row, col, value in errors[:3]
+            )
+            _log(log, f"    等待 IMPORTRANGE：仍有 {len(errors)} 格錯誤（{sample}）")
+            stable_count = 0
+            time.sleep(2)
+            continue
+
+        if previous_rows == num_rows:
+            stable_count += 1
+        else:
+            previous_rows = num_rows
+            stable_count = 1
+
+        if stable_count >= 2:
             break
+
+        _log(log, f"    IMPORTRANGE 已讀到 {num_rows} 列，確認資料穩定中")
         time.sleep(2)
     else:
-        _log(log, f"    ⚠️ 等待逾時：{check_cell} 仍為空，嘗試繼續")
+        raise TimeoutError(
+            f"IMPORTRANGE 在 {timeout} 秒內未完成（{check_cell}），"
+            "已取消轉靜態值，避免把 #REF! 固定下來"
+        )
 
-    time.sleep(extra_wait)
+    if extra_wait > 0:
+        time.sleep(extra_wait)
 
-    a_vals  = ws.col_values(1)
-    last    = 0
-    for i in range(1, len(a_vals)):
-        if str(a_vals[i]).strip():
-            last = i + 1
-    if last < 2:
-        return 0
+    # 最後再檢查一次，確認 extra_wait 期間沒有重新出現錯誤。
+    block = ws.get(
+        f"A{start_row}:AC{last_row}",
+        value_render_option="UNFORMATTED_VALUE",
+    ) or []
+    if any(_is_error(value) for row in block for value in row):
+        raise RuntimeError(
+            "IMPORTRANGE 在轉值前仍有錯誤，已取消轉靜態值"
+        )
 
-    data = ws.get(f"A2:AC{last}") or []
-    if data:
-        ws.update(f"A2:AC{last}", data, value_input_option="USER_ENTERED")
-    _log(log, f"    A2:AC{last} 轉靜態值完成（{last - 1} 列）")
-    return last - 1
+    if block:
+        ws.update(
+            f"A{start_row}:AC{last_row}",
+            block,
+            value_input_option="RAW",
+        )
+
+    # 等 Sheets 完成寫入，再驗證「已轉成值」才允許後續 QRS / 共通流程。
+    time.sleep(2)
+    verify_values = ws.get(
+        f"A{start_row}:AC{last_row}",
+        value_render_option="UNFORMATTED_VALUE",
+    ) or []
+    if any(_is_error(value) for row in verify_values for value in row):
+        raise RuntimeError(
+            "轉靜態值後仍有試算表錯誤，已停止後續流程"
+        )
+
+    verify_formulas = ws.get(
+        f"A{start_row}:AC{last_row}",
+        value_render_option="FORMULA",
+    ) or []
+    formula_cells = [
+        value
+        for row in verify_formulas
+        for value in row
+        if str(value or "").lstrip().startswith("=")
+    ]
+    if formula_cells:
+        raise RuntimeError(
+            f"轉靜態值驗證失敗：仍有 {len(formula_cells)} 格公式，已停止後續流程"
+        )
+
+    _log(
+        log,
+        f"    ✅ A{start_row}:AC{last_row} 轉靜態值並驗證完成（本次 {last_row - start_row + 1} 列）",
+    )
+    return last_row - start_row + 1
 
 
 
