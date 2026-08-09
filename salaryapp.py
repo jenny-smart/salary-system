@@ -491,7 +491,6 @@ FUNCTION_MAP = {
         "一鍵執行",
         "新人實境實習期別",
         "工具包押金",
-        "元大帳戶",
         "產生PDF",
         "產生專案PDF",
     ],
@@ -500,8 +499,9 @@ FUNCTION_MAP = {
         "執行全部結算",
         "產出全部薪資單",
     ],
-    "✉️ 承攬 mail": [
-        "同步承攬服務費 mail",
+    "📨 承攬作業": [
+        "承攬費通知信",
+        "元大帳戶",
     ],
 }
 
@@ -525,7 +525,7 @@ with c2:
     st.markdown('<div class="field-label">🗂️ 執行系統</div>', unsafe_allow_html=True)
     system = st.selectbox(
         "系統",
-        ["💰 金流對帳", "🧹 清潔承攬", "📦 其他承攬", "✉️ 承攬 mail"],
+        ["💰 金流對帳", "🧹 清潔承攬", "📦 其他承攬", "📨 承攬作業"],
         label_visibility="collapsed", key="system"
     )
 
@@ -538,7 +538,7 @@ ENGINE_KEYS = {
     "💰 金流對帳": "engine_payment",
     "🧹 清潔承攬": "engine_cleaning",
     "📦 其他承攬": "engine_other",
-    "✉️ 承攬 mail": "engine_mail",
+    "📨 承攬作業": "engine_contract_ops",
 }
 engine_key = ENGINE_KEYS[system]
 saved_engine = str(config.get("schedule", {}).get(engine_key, "PYTHON")).upper()
