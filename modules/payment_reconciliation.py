@@ -1,6 +1,6 @@
 """
 modules/payment_reconciliation.py
-金流對帳模組  v2026-08b
+金流對帳模組  v2026-08a
 
 流程：
 上半月 / 下半月：
@@ -45,38 +45,6 @@ from modules.sheet_helper import (
 )
 
 
-REQUIRED_OAUTH_EMAIL = "jenny@lemonclean.com.tw"
-
-
-def _verify_oauth_account(log_fn=None):
-    """確認 Drive OAuth 使用指定帳號，避免誤用舊 token 的容量與權限。"""
-    drive = get_drive_service()
-    try:
-        about = drive.about().get(
-            fields="user(displayName,emailAddress)"
-        ).execute()
-    except Exception as exc:
-        raise Exception(f"無法確認目前 Google OAuth 授權帳號：{exc}") from exc
-
-    user = about.get("user") or {}
-    current_email = (user.get("emailAddress") or "").strip().lower()
-    required_email = REQUIRED_OAUTH_EMAIL.lower()
-
-    if not current_email:
-        raise Exception("Google Drive API 未回傳 OAuth 帳號信箱，無法安全執行作業")
-
-    if current_email != required_email:
-        raise Exception(
-            "Google OAuth 授權帳號錯誤："
-            f"目前是 {current_email}，必須改用 {REQUIRED_OAUTH_EMAIL}。"
-            "請刪除舊 OAuth token，重新授權後再執行。"
-        )
-
-    if log_fn:
-        log_fn(f"✅ OAuth 帳號：{current_email}")
-    return drive
-
-
 # ═══════════════════════════════════════════════════════════════
 # 共用：找期別資料夾和檔案
 # ═══════════════════════════════════════════════════════════════
@@ -117,9 +85,9 @@ def create_period(root_folder_id: str, period: str, region_name: str, log_fn=Non
     if log_fn:
         log_fn(f"🔄 Python + OAuth 建立期別：{period}")
 
-    _verify_oauth_account(log_fn)
-
+    drive = get_drive_service()
     return create_period_folder_and_files(
+        drive,
         root_folder_id,
         period,
         region_name,
@@ -136,9 +104,9 @@ def convert_order_file(root_folder_id: str, period: str, region_name: str, log_f
     if log_fn:
         log_fn(f"🔄 Python + OAuth 轉檔：{period}訂單-{region_name}")
 
-    _verify_oauth_account(log_fn)
-
+    drive = get_drive_service()
     return convert_period_order_file(
+        drive,
         root_folder_id,
         period,
         region_name,
@@ -155,9 +123,9 @@ def convert_payment_file(root_folder_id: str, period: str, region_name: str, log
     if log_fn:
         log_fn(f"🔄 Python + OAuth 金流對帳轉檔：{period}")
 
-    _verify_oauth_account(log_fn)
-
+    drive = get_drive_service()
     return convert_payment_files(
+        drive,
         root_folder_id,
         period,
         region_name,
