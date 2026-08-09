@@ -25,6 +25,8 @@ DRIVE_PARAMS = {
 }
 
 LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
+ALL_REGIONS = ("台北", "台中", "新北", "桃園", "新竹", "高雄")
+LINE_BATCH_STATE_KEY = "period_line_notification_batches"
 
 
 def _http_error_detail(e) -> str:
@@ -91,16 +93,36 @@ def _send_line_push(message: str) -> None:
         raise RuntimeError(f"無法連線 LINE API：{e.reason}") from e
 
 
-def _notify_period_ready(period: str, region_name: str) -> None:
+def _notify_all_regions_period_ready(period: str) -> None:
     completed_at = datetime.now(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M")
+    region_lines = "\n".join(f"✅ {region}：4/4 完成" for region in ALL_REGIONS)
     _send_line_push(
-        "✅ 期別建立完成\n\n"
-        f"地區：{region_name}\n"
+        "✅ 全區期別建立完成\n\n"
         f"期別：{period}\n"
-        "資料夾：已建立\n"
-        "檔案：4/4 複製完成\n"
+        "全區：6/6 完成\n"
+        "每區檔案：4/4 複製完成\n\n"
+        f"{region_lines}\n\n"
         f"完成時間：{completed_at}"
     )
+
+
+def _register_region_ready(period: str, region_name: str) -> tuple[bool, list[str]]:
+    """累積同一期別的全區完成狀態；六區齊全時只回傳一次通知旗標。"""
+    batches = st.session_state.setdefault(LINE_BATCH_STATE_KEY, {})
+    batch = batches.setdefault(period, {"regions": [], "notified": False})
+
+    if region_name in ALL_REGIONS and region_name not in batch["regions"]:
+        batch["regions"].append(region_name)
+
+    completed_regions = [
+        region for region in ALL_REGIONS if region in batch["regions"]
+    ]
+    all_ready = len(completed_regions) == len(ALL_REGIONS)
+    should_notify = all_ready and not batch["notified"]
+    if should_notify:
+        batch["notified"] = True
+
+    return should_notify, completed_regions
 
 
 def get_folder_by_name(drive, parent_id: str, name: str) -> dict | None:
@@ -288,14 +310,26 @@ def create_period_folder_and_files(
     results["all_files_ready"] = ready_count == len(PERIOD_FILE_LABELS)
 
     if folder_created and copied_count == len(PERIOD_FILE_LABELS):
-        try:
-            _notify_period_ready(period, region_name)
-            results["line_notified"] = True
-            log("📲 LINE@ 通知已傳送")
-        except Exception as e:
-            results["line_notified"] = False
-            results["line_notification_error"] = str(e)
-            log(f"⚠️ LINE@ 通知失敗：{e}")
+        should_notify, completed_regions = _register_region_ready(
+            period, region_name
+        )
+        results["line_batch_completed_regions"] = completed_regions
+        results["line_notified"] = False
+        if should_notify:
+            try:
+                _notify_all_regions_period_ready(period)
+                results["line_notified"] = True
+                log("📲 全區 LINE@ 彙總通知已傳送")
+            except Exception as e:
+                # 傳送失敗時允許下一次成功流程重試通知。
+                st.session_state[LINE_BATCH_STATE_KEY][period]["notified"] = False
+                results["line_notification_error"] = str(e)
+                log(f"⚠️ 全區 LINE@ 彙總通知失敗：{e}")
+        else:
+            log(
+                f"ℹ️ 已完成 {len(completed_regions)}/{len(ALL_REGIONS)} 區，"
+                "待全區完成後統一傳送 LINE@ 通知"
+            )
     elif folder_created:
         results["line_notified"] = False
         log(
