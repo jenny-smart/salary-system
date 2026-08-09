@@ -8,7 +8,7 @@ from typing import Callable, Iterable, Optional
 
 import gspread
 
-from modules.auth import get_gspread_client, get_drive_service, get_jenny_gspread_client
+from modules.auth import get_gspread_client, get_drive_service
 from modules.master_sheet import MASTER_SHEET_ID, record_execution
 
 
@@ -411,13 +411,7 @@ def sync_service_fee_mail(
     5. 其他承攬列依 I 欄服務名稱把「清潔」改為水洗/家電/其他服務
     6. 若 清潔承攬 PDF產出!A121:B 有資料，建立目前期別工具包押金
     """
-    # Service Account：主控表、清潔承攬、其他承攬
     gc = get_gspread_client()
-
-    # Jenny OAuth：各區「YYYY承攬服務費mail」
-    # mail_id 試算表可能沒有分享給 Service Account，因此必須用 Jenny 本人權限。
-    mail_gc = get_jenny_gspread_client()
-
     cfg = _region_ids(gc, region)
 
     mail_id = str(mail_id or cfg.get("mail_id", "") or "").strip()
@@ -438,7 +432,7 @@ def sync_service_fee_mail(
 
     _emit(log, f"▶ 承攬費通知信 {region} {period} 開始")
 
-    mail_ss = mail_gc.open_by_key(mail_id)
+    mail_ss = gc.open_by_key(mail_id)
     cleaning_ss = gc.open_by_key(cleaning_file_id)
     other_ss = gc.open_by_key(other_file_id) if other_file_id else None
 
