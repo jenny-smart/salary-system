@@ -1,17 +1,17 @@
 """
 modules/payment_reconciliation.py
-金流對帳模組  v2026-05f
+金流對帳模組  v2026-08a
 
 流程：
 上半月 / 下半月：
-  ① 建立期別資料夾與檔案（GAS）
-  ② 期別訂單轉檔（GAS）
+  ① 建立期別資料夾與檔案（Python + OAuth）
+  ② 期別訂單轉檔（Python + OAuth）
   ③ 訂單搬運到範本
   ④ 範本加工
   ⑤ 分類搬運（含底色 / 字型 / 列高 21px）
 
 下半月額外：
-  ⑥ 金流對帳轉檔（GAS）
+  ⑥ 金流對帳轉檔（Python + OAuth）
   ⑦ 搬運退款＋預收
   ⑧ 搬運發票＋藍新
 """
@@ -77,72 +77,60 @@ def _find_sheet_by_keyword(folder_id: str, keyword: str) -> str | None:
 
 
 # ═══════════════════════════════════════════════════════════════
-# GAS 呼叫
-# ═══════════════════════════════════════════════════════════════
-
-GAS_WEB_APP_URL = (
-    "https://script.google.com/macros/s/"
-    "AKfycbxD1ek5H5uLT2HgGUZzgoPqy6xDrF03Dqc1LXMeUQpDfACdoLCn4WGhx3p_ufbkxIa4/exec"
-)
-
-
-def _call_gas(action: str, root_folder_id: str, period: str, region_name: str,
-              log_fn=None) -> dict:
-    import requests as _requests
-
-    def log(msg):
-        if log_fn:
-            log_fn(msg)
-
-    params = {
-        "action": action,
-        "period": period,
-        "region": region_name,
-        "rootFolderId": root_folder_id,
-    }
-    try:
-        response = _requests.get(GAS_WEB_APP_URL, params=params, timeout=180)
-        result = response.json()
-    except Exception as e:
-        raise Exception(f"呼叫 GAS 失敗：{e}")
-
-    for entry in result.get("logs", []):
-        log(entry)
-
-    if not result.get("success"):
-        raise Exception(f"GAS 執行失敗：{result.get('message', '未知錯誤')}")
-
-    return result
-
-
-# ═══════════════════════════════════════════════════════════════
-# ① 建立期別資料夾與檔案（GAS）
+# Python + OAuth：建立與轉檔
 # ═══════════════════════════════════════════════════════════════
 
 def create_period(root_folder_id: str, period: str, region_name: str, log_fn=None) -> dict:
+    """使用 OAuth Drive API 建立期別資料夾並複製四個期別檔案。"""
     if log_fn:
-        log_fn(f"🔄 呼叫 GAS 建立期別：{period}")
-    return _call_gas("createPeriod", root_folder_id, period, region_name, log_fn)
+        log_fn(f"🔄 Python + OAuth 建立期別：{period}")
+
+    drive = get_drive_service()
+    return create_period_folder_and_files(
+        drive,
+        root_folder_id,
+        period,
+        region_name,
+        log_fn=log_fn,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════
-# ② 期別訂單轉檔（GAS）
+# ② 期別訂單轉檔（Python + OAuth）
 # ═══════════════════════════════════════════════════════════════
 
 def convert_order_file(root_folder_id: str, period: str, region_name: str, log_fn=None) -> dict:
+    """使用 OAuth Drive API 將期別訂單檔轉成 Google 試算表。"""
     if log_fn:
-        log_fn(f"🔄 呼叫 GAS 轉檔：{period}訂單-{region_name}")
-    return _call_gas("convertOrder", root_folder_id, period, region_name, log_fn)
+        log_fn(f"🔄 Python + OAuth 轉檔：{period}訂單-{region_name}")
+
+    drive = get_drive_service()
+    return convert_period_order_file(
+        drive,
+        root_folder_id,
+        period,
+        region_name,
+        log_fn=log_fn,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════
-# ⑥ 金流對帳轉檔（GAS）
+# ⑥ 金流對帳轉檔（Python + OAuth）
 # ═══════════════════════════════════════════════════════════════
 
 def convert_payment_file(root_folder_id: str, period: str, region_name: str, log_fn=None) -> dict:
+    """使用 OAuth Drive API 轉換退款、預收、發票與藍新相關檔案。"""
     if log_fn:
-        log_fn(f"🔄 呼叫 GAS 金流對帳轉檔：{period}")
-    return _call_gas("convertPayment", root_folder_id, period, region_name, log_fn)
+        log_fn(f"🔄 Python + OAuth 金流對帳轉檔：{period}")
+
+    drive = get_drive_service()
+    return convert_payment_files(
+        drive,
+        root_folder_id,
+        period,
+        region_name,
+        log_fn=log_fn,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════
