@@ -210,7 +210,7 @@ def create_period_folder_and_files(
 
 def convert_period_order_file(
     root_folder_id: str, period: str, region_name: str, log_fn=None
-) -> str:
+) -> dict:
     def log(message):
         log_fn(message) if log_fn else st.write(message)
 
@@ -239,7 +239,18 @@ def convert_period_order_file(
     sheet_name = f"{period}訂單-{region_name}"
     new_id = convert_to_google_sheet(drive, folder_id, src["id"], sheet_name)
     log(f"✅ 轉檔完成：{sheet_name}")
-    return new_id
+    # salaryapp.py 會以 result.get(...) 讀取轉檔結果，因此這裡
+    # 必須回傳 dict，不能只回傳 spreadsheet ID 字串。
+    # 同時保留常見的欄位名稱，相容既有上層程式。
+    return {
+        "success": True,
+        "id": new_id,
+        "file_id": new_id,
+        "fileId": new_id,
+        "spreadsheet_id": new_id,
+        "spreadsheetId": new_id,
+        "name": sheet_name,
+    }
 
 
 PAYMENT_FILE_CONFIGS = [
