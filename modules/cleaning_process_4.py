@@ -569,6 +569,23 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
         )
         data = request.execute()
         _elog(f"  匯出 xlsx：下載完成（{len(data)} bytes）")
+
+        # 僅修改即將上傳的 xlsx，不動原 Google 試算表：
+        # 「元大」工作表 F3:L 全部清空。
+        from openpyxl import load_workbook
+        workbook_stream = io.BytesIO(data)
+        wb = load_workbook(workbook_stream)
+        if "元大" not in wb.sheetnames:
+            raise RuntimeError("匯出的 xlsx 找不到『元大』工作表")
+        xlsx_ws = wb["元大"]
+        last_row = max(xlsx_ws.max_row, 3)
+        for row_idx in range(3, last_row + 1):
+            for col_idx in range(6, 13):  # F:L
+                xlsx_ws.cell(row=row_idx, column=col_idx).value = None
+        output_stream = io.BytesIO()
+        wb.save(output_stream)
+        data = output_stream.getvalue()
+        _elog(f"  匯出 xlsx：已清空『元大』!F3:L（僅 xlsx，不修改 Google Sheet）")
     except Exception as exc:
         raise RuntimeError(f"匯出 Google 試算表失敗｜{_detail(exc)}") from exc
 
@@ -709,7 +726,7 @@ def run_yuanta(
       5. 元大 H 欄 = YYYYMM
       6. 驗證 all / 元大 寫入完成後才匯出 xlsx
 
-    下半月工具包押金另依 A121 與 AB4:AE 產出。
+    下半月工具包押金另依 A121 與 AB4:AE 產出，AB4:AE -> 元大 B3:E。
     """
     if period.endswith("-1"):
         is_first_half = True
@@ -795,12 +812,15 @@ def run_yuanta(
             if b_value and b_value != "現金":
                 bank_rows.append(row)
 
-        ws_yuanta.batch_clear(["A3:H"])
+        # 承攬費只清除 A3:E 的舊明細；H3 起完全不動。
+        # H 欄只更新 H2 為期別月份 YYYYMM。
+        ws_yuanta.batch_clear(["A3:E"])
+        yyyymm = period[:6]
+        ws_yuanta.update("H2", [[yyyymm]], value_input_option="USER_ENTERED")
         if bank_rows:
             n = len(bank_rows)
             end = 2 + n
             target_date = _yuanta_target_date(period, is_first_half, cfg)
-            yyyymm = period[:6]
             ws_yuanta.update(
                 f"B3:E{end}", bank_rows, value_input_option="USER_ENTERED"
             )
@@ -809,17 +829,14 @@ def run_yuanta(
                 [[target_date.strftime("%Y%m%d")]] * n,
                 value_input_option="USER_ENTERED",
             )
-            ws_yuanta.update(
-                f"H3:H{end}", [[yyyymm]] * n, value_input_option="USER_ENTERED"
-            )
             _log(
                 log,
                 f"  all B欄非空白且≠現金：{n} 筆 -> 元大 B3:E；"
-                f"A欄={target_date:%Y%m%d}；H欄={yyyymm}",
+                f"A欄={target_date:%Y%m%d}；H2={yyyymm}；H3起未變更",
             )
             _yuanta_wait_values(ws_yuanta, f"B3:E{end}", bank_rows, log)
         else:
-            _log(log, "  all B欄非空白且≠現金：0 筆")
+            _log(log, f"  all B欄非空白且≠現金：0 筆；H2={yyyymm}；H3起未變更")
 
         # 4) 確認 all / 元大 都同步完成後才匯出，避免 xlsx 抓到空白舊版本。
         fee_name = f"{period}元大承攬費-{region}.xlsx"
@@ -836,15 +853,17 @@ def run_yuanta(
                     ) or []
                 )
                 if deposit_rows:
-                    ws_yuanta.batch_clear(["A4:H"])
-                    end = 3 + len(deposit_rows)
+                    # 工具包押金輸出前只清除 A3:E 的承攬費明細；H3 起完全不動。
+                    # AB4:AE 固定貼到 元大 B3:E。
+                    ws_yuanta.batch_clear(["A3:E"])
+                    end = 2 + len(deposit_rows)
                     ws_yuanta.update(
-                        f"B4:E{end}",
+                        f"B3:E{end}",
                         deposit_rows,
                         value_input_option="USER_ENTERED",
                     )
                     _yuanta_wait_values(
-                        ws_yuanta, f"B4:E{end}", deposit_rows, log
+                        ws_yuanta, f"B3:E{end}", deposit_rows, log
                     )
                     deposit_name = f"{period}元大工具包押金-{region}.xlsx"
                     _yuanta_export_xlsx(
@@ -852,8 +871,8 @@ def run_yuanta(
                     )
                     _log(
                         log,
-                        f"  ✅ A121 非空白；AB4:AE -> 元大 B4:E，共 {len(deposit_rows)} 筆；"
-                        f"已另存：{deposit_name}",
+                        f"  ✅ A121 非空白；AB4:AE -> 元大 B3:E，共 {len(deposit_rows)} 筆；"
+                        f"xlsx 的 元大!F3:L 已清空；已另存：{deposit_name}",
                     )
                 else:
                     _log(log, "  A121 非空白，但 AB4:AE 無有效資料，略過工具包押金 xlsx")
