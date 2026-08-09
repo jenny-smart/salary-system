@@ -579,13 +579,36 @@ def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str, l
             raise RuntimeError("匯出的 xlsx 找不到『元大』工作表")
         xlsx_ws = wb["元大"]
         last_row = max(xlsx_ws.max_row, 3)
+
+        # xlsx 專用後處理：
+        # 1) 元大!F3:L 全部清空（只改匯出的 xlsx，不碰原 Google Sheet）
+        # 2) 元大!D3:D 金額固定為無小數格式
         for row_idx in range(3, last_row + 1):
             for col_idx in range(6, 13):  # F:L
-                xlsx_ws.cell(row=row_idx, column=col_idx).value = None
+                cell = xlsx_ws.cell(row=row_idx, column=col_idx)
+                cell.value = None
+            xlsx_ws.cell(row=row_idx, column=4).number_format = '#,##0'
+
         output_stream = io.BytesIO()
         wb.save(output_stream)
         data = output_stream.getvalue()
-        _elog(f"  匯出 xlsx：已清空『元大』!F3:L（僅 xlsx，不修改 Google Sheet）")
+
+        # 重新讀回驗證，避免上傳到 Drive 的仍是未處理版本。
+        verify_wb = load_workbook(io.BytesIO(data), data_only=False)
+        verify_ws = verify_wb["元大"]
+        leftovers = []
+        for row_idx in range(3, max(verify_ws.max_row, 3) + 1):
+            for col_idx in range(6, 13):
+                value = verify_ws.cell(row=row_idx, column=col_idx).value
+                if value not in (None, ''):
+                    leftovers.append(f"{verify_ws.cell(row=row_idx, column=col_idx).coordinate}={value}")
+                    if len(leftovers) >= 5:
+                        break
+            if len(leftovers) >= 5:
+                break
+        if leftovers:
+            raise RuntimeError("xlsx 後處理驗證失敗，F3:L 仍有資料：" + "、".join(leftovers))
+        _elog("  XLSX POSTPROCESS v4：元大!F3:L 已清空；D3:D 已設為無小數格式")
     except Exception as exc:
         raise RuntimeError(f"匯出 Google 試算表失敗｜{_detail(exc)}") from exc
 
@@ -812,8 +835,8 @@ def run_yuanta(
             if b_value and b_value != "現金":
                 bank_rows.append(row)
 
-        # 承攬費只清除 A3:E 的舊明細；H3 起完全不動。
-        # H 欄只更新 H2 為期別月份 YYYYMM。
+        # 承攬費只清除 A3:E 的舊明細。
+        # H 欄嚴格只更新 H2；H3 以下不清除、不寫入、不改格式。
         ws_yuanta.batch_clear(["A3:E"])
         yyyymm = period[:6]
         ws_yuanta.update("H2", [[yyyymm]], value_input_option="USER_ENTERED")
@@ -853,17 +876,28 @@ def run_yuanta(
                     ) or []
                 )
                 if deposit_rows:
-                    # 工具包押金輸出前只清除 A3:E 的承攬費明細；H3 起完全不動。
-                    # AB4:AE 固定貼到 元大 B3:E。
+                    # 工具包押金輸出前只清除 A3:E 的承攬費明細；H3 以下完全不動。
+                    # AB4:AE 固定從 元大 B3:E 開始貼，不得從 B4:E 開始。
                     ws_yuanta.batch_clear(["A3:E"])
                     end = 2 + len(deposit_rows)
+                    # 工具包押金 A 欄：一律使用該期別隔月 10 日；
+                    # 若 10 日為週末或 holiday_dates 例假日，提前至最近工作日。
+                    # A:E 必須一次寫入，避免 B:E 已同步但 A 欄尚未同步就被匯出成 xlsx。
+                    deposit_date = _yuanta_target_date(period, False, cfg)
+                    deposit_date_text = deposit_date.strftime("%Y%m%d")
+                    deposit_export_rows = [
+                        [deposit_date_text] + list(row[:4])
+                        for row in deposit_rows
+                    ]
                     ws_yuanta.update(
-                        f"B3:E{end}",
-                        deposit_rows,
+                        f"A3:E{end}",
+                        deposit_export_rows,
                         value_input_option="USER_ENTERED",
                     )
+
+                    # 等待 A:E 整列同步完成後才匯出，確保每個 B 欄有值的列都一定有 A 欄日期。
                     _yuanta_wait_values(
-                        ws_yuanta, f"B3:E{end}", deposit_rows, log
+                        ws_yuanta, f"A3:E{end}", deposit_export_rows, log
                     )
                     deposit_name = f"{period}元大工具包押金-{region}.xlsx"
                     _yuanta_export_xlsx(
@@ -872,6 +906,7 @@ def run_yuanta(
                     _log(
                         log,
                         f"  ✅ A121 非空白；AB4:AE -> 元大 B3:E，共 {len(deposit_rows)} 筆；"
+                        f"A3:A{end} 全部={deposit_date:%Y%m%d}；"
                         f"xlsx 的 元大!F3:L 已清空；已另存：{deposit_name}",
                     )
                 else:
