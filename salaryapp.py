@@ -1122,16 +1122,6 @@ if run_clicked and execution_engine == "PYTHON":
 
                         if not success:
                             raise RuntimeError("元大帳戶執行失敗")
-                    from modules.service_fee_mail import sync_service_fee_mail
-                    count = sync_service_fee_mail(
-                        root_folder_id=root_id,
-                        period=_period,
-                        region=_name,
-                        mail_id=str(_region.get("mail_id", "") or ""),
-                        roster_id=str(_region.get("roster_id", "") or ""),
-                        log=lambda msg: add_log(msg, "success"),
-                    )
-                    add_log(f"承攬服務費 mail 完成：{count} 筆", "success")
 
             except Exception as e:
                 import traceback
