@@ -51,6 +51,7 @@ Lemon Clean 清潔承攬 — 工具包押金 / 介紹獎金 / 元大帳戶
 from __future__ import annotations
 
 import datetime
+import io
 from typing import List, Optional, Tuple
 
 import gspread
@@ -429,6 +430,125 @@ def _tool_process(
 # 元大帳戶
 # ──────────────────────────────────────────────────────────────
 
+def _yuanta_business_day(date_value: datetime.date, region_cfg: dict | None = None) -> datetime.date:
+    """遇週末或設定的例假日，往前推至上一個工作日。"""
+    cfg = region_cfg or {}
+    holiday_values = cfg.get("holiday_dates", []) or []
+    holidays = set()
+    for value in holiday_values:
+        text = str(value).strip().replace("-", "/")
+        try:
+            holidays.add(datetime.datetime.strptime(text, "%Y/%m/%d").date())
+        except ValueError:
+            continue
+
+    d = date_value
+    while d.weekday() >= 5 or d in holidays:
+        d -= datetime.timedelta(days=1)
+    return d
+
+
+def _yuanta_target_date(period: str, is_first_half: bool, region_cfg: dict | None = None) -> datetime.date:
+    """
+    期別 YYYYMM-1：隔月 10 日；期別 YYYYMM-2：當月 20 日。
+    期別月份取自 period，不以程式執行當下日期判斷。
+    遇週末／holiday_dates 中的例假日，提前至前一工作日。
+    """
+    year = int(period[:4])
+    month = int(period[4:6])
+    if is_first_half:
+        if month == 12:
+            target = datetime.date(year + 1, 1, 10)
+        else:
+            target = datetime.date(year, month + 1, 10)
+    else:
+        target = datetime.date(year, month, 20)
+    return _yuanta_business_day(target, region_cfg)
+
+
+def _yuanta_find_period_file(root_folder_id: str, period: str, file_name: str) -> tuple[str, str]:
+    """回傳 (period_folder_id, spreadsheet_id)。"""
+    from modules.auth import get_drive_service
+    drive = get_drive_service()
+
+    def _query(parent_id: str, name: str, mime_type: str):
+        q = (
+            f"'{parent_id}' in parents and name = '{name}' "
+            f"and mimeType = '{mime_type}' and trashed = false"
+        )
+        resp = drive.files().list(
+            q=q,
+            fields="files(id,name)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+            pageSize=10,
+        ).execute()
+        files = resp.get("files", [])
+        return files[0]["id"] if files else None
+
+    period_folder_id = _query(
+        root_folder_id, period, "application/vnd.google-apps.folder"
+    )
+    if not period_folder_id:
+        raise FileNotFoundError(f"找不到期別資料夾：{period}")
+
+    file_id = _query(
+        period_folder_id, file_name, "application/vnd.google-apps.spreadsheet"
+    )
+    if not file_id:
+        raise FileNotFoundError(f"找不到元大帳戶檔案：{file_name}")
+    return period_folder_id, file_id
+
+
+def _yuanta_export_xlsx(spreadsheet_id: str, folder_id: str, output_name: str) -> None:
+    """將 Google 試算表匯出 xlsx，存回期別資料夾；同名舊檔先移除。"""
+    from modules.auth import get_drive_service
+    from googleapiclient.http import MediaIoBaseUpload
+
+    drive = get_drive_service()
+    request = drive.files().export_media(
+        fileId=spreadsheet_id,
+        mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    data = request.execute()
+
+    q = (
+        f"'{folder_id}' in parents and name = '{output_name}' "
+        "and trashed = false"
+    )
+    existing = drive.files().list(
+        q=q,
+        fields="files(id,name)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
+        pageSize=20,
+    ).execute().get("files", [])
+    for item in existing:
+        drive.files().delete(fileId=item["id"], supportsAllDrives=True).execute()
+
+    media = MediaIoBaseUpload(
+        io.BytesIO(data),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        resumable=False,
+    )
+    drive.files().create(
+        body={"name": output_name, "parents": [folder_id]},
+        media_body=media,
+        fields="id,name",
+        supportsAllDrives=True,
+    ).execute()
+
+
+def _yuanta_nonempty_rows(rows: list[list], width: int = 4) -> list[list]:
+    """保留至少一格有值的資料列，並補齊固定欄數。"""
+    result = []
+    for row in rows:
+        padded = list(row[:width]) + [""] * max(0, width - len(row))
+        if any(str(v).strip() for v in padded):
+            result.append(padded[:width])
+    return result
+
+
 def run_yuanta(
     cleaning_file_id: str,
     region: str,
@@ -440,22 +560,138 @@ def run_yuanta(
 ) -> bool:
     """
     元大帳戶。
-    從場次時數薪資總表讀取資料，寫入期別元大帳戶試算表，並存檔 xlsx。
 
-    上半月：N4:Q → 元大帳戶 A3:E，存為 {period}元大承攬費-{region}.xlsx
-    下半月：U4:X → 元大帳戶 A3:E，存為 {period}元大承攬費-{region}.xlsx
-            AB4:AE 若有資料 → 另存 {period}元大工具包押金-{region}.xlsx
+    上半月：
+      1. 場次時數薪資總表 N4:Q -> 元大帳戶「all」A2:D
+      2. all 中 C 欄 !=「現金」 -> 「元大」B3:E
+      3. 元大 A 欄 = 隔月 10 日，例假日提前至工作日
+      4. 元大 H 欄 = YYYYMM
+      5. 匯出 {period}元大承攬費-{region}.xlsx
+
+    下半月：
+      1. 場次時數薪資總表 U4:X -> 元大帳戶「all」A2:D
+      2. all 中 C 欄 !=「現金」 -> 「元大」B3:E
+      3. 元大 A 欄 = 當月 20 日，例假日提前至工作日
+      4. 元大 H 欄 = YYYYMM
+      5. 匯出 {period}元大承攬費-{region}.xlsx
+      6. 若場次時數薪資總表 A121 非空白，AB4:AE -> 元大 B4:E，
+         另匯出 {period}元大工具包押金-{region}.xlsx
     """
+    # 上／下半月一律由期別 suffix 判斷，不使用執行當下日期。
+    if period.endswith("-1"):
+        is_first_half = True
+    elif period.endswith("-2"):
+        is_first_half = False
+    else:
+        _log(log, f"❌ 元大帳戶失敗：期別格式錯誤：{period}（應為 YYYYMM-1 或 YYYYMM-2）")
+        return False
+
     label = "上半月" if is_first_half else "下半月"
-    _log(log, f"▶ 元大帳戶 {label} 開始")
+    _log(log, f"▶ 元大帳戶 {label} 開始（依期別 {period} 判斷）")
     try:
-        from modules.gas_pdf_client import run_yuanta as run_yuanta_gas
-        gas_result = run_yuanta_gas(cleaning_file_id, region, period)
-        if not gas_result.get("success"):
-            raise RuntimeError(gas_result.get("message", "中控 GAS 元大帳戶執行失敗"))
+        cfg = region_cfg or {}
+        root_folder_id = str(cfg.get("root_folder_id", "") or "").strip()
+        if not root_folder_id:
+            raise ValueError("config 地區設定缺少 root_folder_id")
+
+        gc = get_gspread_client()
+        cleaning_ss = gc.open_by_key(cleaning_file_id)
+        ws_summary = cleaning_ss.worksheet("場次時數薪資總表")
+
+        yuanta_name = f"{period}元大帳戶-{region}"
+        period_folder_id, yuanta_file_id = _yuanta_find_period_file(
+            root_folder_id, period, yuanta_name
+        )
+        yuanta_ss = gc.open_by_key(yuanta_file_id)
+        ws_all = yuanta_ss.worksheet("all")
+        ws_yuanta = yuanta_ss.worksheet("元大")
+        _log(log, f"  找到元大帳戶檔案：{yuanta_name}")
+
+        source_range = "N4:Q" if is_first_half else "U4:X"
+        source_rows = _yuanta_nonempty_rows(
+            ws_summary.get(source_range, value_render_option="UNFORMATTED_VALUE") or []
+        )
+
+        ws_all.batch_clear(["A2:D"])
+        if source_rows:
+            ws_all.update(
+                f"A2:D{1 + len(source_rows)}",
+                source_rows,
+                value_input_option="USER_ENTERED",
+            )
+        _log(log, f"  {source_range} -> all!A2:D，共 {len(source_rows)} 筆")
+
+        # all 的 C 欄（第 3 欄）不為「現金」才進入元大匯款資料。
+        bank_rows = [
+            row for row in source_rows
+            if str(row[2]).strip() != "現金"
+        ]
+
+        # 清除上次承攬費資料；保留模板標題列。
+        ws_yuanta.batch_clear(["A3:H"])
+        if bank_rows:
+            n = len(bank_rows)
+            end = 2 + n
+            target_date = _yuanta_target_date(period, is_first_half, cfg)
+            yyyymm = period[:6]
+            ws_yuanta.update(
+                f"B3:E{end}", bank_rows, value_input_option="USER_ENTERED"
+            )
+            ws_yuanta.update(
+                f"A3:A{end}",
+                [[target_date.strftime("%Y/%m/%d")]] * n,
+                value_input_option="USER_ENTERED",
+            )
+            ws_yuanta.update(
+                f"H3:H{end}", [[yyyymm]] * n, value_input_option="USER_ENTERED"
+            )
+            _log(
+                log,
+                f"  all C欄≠現金：{n} 筆 -> 元大 B3:E；"
+                f"A欄={target_date:%Y/%m/%d}；H欄={yyyymm}",
+            )
+        else:
+            _log(log, "  all C欄≠現金：0 筆")
+
+        fee_name = f"{period}元大承攬費-{region}.xlsx"
+        _yuanta_export_xlsx(yuanta_file_id, period_folder_id, fee_name)
+        _log(log, f"  ✅ 已另存：{fee_name}")
+
+        # 下半月工具包押金：依使用者規則，以 A121 是否非空白作為是否產出的條件。
+        if not is_first_half:
+            a121 = str(ws_summary.acell("A121").value or "").strip()
+            if a121:
+                deposit_rows = _yuanta_nonempty_rows(
+                    ws_summary.get(
+                        "AB4:AE", value_render_option="UNFORMATTED_VALUE"
+                    ) or []
+                )
+                if deposit_rows:
+                    # 保留第 3 列模板；工具包資料固定從 B4:E。
+                    ws_yuanta.batch_clear(["A4:H"])
+                    end = 3 + len(deposit_rows)
+                    ws_yuanta.update(
+                        f"B4:E{end}",
+                        deposit_rows,
+                        value_input_option="USER_ENTERED",
+                    )
+                    deposit_name = f"{period}元大工具包押金-{region}.xlsx"
+                    _yuanta_export_xlsx(
+                        yuanta_file_id, period_folder_id, deposit_name
+                    )
+                    _log(
+                        log,
+                        f"  ✅ A121 非空白；AB4:AE -> 元大 B4:E，"
+                        f"共 {len(deposit_rows)} 筆；已另存：{deposit_name}",
+                    )
+                else:
+                    _log(log, "  A121 非空白，但 AB4:AE 無有效資料，略過工具包押金 xlsx")
+            else:
+                _log(log, "  A121 空白，略過元大工具包押金 xlsx")
+
         ts = _now_ts()
         record_execution(region, period, "元大帳戶", None)
-        _log(log, f"✅ 中控 GAS 已完成元大承攬費／工具包押金 xlsx｜{ts}")
+        _log(log, f"✅ 元大帳戶 {label} 完成｜{ts}")
         return True
 
     except Exception as e:
