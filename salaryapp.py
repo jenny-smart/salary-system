@@ -988,11 +988,6 @@ if run_clicked and execution_engine == "PYTHON":
                             from modules.cleaning_process_4 import run_tool_deposit
                             success = _run(run_tool_deposit)
 
-
-                        elif _func == "元大帳戶":
-                            from modules.cleaning_process_4 import run_yuanta
-                            success = _run(run_yuanta)
-
                         elif _func in ("產生PDF", "產生專案PDF"):
                             from modules.cleaning_pdf import run_pdf
                             root_id  = _region.get("root_folder_id", "")
@@ -1070,7 +1065,63 @@ if run_clicked and execution_engine == "PYTHON":
                     else:
                         add_log(f"{_func} 尚未實作", "warning")
 
-                elif _system == "✉️ 承攬 mail":
+                elif _system == "📨 承攬作業":
+
+                    if _func == "承攬費通知信":
+                        import sync_service_fee_mail
+                        
+                        def contract_log(message):
+                            level = (
+                                "success" if "✅" in message else
+                                "error" if "❌" in message else
+                                "warning" if "⚠️" in message else
+                                "info"
+                            )
+                            add_log(message, level)
+
+                        count = sync_service_fee_mail(
+                            root_folder_id=root_id,
+                            period=_period,
+                            region=_name,
+                            mail_id=str(_region.get("mail_id", "") or ""),
+                            roster_id=str(_region.get("roster_id", "") or ""),
+                            log=contract_log,
+                        )
+
+                        add_log(f"承攬費通知信完成：{count} 筆", "success")
+
+                    elif _func == "元大帳戶":
+                        from modules.cleaning_process_1 import find_cleaning_file
+                        from modules.cleaning_process_4 import run_yuanta
+
+                        cleaning_file_id = find_cleaning_file(
+                            root_id,
+                            _period,
+                            _name,
+                        )
+
+                        class LiveLog(list):
+                            def append(self, msg):
+                                super().append(msg)
+                                level = (
+                                    "success" if msg.startswith("✅") else
+                                    "error" if msg.startswith("❌") else
+                                    "warning" if msg.startswith("⚠️") else
+                                    "info"
+                                )
+                                add_log(msg, level)
+                                
+                        success = run_yuanta(
+                            cleaning_file_id=cleaning_file_id,
+                            region=_name,
+                            period=_period,
+                            is_first_half=_is_first_half,
+                            log=LiveLog(),
+                            region_cfg=_region,
+                        )
+
+                        if not success:
+                            raise RuntimeError("元大帳戶執行失敗")
                     from modules.service_fee_mail import sync_service_fee_mail
                     count = sync_service_fee_mail(
                         root_folder_id=root_id,
