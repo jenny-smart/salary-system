@@ -85,9 +85,7 @@ def create_period(root_folder_id: str, period: str, region_name: str, log_fn=Non
     if log_fn:
         log_fn(f"🔄 Python + OAuth 建立期別：{period}")
 
-    drive = get_drive_service()
     return create_period_folder_and_files(
-        drive,
         root_folder_id,
         period,
         region_name,
@@ -104,9 +102,7 @@ def convert_order_file(root_folder_id: str, period: str, region_name: str, log_f
     if log_fn:
         log_fn(f"🔄 Python + OAuth 轉檔：{period}訂單-{region_name}")
 
-    drive = get_drive_service()
     return convert_period_order_file(
-        drive,
         root_folder_id,
         period,
         region_name,
@@ -123,9 +119,7 @@ def convert_payment_file(root_folder_id: str, period: str, region_name: str, log
     if log_fn:
         log_fn(f"🔄 Python + OAuth 金流對帳轉檔：{period}")
 
-    drive = get_drive_service()
     return convert_payment_files(
-        drive,
         root_folder_id,
         period,
         region_name,
