@@ -477,19 +477,37 @@ def run_other_settlement(
     period: str,
     service_type: str | None,
     log: Callable,
+    is_first_half: bool | None = None,
     **kwargs,
 ) -> dict:
     """
     其他承攬結算作業。
     service_type=None → 全部；傳入名稱 → 單一服務（補跑用）。
 
-    步驟（不論上下半月相同）：
-    1. 清空 PDF產出工作表 B2:I（整個清空）
-    2. 各服務讀薪資表結算列（J1:O1=姓名，結算列=金額），非零者納入
-    3. 依序寫入 PDF產出：B=姓名、H=Y、I=服務類型
+    上半月：
+    1. 各服務薪資表篩選 E 欄 != 0：E → P、B → Q（自第 3 列起）
+    2. 以 Q 比對 H：對應 I → N、J → O
+
+    下半月：
+    1. 各服務薪資表篩選 F 欄 != 0：F → W、B → X（自第 3 列起）
+    2. 以 X 比對 H：對應 I → U、J → V
+
+    完成薪資表結算區後：
+    3. 清空 PDF產出工作表 B2:I
+    4. 各服務讀既有結算列（J1:O1=姓名，結算列=金額），非零者納入
+    5. 依序寫入 PDF產出：B=姓名、H=Y、I=服務類型
     """
+    if is_first_half is None:
+        if str(period).endswith("-1"):
+            is_first_half = True
+        elif str(period).endswith("-2"):
+            is_first_half = False
+        else:
+            raise ValueError(f"無法由期別判斷上下半月：{period}，請傳入 is_first_half")
+
+    half = "上半月" if is_first_half else "下半月"
     svcs = [service_type] if service_type else ALL_SERVICES
-    log(f"📊 其他承攬結算作業（{'全部' if not service_type else service_type}）")
+    log(f"📊 其他承攬{half}結算作業（{'全部' if not service_type else service_type}）")
 
     try:
         other_file_id = _find_other_file(root_folder_id, period, region)
@@ -518,6 +536,14 @@ def run_other_settlement(
 
     for svc in svcs:
         cfg = SERVICE_CONFIG[svc]
+        try:
+            _prepare_settlement_area(other, cfg, is_first_half, svc, log)
+        except Exception as e:
+            logger.exception(f"{svc} 結算區整理失敗")
+            log(f"  ❌ {svc} 結算區整理失敗：{e}")
+            results[svc] = []
+            continue
+
         if cfg["settlement_row"] is None:
             log(f"\n▶ {svc}：略過（無結算列）")
             results[svc] = []
@@ -557,6 +583,59 @@ def run_other_settlement(
 
     log("\n✅ 其他承攬結算作業完成")
     return results
+
+
+def _prepare_settlement_area(
+    ss: gspread.Spreadsheet,
+    cfg: dict,
+    is_first_half: bool,
+    svc: str,
+    log: Callable,
+):
+    """依上下半月整理薪資表的結算區。
+
+    上半月：E != 0 → P(金額), Q(姓名=B)；Q 比對 H → N=I, O=J
+    下半月：F != 0 → W(金額), X(姓名=B)；X 比對 H → U=I, V=J
+    """
+    ws = ss.worksheet(cfg["salary_table"])
+    last_row = max(ws.row_count, 3)
+
+    # 一次讀取 B:J，避免逐格 API 呼叫。
+    rows = ws.get(f"B3:J{last_row}", value_render_option="UNFORMATTED_VALUE") or []
+
+    # H 欄姓名 → (I, J)；相同姓名以第一筆非空資料為準。
+    lookup = {}
+    for row in rows:
+        padded = list(row) + [""] * (9 - len(row))
+        h_name = str(padded[6] or "").strip()  # B:J 中 H 為 index 6
+        if h_name and h_name not in lookup:
+            lookup[h_name] = (padded[7], padded[8])
+
+    output = []
+    for row in rows:
+        padded = list(row) + [""] * (9 - len(row))
+        name = str(padded[0] or "").strip()  # B
+        amount = padded[3] if is_first_half else padded[4]  # E / F
+        if not name or _is_zero(amount):
+            continue
+        i_val, j_val = lookup.get(name, ("", ""))
+        output.append([i_val, j_val, amount, name])
+
+    if is_first_half:
+        target_cols = "N:Q"
+        start_cell = "N3"
+    else:
+        target_cols = "U:X"
+        start_cell = "U3"
+
+    # 先清空舊資料，再一次寫入新結果。
+    ws.batch_clear([f"{target_cols.split(':')[0]}3:{target_cols.split(':')[1]}{last_row}"])
+    if output:
+        end_row = 3 + len(output) - 1
+        ws.update(f"{start_cell}:{target_cols.split(':')[1]}{end_row}", output, value_input_option="RAW")
+
+    half = "上半月" if is_first_half else "下半月"
+    log(f"  {svc} {half}結算區完成：{len(output)} 筆（{target_cols}）")
 
 
 def _collect_nonzero_names(
@@ -618,15 +697,9 @@ def run_other_pdf(
         log(f"❌ {e}")
         return {"pdfs": {}, "failed": [], "success_count": 0}
 
-    from modules.gas_pdf_client import generate_pdf
-    gas_result = generate_pdf(other_file_id, region, period, "OTHER")
-    if gas_result.get("success"):
-        log("✅ 中控 GAS 已完成其他承攬 PDF 並存入期別資料夾")
-        return {
-            "pdfs": {}, "uploaded": {}, "failed": [],
-            "success_count": 0, "gas_result": gas_result.get("result"),
-        }
-    log(f"⚠️ 中控 GAS 未完成，改用 Python：{gas_result.get('message', '')}")
+    # 直接使用 Python 匯出 PDF。Drive 上傳優先使用使用者 OAuth，
+    # OAuth 不可用時才退回服務帳戶，再失敗則保留下載模式。
+    log("  使用 Python 直接產出 PDF（OAuth Drive 優先）")
 
     gc    = get_gspread_client()
     other = gc.open_by_key(other_file_id)
