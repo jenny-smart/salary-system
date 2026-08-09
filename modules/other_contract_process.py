@@ -122,6 +122,7 @@ SERVICE_CONFIG = {
 
 ALL_SERVICES        = ["水洗", "家電", "收納", "座椅", "地毯"]
 PDF_LIST_SHEET      = "PDF產出"
+SALARY_SUMMARY_SHEET = "薪資總表"
 ORDER_COL_COUNT     = 62   # A:BJ
 TS_FMT              = "%Y/%m/%d %H:%M"
 
@@ -482,20 +483,18 @@ def run_other_settlement(
 ) -> dict:
     """
     其他承攬結算作業。
-    service_type=None → 全部；傳入名稱 → 單一服務（補跑用）。
 
-    上半月：
-    1. 各服務薪資表篩選 E 欄 != 0：E → P、B → Q（自第 3 列起）
-    2. 以 Q 比對 H：對應 I → N、J → O
-
-    下半月：
-    1. 各服務薪資表篩選 F 欄 != 0：F → W、B → X（自第 3 列起）
-    2. 以 X 比對 H：對應 I → U、J → V
-
-    完成薪資表結算區後：
-    3. 清空 PDF產出工作表 B2:I
-    4. 各服務讀既有結算列（J1:O1=姓名，結算列=金額），非零者納入
-    5. 依序寫入 PDF產出：B=姓名、H=Y、I=服務類型
+    固定順序：
+    1. 先操作「薪資總表」
+       - 上半月：E > 0 → E→P、B→Q；Q 比對 H → I→N、J→O
+       - 下半月：F > 0 → F→W、B→X；X 比對 H → I→U、J→V
+       - A 欄服務名稱保留，並直接作為本次 PDF 名單的服務名稱來源
+    2. 再清空「PDF產出」B2:I
+    3. 直接用本次薪資總表篩選結果建立 PDF 名單
+       - B = 姓名
+       - H = Y
+       - I = 服務名稱
+       - 自第 2 列起三欄完全同列對齊
     """
     if is_first_half is None:
         if str(period).endswith("-1"):
@@ -506,8 +505,7 @@ def run_other_settlement(
             raise ValueError(f"無法由期別判斷上下半月：{period}，請傳入 is_first_half")
 
     half = "上半月" if is_first_half else "下半月"
-    svcs = [service_type] if service_type else ALL_SERVICES
-    log(f"📊 其他承攬{half}結算作業（{'全部' if not service_type else service_type}）")
+    log(f"📊 其他承攬{half}結算作業" + (f"（{service_type}）" if service_type else ""))
 
     try:
         other_file_id = _find_other_file(root_folder_id, period, region)
@@ -516,152 +514,159 @@ def run_other_settlement(
         log(f"❌ {e}")
         return {}
 
-    gc    = get_gspread_client()
+    gc = get_gspread_client()
     other = gc.open_by_key(other_file_id)
 
+    # Step 1：先操作薪資總表，並保留本次篩選結果做 PDF 名單來源。
+    try:
+        records = _prepare_salary_summary_settlement(
+            other,
+            is_first_half=is_first_half,
+            service_type=service_type,
+            log=log,
+        )
+    except gspread.WorksheetNotFound:
+        log(f"❌ 找不到「{SALARY_SUMMARY_SHEET}」工作表")
+        return {}
+    except Exception as e:
+        logger.exception("薪資總表結算失敗")
+        log(f"❌ 薪資總表結算失敗：{e}")
+        return {}
+
+    # Step 2：薪資總表完成後，才清空 PDF產出 B2:I。
     try:
         pdf_ws = other.worksheet(PDF_LIST_SHEET)
     except gspread.WorksheetNotFound:
         log(f"❌ 找不到「{PDF_LIST_SHEET}」工作表")
         return {}
 
-    # Step 1：清空 B2:I
     log("  清空 PDF產出 B2:I...")
     last_row = max(pdf_ws.row_count, 2)
     pdf_ws.batch_clear([f"B2:I{last_row}"])
     log("  清空完成")
 
-    results     = {}
-    next_row    = 2   # PDF產出從第 2 列起順序寫入
+    # Step 3：直接用本次薪資總表篩選結果建立 PDF 名單。
+    if records:
+        values = [[r["name"], "Y", r["service"]] for r in records]
+        end_row = 2 + len(values) - 1
+        if end_row > pdf_ws.row_count:
+            pdf_ws.add_rows(end_row - pdf_ws.row_count)
 
-    for svc in svcs:
-        cfg = SERVICE_CONFIG[svc]
-        try:
-            _prepare_settlement_area(other, cfg, is_first_half, svc, log)
-        except Exception as e:
-            logger.exception(f"{svc} 結算區整理失敗")
-            log(f"  ❌ {svc} 結算區整理失敗：{e}")
-            results[svc] = []
-            continue
+        # 一次寫 B、H、I，所有資料使用相同 row index，保證同列對齊。
+        pdf_ws.update(f"B2:B{end_row}", [[v[0]] for v in values], value_input_option="RAW")
+        pdf_ws.update(f"H2:H{end_row}", [[v[1]] for v in values], value_input_option="RAW")
+        pdf_ws.update(f"I2:I{end_row}", [[v[2]] for v in values], value_input_option="RAW")
+        log(f"  PDF產出名單寫入 {len(values)} 筆（B=姓名、H=Y、I=服務名稱）")
+    else:
+        log("  本次薪資總表無符合條件人員，PDF產出名單維持空白")
 
-        if cfg["settlement_row"] is None:
-            log(f"\n▶ {svc}：略過（無結算列）")
-            results[svc] = []
-            continue
+    # 依服務統計本次實際篩選結果並打卡。
+    results = {svc: [] for svc in ALL_SERVICES}
+    for record in records:
+        results.setdefault(record["service"], []).append(record["name"])
 
-        log(f"\n▶ {svc}（第 {cfg['settlement_row']} 列）")
-        try:
-            names = _collect_nonzero_names(other, cfg, svc, log)
-            log(f"  有效人員：{names if names else '（無）'}")
+    if service_type:
+        punch_services = [service_type]
+    else:
+        punch_services = ALL_SERVICES
 
-            if names:
-                batch = []
-                for name in names:
-                    batch.append({"range": f"B{next_row}", "values": [[name]]})
-                    batch.append({"range": f"H{next_row}", "values": [["Y"]]})
-                    batch.append({"range": f"I{next_row}", "values": [[svc]]})
-                    next_row += 1
-                pdf_ws.batch_update(batch)
-                log(f"  寫入 {len(names)} 筆")
-
-            results[svc] = names
-        except Exception as e:
-            logger.exception(f"{svc} 結算失敗")
-            log(f"  ❌ {svc} 結算失敗：{e}")
-            results[svc] = []
-        time.sleep(0.3)
-
-    # 打卡
-    ts    = format_taipei_time(fmt=TS_FMT)
-    batch_punch = []
-    for svc in svcs:
-        batch_punch.append({
+    batch_punch = [
+        {
             "task_key": SERVICE_CONFIG[svc]["settlement_key"],
-            "count":    len(results.get(svc, [])),
-        })
+            "count": len(results.get(svc, [])),
+        }
+        for svc in punch_services
+        if svc in SERVICE_CONFIG
+    ]
     record_batch(region, period, batch_punch)
 
     log("\n✅ 其他承攬結算作業完成")
     return results
 
 
-def _prepare_settlement_area(
+def _positive_number(value) -> bool:
+    """符合結算條件：可解析為數字且 > 0。"""
+    if value is None:
+        return False
+    text = str(value).strip().replace(",", "").replace("，", "")
+    if not text:
+        return False
+    try:
+        return float(text) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _prepare_salary_summary_settlement(
     ss: gspread.Spreadsheet,
-    cfg: dict,
     is_first_half: bool,
-    svc: str,
+    service_type: str | None,
     log: Callable,
-):
-    """依上下半月整理薪資表的結算區。
+) -> list[dict]:
+    """整理「薪資總表」結算區，並回傳本次 PDF 名單來源。
 
-    上半月：E != 0 → P(金額), Q(姓名=B)；Q 比對 H → N=I, O=J
-    下半月：F != 0 → W(金額), X(姓名=B)；X 比對 H → U=I, V=J
+    來源 A:J，自第 3 列起：
+    - A：服務名稱
+    - B：姓名
+    - E/F：上/下半月篩選金額
+    - H：比對姓名
+    - I/J：比對後帶回資料
+
+    上半月輸出 N:Q = I, J, E, B
+    下半月輸出 U:X = I, J, F, B
     """
-    ws = ss.worksheet(cfg["salary_table"])
+    ws = ss.worksheet(SALARY_SUMMARY_SHEET)
     last_row = max(ws.row_count, 3)
+    rows = ws.get(f"A3:J{last_row}", value_render_option="UNFORMATTED_VALUE") or []
 
-    # 一次讀取 B:J，避免逐格 API 呼叫。
-    rows = ws.get(f"B3:J{last_row}", value_render_option="UNFORMATTED_VALUE") or []
-
-    # H 欄姓名 → (I, J)；相同姓名以第一筆非空資料為準。
+    # H → (I, J)。同名時沿用第一筆。
     lookup = {}
     for row in rows:
-        padded = list(row) + [""] * (9 - len(row))
-        h_name = str(padded[6] or "").strip()  # B:J 中 H 為 index 6
+        padded = list(row) + [""] * (10 - len(row))
+        h_name = str(padded[7] or "").strip()
         if h_name and h_name not in lookup:
-            lookup[h_name] = (padded[7], padded[8])
+            lookup[h_name] = (padded[8], padded[9])
 
     output = []
+    records = []
     for row in rows:
-        padded = list(row) + [""] * (9 - len(row))
-        name = str(padded[0] or "").strip()  # B
-        amount = padded[3] if is_first_half else padded[4]  # E / F
-        if not name or _is_zero(amount):
+        padded = list(row) + [""] * (10 - len(row))
+        service = str(padded[0] or "").strip()  # A
+        name = str(padded[1] or "").strip()     # B
+        amount = padded[4] if is_first_half else padded[5]  # E / F
+
+        if not name or not _positive_number(amount):
             continue
+        if service_type and service != service_type:
+            continue
+
         i_val, j_val = lookup.get(name, ("", ""))
         output.append([i_val, j_val, amount, name])
+        records.append({"service": service, "name": name})
 
     if is_first_half:
-        target_cols = "N:Q"
-        start_cell = "N3"
+        clear_range = f"N3:Q{last_row}"
+        start_col = "N"
+        end_col = "Q"
     else:
-        target_cols = "U:X"
-        start_cell = "U3"
+        clear_range = f"U3:X{last_row}"
+        start_col = "U"
+        end_col = "X"
 
-    # 先清空舊資料，再一次寫入新結果。
-    ws.batch_clear([f"{target_cols.split(':')[0]}3:{target_cols.split(':')[1]}{last_row}"])
+    ws.batch_clear([clear_range])
     if output:
         end_row = 3 + len(output) - 1
-        ws.update(f"{start_cell}:{target_cols.split(':')[1]}{end_row}", output, value_input_option="RAW")
+        ws.update(
+            f"{start_col}3:{end_col}{end_row}",
+            output,
+            value_input_option="RAW",
+        )
 
     half = "上半月" if is_first_half else "下半月"
-    log(f"  {svc} {half}結算區完成：{len(output)} 筆（{target_cols}）")
-
-
-def _collect_nonzero_names(
-    ss: gspread.Spreadsheet,
-    cfg: dict,
-    svc: str,
-    log: Callable,
-) -> list[str]:
-    """薪資表 J1:O1 = 姓名；結算列 J:O = 金額；非零、去重，回傳名單。"""
-    ws  = ss.worksheet(cfg["salary_table"])
-    row = cfg["settlement_row"]
-
-    header  = ws.row_values(1)
-    amounts = ws.row_values(row)
-
-    names = header[9:15]
-    amts  = (amounts[9:15] if len(amounts) >= 15
-             else amounts[9:] + [""] * (15 - len(amounts)))
-
-    seen, result = set(), []
-    for name, amt in zip(names, amts):
-        name = str(name).strip()
-        if name and not _is_zero(amt) and name not in seen:
-            seen.add(name)
-            result.append(name)
-    return result
+    log(f"  薪資總表 {half}篩選完成：{len(records)} 筆")
+    if records:
+        log("  PDF 名單來源：" + "、".join(f"{r['service']}/{r['name']}" for r in records))
+    return records
 
 
 # ─────────────────────────────────────────────────────────────────────────────
