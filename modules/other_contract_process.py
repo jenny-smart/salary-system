@@ -17,7 +17,13 @@ from typing import Callable, List
 
 import gspread
 
-from modules.auth import get_gspread_client, get_drive_service, get_credentials
+from modules.auth import (
+    get_gspread_client,
+    get_drive_service,
+    get_credentials,
+    get_jenny_credentials,
+    get_jenny_drive_service,
+)
 from modules.master_sheet import record_execution, record_batch, get_recorded_values
 from modules.period_utils import format_taipei_time
 
@@ -702,9 +708,9 @@ def run_other_pdf(
         log(f"❌ {e}")
         return {"pdfs": {}, "failed": [], "success_count": 0}
 
-    # 直接使用 Python 匯出 PDF。Drive 上傳優先使用使用者 OAuth，
-    # OAuth 不可用時才退回服務帳戶，再失敗則保留下載模式。
-    log("  使用 Python 直接產出 PDF（OAuth Drive 優先）")
+    # 直接使用 Python 匯出 PDF；匯出 token 與實體 Drive PDF 都使用 Jenny OAuth。
+    # Sheets 資料讀寫仍維持既有 Service Account。
+    log("  使用 Python 直接產出 PDF（Jenny OAuth）")
 
     gc    = get_gspread_client()
     other = gc.open_by_key(other_file_id)
@@ -719,7 +725,7 @@ def run_other_pdf(
     result = {"pdfs": {}, "uploaded": {}, "failed": [], "success_count": 0}
 
     token                  = _get_access_token()
-    oauth_drive, folder_id = _prepare_drive_output(root_folder_id, period, log)
+    jenny_drive, folder_id = _prepare_drive_output(root_folder_id, period, log)
 
     for svc in svcs:
         cfg = SERVICE_CONFIG[svc]
@@ -794,11 +800,11 @@ def run_other_pdf(
                 ]
                 uploaded = False
 
-                if oauth_drive and folder_id:
+                if jenny_drive and folder_id:
                     try:
                         existing_url = _get_cell(pdf_ws, row, 5)
                         drive_url    = _upload_or_update_drive(
-                            oauth_drive, folder_id, pdf_bytes, file_name, existing_url
+                            jenny_drive, folder_id, pdf_bytes, file_name, existing_url
                         )
                         if not existing_url:
                             updates.append({"range": f"E{row}", "values": [[drive_url]]})
@@ -904,10 +910,10 @@ def _write_salary_details(ws: gspread.Worksheet, cfg: dict, details: list[list])
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _get_access_token() -> str:
-    import google.auth.transport.requests
-    creds = get_credentials()
-    if not creds.token or not creds.valid:
-        creds.refresh(google.auth.transport.requests.Request())
+    """取得 Jenny OAuth access token，供 Google Sheets export API 匯出 PDF。"""
+    creds = get_jenny_credentials()
+    if not creds.token:
+        raise RuntimeError("Jenny OAuth 未取得 access token，無法匯出 PDF")
     return creds.token
 
 
@@ -940,37 +946,15 @@ def _export_pdf(
 
 
 def _prepare_drive_output(root_folder_id: str, period: str, log: Callable):
-    errors = []
-    for label, factory in [
-        ("使用者 OAuth", _get_oauth_drive_service),
-        ("服務帳戶", get_drive_service),
-    ]:
-        try:
-            drive = factory()
-            folder_id = _get_or_create_pdf_folder(root_folder_id, period, drive)
-            log(f"  Drive 資料夾準備完成（{label}）")
-            return drive, folder_id
-        except Exception as e:
-            errors.append(f"{label}：{e}")
-    log(f"  ⚠️ Drive 未啟用，改走下載模式：{'；'.join(errors)}")
-    return None, None
-
-
-def _get_oauth_drive_service():
-    import streamlit as st
-    from google.oauth2.credentials import Credentials
-    from googleapiclient.discovery import build
-    import google.auth.transport.requests
-
-    cfg   = st.secrets["oauth_drive"]
-    creds = Credentials(
-        token=None, refresh_token=cfg["refresh_token"],
-        token_uri=cfg["token_uri"], client_id=cfg["client_id"],
-        client_secret=cfg["client_secret"],
-        scopes=["https://www.googleapis.com/auth/drive"],
-    )
-    creds.refresh(google.auth.transport.requests.Request())
-    return build("drive", "v3", credentials=creds)
+    """使用 Jenny OAuth 準備 PDF 輸出資料夾。"""
+    try:
+        drive = get_jenny_drive_service()
+        folder_id = _get_or_create_pdf_folder(root_folder_id, period, drive)
+        log("  Drive 資料夾準備完成（Jenny OAuth）")
+        return drive, folder_id
+    except Exception as e:
+        log(f"  ⚠️ Jenny OAuth Drive 未啟用，改走下載模式：{e}")
+        return None, None
 
 
 def _get_or_create_pdf_folder(root_id: str, period: str, drive) -> str:
