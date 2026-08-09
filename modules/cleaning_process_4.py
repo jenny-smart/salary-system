@@ -197,7 +197,7 @@ def _tool_process_v2(
     依 salary_id 的「工具包押金」工作表處理下半月押金。
 
     規則：
-    - 不動「場次時數薪資總表」第 1~120 列既有資料。
+    - 不動「場次時數薪資總表」第 1~120 列既有資料；工具包押金固定從第 121 列寫入。
     - 符合工具包押金資格者，自第 121 列起寫入：
         A 欄 = 姓名（薪資檔工具包押金 A 欄）
         B 欄 = 場次（薪資檔工具包押金 I 欄）
@@ -264,23 +264,25 @@ def _tool_process_v2(
         )
     _log(log, f"  介紹獎金回填 {len(intro_rows)} 筆")
 
-    # 工具包押金區固定從第 121 列開始。
-    # 只清理第 121 列以下的工具包押金區，絕不清除/搬動 A4:B120 原資料。
-    ws_summary.batch_clear([f"A{TOOL_DEPOSIT_START_ROW}:B"])
+    # 工具包押金固定寫入「場次時數薪資總表」第 121 列起。
+    # 嚴禁依姓名比對去清除、搬動或重排上方既有資料；A1:B120 完全不動。
+    # 本次符合者依「工具包押金」工作表原列序寫入：A=姓名、B=I欄場次。
+    append_start = 121
+
     if selected:
-        end_row = TOOL_DEPOSIT_START_ROW + len(selected) - 1
+        end_row = append_start + len(selected) - 1
         ws_summary.update(
-            f"A{TOOL_DEPOSIT_START_ROW}:B{end_row}",
+            f"A{append_start}:B{end_row}",
             [[name, i_value] for name, i_value in selected],
             value_input_option="USER_ENTERED",
         )
         _log(
             log,
-            f"  工具包押金名單寫入 A{TOOL_DEPOSIT_START_ROW}:B{end_row}："
-            f"A=姓名、B=薪資檔 I 欄，共 {len(selected)} 筆",
+            f"  工具包押金名單固定寫入 A{append_start}:B{end_row}："
+            f"A=姓名、B=薪資檔 I 欄，共 {len(selected)} 筆；A1:B120 完全未變更",
         )
     else:
-        _log(log, f"  工具包押金無符合資料；A{TOOL_DEPOSIT_START_ROW}:B 已清空")
+        _log(log, "  工具包押金無符合資料；A1:B120 完全不變更")
 
     # AB/AC 由 H 姓名比對 I/J；AD 押金、AE 姓名。
     # 這區仍供後續元大工具包押金檔使用。
@@ -301,7 +303,7 @@ def _tool_process_v2(
             f"AB4:AE{3 + len(output)}", output, value_input_option="USER_ENTERED"
         )
 
-    _log(log, f"  工具包押金回填完成：{len(selected)} 筆，起始列 A{TOOL_DEPOSIT_START_ROW}")
+    _log(log, f"  工具包押金回填完成：{len(selected)} 筆，寫入起始列 A{append_start}")
     return len(selected)
 
 
@@ -323,7 +325,7 @@ def _tool_clear(
     # 清空 介紹獎金 A2:C
     ws_intro.batch_clear(["A2:C"])
 
-    _log(log, "    上半月：場次時數薪資總表 A151:E / AB4:AE 及介紹獎金 A2:C 已清空")
+    _log(log, "    上半月：保留場次時數薪資總表 A:E；僅清空 AB4:AE 及介紹獎金 A2:C")
 
 
 def _tool_process(
