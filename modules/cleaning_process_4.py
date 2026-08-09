@@ -16,7 +16,7 @@ Lemon Clean 清潔承攬 — 工具包押金 / 介紹獎金 / 元大帳戶
 工具包押金 & 介紹獎金邏輯（來自 GAS executeFullToolDepositProcess）：
 
     上半月：
-        清空 場次時數薪資總表 A151:E（startRow=151）
+        清空 場次時數薪資總表 A121:E（startRow=121）
         清空 場次時數薪資總表 AB4:AE（col 28:31）
         清空 介紹獎金工作表 A2:C
 
@@ -24,7 +24,7 @@ Lemon Clean 清潔承攬 — 工具包押金 / 介紹獎金 / 元大帳戶
         工具包押金：
             篩選「工具包押金」工作表：
                 I 欄 >= 80 且 J 欄非空白
-                → 場次時數薪資總表 A151:E（A=J欄, B=A欄, C/D=空, E=押金金額）
+                → 場次時數薪資總表 A121:B（A=姓名, B=工具包押金 I欄場次）
                 台中地區押金=1500，其餘=2000
         介紹獎金：
             篩選「工具包押金」工作表：
@@ -71,7 +71,7 @@ DEPOSIT_TAICHUNG  = 1500
 DEPOSIT_OTHER     = 2000
 INTRO_BONUS       = 1000
 
-TOOL_DEPOSIT_START_ROW = 151   # 場次時數薪資總表寫入起始列
+TOOL_DEPOSIT_START_ROW = 121   # 場次時數薪資總表：工具包押金資料寫入起始列
 AB_COL = 28                    # AB 欄（1-based）
 
 
@@ -193,38 +193,54 @@ def _tool_process_v2(
     period: str,
     log: List[str],
 ) -> int:
-    """依 salary_id 工具包押金表處理下半月押金。"""
+    """
+    依 salary_id 的「工具包押金」工作表處理下半月押金。
+
+    規則：
+    - 不動「場次時數薪資總表」第 1~120 列既有資料。
+    - 符合工具包押金資格者，自第 121 列起寫入：
+        A 欄 = 姓名（薪資檔工具包押金 A 欄）
+        B 欄 = 場次（薪資檔工具包押金 I 欄）
+    - 不再把 G 欄提領日期寫到總表 B 欄。
+    - G 欄提領日期仍依既有邏輯在薪資檔「工具包押金」內補寫，不影響上方總表資料。
+    """
     rows = ws_deposit.get("A2:J") or []
     year, month = int(period[:4]), int(period[4:6])
     if month == 12:
         due = datetime.date(year + 1, 1, 10)
     else:
         due = datetime.date(year, month + 1, 10)
+    due_text = due.strftime("%Y/%m/%d")
 
+    # selected: (姓名, I欄場次)
     selected = []
     updates = []
     for offset, row in enumerate(rows, start=2):
         row += [""] * (10 - len(row))
         name = str(row[0]).strip()
+        i_value = _to_num(row[8])
         current_due = str(row[6]).strip().replace("-", "/")
-        due_text = due.strftime("%Y/%m/%d")
         try:
             current_due = datetime.datetime.strptime(
                 current_due, "%Y/%m/%d"
             ).strftime("%Y/%m/%d")
         except ValueError:
             pass
+
         if (
             name
-            and _to_num(row[8]) >= DEPOSIT_THRESHOLD
+            and i_value >= DEPOSIT_THRESHOLD
             and (not current_due or current_due == due_text)
         ):
-            selected.append((name, due))
+            # I 欄若為整數，寫入整數，避免 80.0 之類顯示。
+            i_out = int(i_value) if float(i_value).is_integer() else i_value
+            selected.append((name, i_out))
             if not current_due:
                 updates.append({
                     "range": f"'{ws_deposit.title}'!G{offset}",
                     "values": [[due_text]],
                 })
+
     if updates:
         ws_deposit.spreadsheet.values_batch_update({
             "valueInputOption": "USER_ENTERED", "data": updates
@@ -232,7 +248,7 @@ def _tool_process_v2(
 
     # 符合押金資格且 J 欄有介紹人：A=本人、B=介紹人、C=1000。
     intro_rows = []
-    selected_names = {name for name, _due in selected}
+    selected_names = {name for name, _i in selected}
     for row in rows:
         row += [""] * (10 - len(row))
         name = str(row[0]).strip()
@@ -248,33 +264,27 @@ def _tool_process_v2(
         )
     _log(log, f"  介紹獎金回填 {len(intro_rows)} 筆")
 
-    # 清除上次由本功能追加的列，避免重跑重複。
-    old_ae = ws_summary.get("AE4:AE120") or []
-    old_names = {str(r[0]).strip() for r in old_ae if r and str(r[0]).strip()}
-    old_names.update(name for name, _due in selected)
-    existing = ws_summary.get("A4:B120") or []
-    clear_ranges = []
-    for i, row in enumerate(existing, start=4):
-        if row and str(row[0]).strip() in old_names and len(row) > 1 and str(row[1]).strip():
-            clear_ranges.append(f"A{i}:B{i}")
-    if clear_ranges:
-        ws_summary.batch_clear(clear_ranges)
-    ws_summary.batch_clear(["AB4:AE120"])
-
-    a_values = ws_summary.get("A4:A120") or []
-    last_row = 3
-    for idx, row in enumerate(a_values, start=4):
-        if row and str(row[0]).strip():
-            last_row = idx
-    append_start = last_row + 5
+    # 工具包押金區固定從第 121 列開始。
+    # 只清理第 121 列以下的工具包押金區，絕不清除/搬動 A4:B120 原資料。
+    ws_summary.batch_clear([f"A{TOOL_DEPOSIT_START_ROW}:B"])
     if selected:
+        end_row = TOOL_DEPOSIT_START_ROW + len(selected) - 1
         ws_summary.update(
-            f"A{append_start}:B{append_start + len(selected) - 1}",
-            [[name, due.strftime("%Y/%m/%d")] for name, due in selected],
+            f"A{TOOL_DEPOSIT_START_ROW}:B{end_row}",
+            [[name, i_value] for name, i_value in selected],
             value_input_option="USER_ENTERED",
         )
+        _log(
+            log,
+            f"  工具包押金名單寫入 A{TOOL_DEPOSIT_START_ROW}:B{end_row}："
+            f"A=姓名、B=薪資檔 I 欄，共 {len(selected)} 筆",
+        )
+    else:
+        _log(log, f"  工具包押金無符合資料；A{TOOL_DEPOSIT_START_ROW}:B 已清空")
 
     # AB/AC 由 H 姓名比對 I/J；AD 押金、AE 姓名。
+    # 這區仍供後續元大工具包押金檔使用。
+    ws_summary.batch_clear(["AB4:AE120"])
     hij = ws_summary.get("H4:J120") or []
     account = {
         str(r[0]).strip(): (
@@ -283,14 +293,15 @@ def _tool_process_v2(
         for r in hij if r and str(r[0]).strip()
     }
     output = []
-    for name, _due in selected:
+    for name, _i_value in selected:
         i_val, j_val = account.get(name, ("", ""))
         output.append([i_val, j_val, deposit_amount, name])
     if output:
         ws_summary.update(
             f"AB4:AE{3 + len(output)}", output, value_input_option="USER_ENTERED"
         )
-    _log(log, f"  工具包押金回填 {len(selected)} 筆，起始列 A{append_start}")
+
+    _log(log, f"  工具包押金回填完成：{len(selected)} 筆，起始列 A{TOOL_DEPOSIT_START_ROW}")
     return len(selected)
 
 
@@ -303,7 +314,7 @@ def _tool_clear(
     last_col = ws_summary.col_count
     last_ltr = _col_letter(last_col)
 
-    # 清空 場次時數薪資總表 A151:E
+    # 清空 場次時數薪資總表 A121:E
     ws_summary.batch_clear([
         f"A{TOOL_DEPOSIT_START_ROW}:E",
         f"AB4:{_col_letter(AB_COL + 3)}",   # AB:AE = col28:31
@@ -326,12 +337,12 @@ def _tool_process(
     下半月：
     讀取「工具包押金」工作表，
         A欄=姓名, I欄=次數, J欄=備註（空白=介紹獎金，非空=工具包押金）
-    工具包押金：I >= 80 且 J 非空白 → 場次時數薪資總表 A151起（A=J, B=A, C/D=空, E=押金）
+    工具包押金：I >= 80 且 J 非空白 → 場次時數薪資總表 A121起（A=J, B=A, C/D=空, E=押金）
     介紹獎金：  I >= 80 且 J 空白   → 介紹獎金工作表 A2起（A=J欄=空, B=A欄姓名, C=1000）
 
     注意：GAS 原版的 A=J欄, B=A欄 意思是：
-        場次時數薪資總表 A欄 = 工具包押金 J 欄
-        場次時數薪資總表 B欄 = 工具包押金 A 欄（姓名）
+        場次時數薪資總表 A欄 = 工具包押金 A欄（姓名）
+        場次時數薪資總表 B欄 = 工具包押金 I欄（場次）
     """
     all_vals = ws_deposit.get("A2:J") or []
 
