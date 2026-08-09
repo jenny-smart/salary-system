@@ -641,7 +641,7 @@ def run_yuanta(
 
     承攬費流程：
       1. 清潔承攬：-1 取 N4:Q；-2 取 U4:X -> all!A2:D
-      2. 其他承攬：取相同期別範圍，接在 all 的最後一筆非空白列之後
+      2. 其他承攬：從「薪資總表」取相同期別範圍，接在 all 的最後一筆非空白列之後
       3. all C 欄必須非空白且不等於「現金」 -> 元大!B3:E
       4. 元大 A 欄：-1=YYYYMM20；-2=YYYYMM10；非工作日往前移
       5. 元大 H 欄 = YYYYMM
@@ -699,7 +699,7 @@ def run_yuanta(
             root_folder_id, period, region
         )
         other_ss = gc.open_by_key(other_file_id)
-        other_ws = other_ss.worksheet("場次時數薪資總表")
+        other_ws = other_ss.worksheet("薪資總表")
         other_rows = _yuanta_nonempty_rows(
             other_ws.get(source_range, value_render_option="UNFORMATTED_VALUE") or []
         )
