@@ -655,7 +655,9 @@ def _expand_fg_rows(df: pd.DataFrame) -> tuple[list, int, list, dict, list]:
                     new_row[1] = f"{order_id}-{i}"
                     expand_count += 1
                     new_row_indices.append(len(output))
-                    for col_idx in range(24, 28):
+                    # 新切出的子單不繼承 V:AD（發票及收款金額計算欄）。
+                    # Python 索引 21:30 對應試算表 V:AD。
+                    for col_idx in range(21, 30):
                         if col_idx < len(new_row):
                             new_row[col_idx] = ""
                 if not item["has_qty"]:
@@ -735,7 +737,10 @@ def _expand_fg_rows_with_fmts(rows, fmts):
                 new_row[1] = child_id
                 expand_count += 1
                 new_row_indices.append(len(output_rows))
-                for col_idx in range(24, 28):
+                # 只清空本次新建立的子單；原本已存在的子單會在上方
+                # 「子列」分支原樣保留，因此不受此規則影響。
+                # Python 索引 21:30 對應試算表 V:AD。
+                for col_idx in range(21, 30):
                     if col_idx < len(new_row):
                         new_row[col_idx] = ""
             if not item["has_qty"]:
