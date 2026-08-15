@@ -1531,3 +1531,91 @@ with st.expander("🔧 系統維護"):
                     st.success("✅ 清理完成！")
                 except Exception as e:
                     st.error(f"清理失敗：{e}")
+
+# ═══════════════════════════════════════════════════════════
+# █ 區塊12：UI — Drive 授權設定
+# ═══════════════════════════════════════════════════════════
+with st.expander("🔑 Drive 授權設定"):
+    st.markdown("""
+**操作流程：**
+1. Google Cloud Console：若目前 OAuth Client 已失效才需要重建（類型選 **Web application**），並在「授權的重新導向 URI」加入下方顯示的網址
+2. 貼上 Client ID / Client Secret（沿用既有 client 就貼現有的）
+3. 點擊產生的授權連結 → 用 jenny@lemonclean.com.tw 登入 → 按同意
+4. Google 導回本頁，下方會顯示新的 client_id / client_secret / refresh_token
+5. 複製這三個值，貼到 Streamlit Cloud 後台 Secrets 的 `[oauth_drive]`
+6. Reboot app 讓新 secrets 生效
+    """)
+
+    redirect_uri = str(_safe_secret("APP_BASE_URL", "") or "").rstrip("/")
+    if not redirect_uri:
+        st.warning("尚未設定 secrets 的 APP_BASE_URL（這個 app 的網址），請先設定，並在 Google Console 的重新導向 URI 加入同一個網址。")
+    else:
+        st.caption(f"授權的重新導向 URI 請設定為：`{redirect_uri}`")
+
+    oauth_client_id = st.text_input("Client ID", key="oauth_setup_client_id")
+    oauth_client_secret = st.text_input("Client Secret", type="password", key="oauth_setup_client_secret")
+
+    if st.button("🔗 產生授權連結", use_container_width=True, disabled=not redirect_uri):
+        if not oauth_client_id or not oauth_client_secret:
+            st.error("請先輸入 Client ID 與 Client Secret")
+        else:
+            import secrets as _secrets
+            from urllib.parse import urlencode
+            state = _secrets.token_urlsafe(16)
+            st.session_state["oauth_setup_state"] = state
+            params = {
+                "response_type": "code",
+                "client_id": oauth_client_id,
+                "redirect_uri": redirect_uri,
+                "scope": "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets",
+                "access_type": "offline",
+                "prompt": "consent",
+                "state": state,
+            }
+            auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
+            st.link_button("➡️ 點此前往 Google 登入同意", auth_url, use_container_width=True)
+
+    qp = st.query_params
+    if "code" in qp:
+        returned_state = qp.get("state", "")
+        expected_state = st.session_state.get("oauth_setup_state", "")
+        code = qp.get("code")
+        st.query_params.clear()
+        if not expected_state or returned_state != expected_state:
+            st.error("授權驗證失敗（state 不符），請重新操作一次。")
+        else:
+            saved_id = st.session_state.get("oauth_setup_client_id", "")
+            saved_secret = st.session_state.get("oauth_setup_client_secret", "")
+            try:
+                import requests as _requests
+                resp = _requests.post(
+                    "https://oauth2.googleapis.com/token",
+                    data={
+                        "code": code,
+                        "client_id": saved_id,
+                        "client_secret": saved_secret,
+                        "redirect_uri": redirect_uri,
+                        "grant_type": "authorization_code",
+                    },
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                token_data = resp.json()
+                refresh_token = token_data.get("refresh_token")
+                if not refresh_token:
+                    st.warning(
+                        "Google 沒有回傳 refresh_token，通常是這個帳號先前已授權過。"
+                        "請先到 https://myaccount.google.com/permissions 移除舊授權後再重試一次。"
+                    )
+                else:
+                    st.success("✅ 已取得新授權，請把以下貼到 Secrets 的 [oauth_drive]，貼完記得 Reboot app：")
+                    st.code(
+                        "[oauth_drive]\n"
+                        f'client_id = "{saved_id}"\n'
+                        f'client_secret = "{saved_secret}"\n'
+                        f'refresh_token = "{refresh_token}"\n'
+                        'token_uri = "https://oauth2.googleapis.com/token"\n',
+                        language="toml",
+                    )
+            except Exception as e:
+                st.error(f"換取 token 失敗：{e}")
