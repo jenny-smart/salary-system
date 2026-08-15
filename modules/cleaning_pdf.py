@@ -270,7 +270,10 @@ def _prepare_drive_output(root_folder_id: str, period: str, log: List[str]):
         try:
             drive = factory()
             folder_id = _get_or_create_pdf_folder(root_folder_id, period, drive)
-            _log(log, f"    Drive 資料夾準備完成（{label}）")
+            if errors:
+                _log(log, f"    ⚠️ 使用者 OAuth 失敗，改用（{label}）：{errors[-1]}")
+            else:
+                _log(log, f"    Drive 資料夾準備完成（{label}）")
             return drive, folder_id
         except Exception as e:
             errors.append(f"{label}：{_format_error(e)}")
@@ -327,7 +330,7 @@ def _get_or_create_pdf_folder(root_id: str, period: str, drive=None) -> str:
 
 
 # ──────────────────────────────────────────────────────────────
-# OAuth Drive 操作（用 jenny@hers.com.tw 的權限上傳/更新檔案）
+# OAuth Drive 操作（用 jenny@lemonclean.com.tw 的權限上傳/更新檔案）
 # ──────────────────────────────────────────────────────────────
 
 def _get_oauth_drive_service():
