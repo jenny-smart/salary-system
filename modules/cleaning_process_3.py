@@ -337,8 +337,8 @@ def _step2_summary(
         if pq_rows:
             n = len(pq_rows)
             ws.batch_clear([f"N4:Q{3 + len(raw)}"])
-            ws.update(f"P4:P{3+n}", [[r[0]] for r in pq_rows], value_input_option="USER_ENTERED")
-            ws.update(f"Q4:Q{3+n}", [[r[1]] for r in pq_rows], value_input_option="USER_ENTERED")
+            ws.update(f"Q4:Q{3+n}", [[r[0]] for r in pq_rows], value_input_option="USER_ENTERED")
+            ws.update(f"P4:P{3+n}", [[r[1]] for r in pq_rows], value_input_option="USER_ENTERED")
             _log(log, f"    P~Q 寫入：{n} 筆")
             _fill_account_cols(ws, raw, [r[0] for r in pq_rows],
                                h_idx=7, i_idx=8, j_idx=9,
