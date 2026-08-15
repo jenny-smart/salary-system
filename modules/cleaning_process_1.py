@@ -51,7 +51,7 @@ def _name_key(value) -> str:
     text = unicodedata.normalize("NFKC", str(value or ""))
     return "".join(
         ch for ch in text
-        if not ch.isspace() and ch not in "\u200b\u200c\u200d\ufeff"
+        if not ch.isspace() and ch not in "​‌‍﻿"
     )
 
 
@@ -686,7 +686,11 @@ def run_adjustment(
             ws_adjust, ws_salary, is_first_half, log
         )
         time.sleep(3)
-        _adj_validate_hours(ws_salary, log)
+        # 1996列非0姓名檢查已移至結算作業（run_settlement）執行，
+        # 00調薪本身不再檢查。
+        if is_first_half:
+            _log(log, "  上半月額外檢查：既有欄位 2006:2014 公式與 L 欄樣板一致")
+            _adj_check_2006_2014_formulas(ws_salary, log)
 
         # ── 步驟13：設定期別標記 E1 ──────────────────────────
         _log(log, "  步驟13：設定期別標記 E1")
@@ -957,7 +961,9 @@ def _adj_update_summary_a(
     num_rows: int,
     log: List[str],
 ):
-    ws_summary.batch_clear([f"A{SUMMARY_START}:A{SUMMARY_END}"])
+    # A121:B 為超出本期資料範圍（SUMMARY_END=120）之後的殘留列，
+    # 每次更新 A 欄前一併清除，避免舊資料殘留干擾。
+    ws_summary.batch_clear([f"A{SUMMARY_START}:A{SUMMARY_END}", "A121:B"])
     if num_rows <= 0:
         return
     a_vals = ws_adjust.get(f"A3:A{2 + num_rows}") or []
@@ -1239,11 +1245,11 @@ def _copy_salary_formulas(
     L 欄公式範例：=IF(ISNUMBER(FIND(L$1,$F2)),$G2,"")
     - L$1 是混合參照（列固定），需連同 L$數字 一起替換欄字母
     - $L1 是欄固定，不需替換
-    複製範圍固定為 L3:L2046。
+    複製範圍固定為 L2:L2048。
     """
     SRC_COL   = 12    # L = col 12
-    START_ROW = 3
-    END_ROW   = 2046
+    START_ROW = 2
+    END_ROW   = 2048
 
     # FORMULA 模式取得公式
     src_formulas = ws_salary.get(
@@ -1290,8 +1296,56 @@ def _copy_salary_formulas(
         _log(log, f"    薪資公式複製完成（{diff} 欄，{len(batch)} 格）")
 
 
+def _adj_check_2006_2014_formulas(ws_salary: gspread.Worksheet, log: List[str]) -> None:
+    """
+    上半月專用檢查：既有欄位（第1列姓名非空白）的 2006:2014 列公式，
+    須與 L 欄同列樣板公式一致（只替換欄字母後比較）。
+    不一致代表該欄位公式可能被手動改壞，中止流程請人工確認。
+    下半月不執行此檢查。
+    """
+    headers = ws_salary.row_values(1)[11:]  # L 起（index 11 = L）
+    if not headers:
+        return
+
+    template = ws_salary.get(
+        "L2006:L2014", value_render_option="FORMULA"
+    ) or []
+    end_col = _col_letter(11 + len(headers))
+    all_formulas = ws_salary.get(
+        f"L2006:{end_col}2014", value_render_option="FORMULA"
+    ) or []
+
+    errors = []
+    for c_idx, name in enumerate(headers):
+        if not str(name).strip():
+            continue
+        col_letter = _col_letter(12 + c_idx)
+        for r_idx in range(len(template)):
+            tmpl_formula = template[r_idx][0] if r_idx < len(template) and template[r_idx] else ""
+            if not tmpl_formula:
+                continue
+            expected = re.sub(r'(?<!\$)L(?=\$?\d)', col_letter, tmpl_formula)
+            actual_row = all_formulas[r_idx] if r_idx < len(all_formulas) else []
+            actual = actual_row[c_idx] if c_idx < len(actual_row) else ""
+            if str(actual or "").strip() != str(expected or "").strip():
+                errors.append(f"{col_letter}{2006 + r_idx}（{str(name).strip()}）")
+
+    if errors:
+        message = "請檢查以下欄位 2006:2014 公式與 L 欄樣板不一致：" + "、".join(errors[:10])
+        if len(errors) > 10:
+            message += f" 等共 {len(errors)} 格"
+        _log(log, f"❌ {message}")
+        raise ValueError(message)
+    _log(log, "    ✅ 2006:2014 公式檢查通過（既有欄位與樣板一致）")
+
+
 def _adj_validate_hours(ws_salary: gspread.Worksheet, log: List[str]) -> None:
-    """L1996 起至最後人員欄不得有非 0 時數。"""
+    """
+    L1996 起至最後人員欄不得有非 0 時數。
+
+    注意：此檢查現在由「結算作業」（cleaning_process_3.run_settlement）
+    在開始結算前呼叫，00調薪本身不再呼叫。
+    """
     headers = ws_salary.row_values(1)[11:]
     if not headers:
         return

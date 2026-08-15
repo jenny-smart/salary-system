@@ -21,6 +21,9 @@ scheduleName = B1（YYYYMM）+ "-1"（上半月）/ "-2"（下半月）
     計算 QRS
     執行共通 QRS→U-Y→AA-AC 流程
 
+    ※ 02儲值獎金例外：上半月只清空 A2:AC 就結束，不做任何匯入；
+      只有下半月才會匯入資料並計算 QRS（儲值獎金以整月計算，不分上下半月拆算）。
+
 各作業差異（A欄公式 / QRS）：
 
     01專員請款
@@ -468,6 +471,12 @@ def run_voucher(
     region_cfg: dict = None,
     payment_file_id: str = None,
 ) -> bool:
+    """
+    02儲值獎金。
+
+    ※ 上半月只清空 A2:AC 就結束，不做任何 IMPORTRANGE／計算——
+      儲值獎金以整月結算，資料只在下半月一次匯入。
+    """
     label = "上半月" if is_first_half else "下半月"
     _log(log, f"▶ 02儲值獎金 {label} 開始")
     try:
@@ -475,17 +484,19 @@ def run_voucher(
         ss = gc.open_by_key(cleaning_file_id)
         ws_voucher = ss.worksheet("02儲值獎金")
 
-        # payment_file_id 由 salaryapp.py 透過 find_payment_file() 取得
+        if is_first_half:
+            _clear_first_half(ws_voucher, log)
+            ts = _punch("02儲值獎金", region, period, None)
+            _log(log, f"✅ 02儲值獎金 {label} 完成（僅清空 A2:AC，不匯入）｜{ts}")
+            return True
+
+        # ── 下半月才匯入資料 ─────────────────────────────────
         payment_id = payment_file_id or ""
         if not payment_id:
             raise ValueError("缺少金流對帳試算表 ID（payment_file_id），請確認已傳入")
 
-        if is_first_half:
-            _clear_first_half(ws_voucher, log)
-            target_row = 2
-        else:
-            target_row = _first_empty_row_col_a(ws_voucher)
-            _log(log, f"    下半月接續列：{target_row}")
+        target_row = _first_empty_row_col_a(ws_voucher)
+        _log(log, f"    下半月接續列：{target_row}")
 
         # 遮罩：只取 B(2),C(3),D(4),E(5),M(13),BB(54) 欄
         # 格式：=FILTER(FILTER(IMPORTRANGE(...), 篩選條件), {遮罩})
@@ -507,7 +518,6 @@ def run_voucher(
             _log(log, f"✅ 02儲值獎金 {label} 完成（無資料）｜{ts}")
             return True
         _log(log, f"    匯入完成：{num_rows} 筆（原始）")
-
 
         # 拆解 F 欄（原 BB=col54，匯入後在 col54 位置，但工作表只到 AC=col29）
         # 注意：工作表最多到 AC 欄，但 BB=col54 超出 AC 範圍

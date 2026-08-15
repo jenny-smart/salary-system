@@ -7,6 +7,8 @@ Lemon Clean 清潔承攬 — 06季獎金 / 結算作業
     結算作業  → task_key = "結算作業"
 
 結算作業步驟：
+    步驟0：前置檢查 — 薪資表 L1996:1996 不得有非0姓名（沿用 00調薪的檢查邏輯），
+           若有未調整完成的姓名則中止，不繼續往下結算。
     步驟1：薪資表 L2048 轉值後貼入 L2047（去除空格）
     步驟2：場次時數薪資總表
         上半月：P~Q 欄（D>0）、N~O 欄（帳戶）
@@ -28,6 +30,7 @@ import gspread
 from modules.auth import get_gspread_client
 from modules.master_sheet import record_execution
 from modules.period_utils import format_taipei_time
+from modules.cleaning_process_1 import _adj_validate_hours as _validate_salary_hours_1996
 
 
 TS_FMT = "%Y/%m/%d %H:%M"
@@ -40,7 +43,7 @@ def _name_key(value) -> str:
     text = unicodedata.normalize("NFKC", str(value or ""))
     return "".join(
         ch for ch in text
-        if not ch.isspace() and ch not in "\u200b\u200c\u200d\ufeff"
+        if not ch.isspace() and ch not in "​‌‍﻿"
     )
 
 
@@ -107,6 +110,7 @@ def run_settlement(
     """
     結算作業。
 
+    步驟0：前置檢查 — 薪資表 L1996:1996 不得有非0姓名，待調整完都為0才繼續。
     步驟1：薪資表 L2048 轉值後複製到 L2047（去除空格）
     步驟2：場次時數薪資總表
         上半月：P~Q（A姓名/D數值，D>0）、N~O（P欄姓名對應H欄找I:J）
@@ -122,6 +126,12 @@ def run_settlement(
         ss = gc.open_by_key(cleaning_file_id)
 
         ws_salary  = ss.worksheet("薪資表")
+
+        # ── 步驟0：前置檢查 L1996:1996 非0姓名 ────────────────
+        _log(log, "  步驟0：前置檢查薪資表 L1996:1996 非0姓名")
+        _validate_salary_hours_1996(ws_salary, log)
+        _log(log, "    ✅ 前置檢查通過，繼續結算作業")
+
         ws_proj_salary = ss.worksheet("專案薪資表")
         ws_summary = ss.worksheet("場次時數薪資總表")
         ws_pdf      = ss.worksheet("PDF產出")
@@ -312,8 +322,8 @@ def _step2_summary(
 ) -> None:
     """
     上半月：
-        P~Q：篩選 D4:D>0，A欄姓名→P欄，D欄數值→Q欄
-        N~O：P欄姓名清單對應 H欄，取 I:J 填入 N:O
+        Q~P：篩選 D4:D>0，A欄姓名→Q欄，D欄數值→P欄
+        N~O：Q欄姓名清單對應 H欄，取 I:J 填入 N:O
     下半月：
         W~X：篩選 E4:E>0，A欄姓名→X欄，E欄數值→W欄
         U~V：X欄姓名清單對應 H欄，取 I:J 填入 U:V
@@ -337,6 +347,7 @@ def _step2_summary(
         if pq_rows:
             n = len(pq_rows)
             ws.batch_clear([f"N4:Q{3 + len(raw)}"])
+            # Q欄=姓名、P欄=數值（與下半月 X=姓名/W=數值 對稱）
             ws.update(f"Q4:Q{3+n}", [[r[0]] for r in pq_rows], value_input_option="USER_ENTERED")
             ws.update(f"P4:P{3+n}", [[r[1]] for r in pq_rows], value_input_option="USER_ENTERED")
             _log(log, f"    P~Q 寫入：{n} 筆")

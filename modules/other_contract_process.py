@@ -330,6 +330,10 @@ def run_other_preprocess(
 
     與 GAS 相同：水洗/家電處理薪資表；訂單依 B 欄第一空白列分段，
     並同步 A:BJ 的資料與背景色。
+
+    開始前一律先把「薪資總表」A1 寫入期別標記：
+        上半月 A1 = -1
+        下半月 A1 = -2
     """
     half = "上半月" if is_first_half else "下半月"
     svcs = [service_type] if service_type else ALL_SERVICES
@@ -344,6 +348,16 @@ def run_other_preprocess(
 
     gc    = get_gspread_client()
     other = gc.open_by_key(other_file_id)
+
+    # 前置作業第一步：薪資總表 A1 寫入期別標記（上半月 -1／下半月 -2）。
+    try:
+        summary_ws = other.worksheet(SALARY_SUMMARY_SHEET)
+        period_flag = -1 if is_first_half else -2
+        summary_ws.update_cell(1, 1, period_flag)
+        log(f"  薪資總表 A1 已設定為 {period_flag}")
+    except gspread.WorksheetNotFound:
+        log(f"  ⚠️ 找不到「{SALARY_SUMMARY_SHEET}」工作表，略過 A1 設定")
+
     results = {}
     classification_keys = [SERVICE_CONFIG[s]["classification_key"] for s in svcs]
     recorded_counts = get_recorded_values(region, period, classification_keys)
