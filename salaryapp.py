@@ -1541,8 +1541,8 @@ with st.expander("🔑 Drive 授權設定"):
 1. Google Cloud Console：若目前 OAuth Client 已失效才需要重建（類型選 **Web application**），並在「授權的重新導向 URI」加入下方顯示的網址
 2. 貼上 Client ID / Client Secret（沿用既有 client 就貼現有的）
 3. 點擊產生的授權連結 → 用 jenny@lemonclean.com.tw 登入 → 按同意
-4. Google 導回本頁，下方會顯示新的 client_id / client_secret / refresh_token
-5. 複製這三個值，貼到 Streamlit Cloud 後台 Secrets 的 `[oauth_drive]`
+4. Google 導回本頁，會請你再輸入一次 Client Secret 完成換 token
+5. 複製結果貼到 Streamlit Cloud 後台 Secrets 的 `[oauth_drive]`
 6. Reboot app 讓新 secrets 生效
     """)
 
@@ -1552,70 +1552,93 @@ with st.expander("🔑 Drive 授權設定"):
     else:
         st.caption(f"授權的重新導向 URI 請設定為：`{redirect_uri}`")
 
-    oauth_client_id = st.text_input("Client ID", key="oauth_setup_client_id")
-    oauth_client_secret = st.text_input("Client Secret", type="password", key="oauth_setup_client_secret")
-
-    if st.button("🔗 產生授權連結", use_container_width=True, disabled=not redirect_uri):
-        if not oauth_client_id or not oauth_client_secret:
-            st.error("請先輸入 Client ID 與 Client Secret")
-        else:
-            import secrets as _secrets
-            from urllib.parse import urlencode
-            state = _secrets.token_urlsafe(16)
-            st.session_state["oauth_setup_state"] = state
-            params = {
-                "response_type": "code",
-                "client_id": oauth_client_id,
-                "redirect_uri": redirect_uri,
-                "scope": "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets",
-                "access_type": "offline",
-                "prompt": "consent",
-                "state": state,
-            }
-            auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
-            st.link_button("➡️ 點此前往 Google 登入同意", auth_url, use_container_width=True)
-
     qp = st.query_params
+
     if "code" in qp:
-        returned_state = qp.get("state", "")
-        expected_state = st.session_state.get("oauth_setup_state", "")
+        import base64, json
         code = qp.get("code")
-        st.query_params.clear()
-        if not expected_state or returned_state != expected_state:
-            st.error("授權驗證失敗（state 不符），請重新操作一次。")
-        else:
-            saved_id = st.session_state.get("oauth_setup_client_id", "")
-            saved_secret = st.session_state.get("oauth_setup_client_secret", "")
-            try:
-                import requests as _requests
-                resp = _requests.post(
-                    "https://oauth2.googleapis.com/token",
-                    data={
-                        "code": code,
-                        "client_id": saved_id,
-                        "client_secret": saved_secret,
-                        "redirect_uri": redirect_uri,
-                        "grant_type": "authorization_code",
-                    },
-                    timeout=30,
-                )
-                resp.raise_for_status()
-                token_data = resp.json()
-                refresh_token = token_data.get("refresh_token")
-                if not refresh_token:
-                    st.warning(
-                        "Google 沒有回傳 refresh_token，通常是這個帳號先前已授權過。"
-                        "請先到 https://myaccount.google.com/permissions 移除舊授權後再重試一次。"
+        state_raw = qp.get("state", "")
+        try:
+            decoded = json.loads(base64.urlsafe_b64decode(state_raw.encode()).decode())
+            returned_client_id = decoded.get("client_id", "")
+        except Exception:
+            returned_client_id = ""
+
+        st.info("已從 Google 取得授權碼，請再輸入一次 Client Secret 完成換 token（Client Secret 基於安全性不會透過網址傳遞）。")
+        confirm_client_id = st.text_input("Client ID", value=returned_client_id, key="oauth_confirm_client_id")
+        confirm_client_secret = st.text_input("Client Secret", type="password", key="oauth_confirm_client_secret")
+
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            do_exchange = st.button("🔁 換取 Token", use_container_width=True)
+        with cc2:
+            do_cancel = st.button("✕ 取消", use_container_width=True)
+
+        if do_cancel:
+            st.query_params.clear()
+            st.rerun()
+
+        if do_exchange:
+            if not confirm_client_id or not confirm_client_secret:
+                st.error("請輸入 Client ID 與 Client Secret")
+            else:
+                try:
+                    import requests as _requests
+                    resp = _requests.post(
+                        "https://oauth2.googleapis.com/token",
+                        data={
+                            "code": code,
+                            "client_id": confirm_client_id,
+                            "client_secret": confirm_client_secret,
+                            "redirect_uri": redirect_uri,
+                            "grant_type": "authorization_code",
+                        },
+                        timeout=30,
                     )
-                else:
-                    st.success("✅ 已取得新授權，請把以下貼到 Secrets 的 [oauth_drive]，貼完記得 Reboot app：")
-                    st.code(
-                        "[oauth_drive]\n"
-                        f'client_id = "{saved_id}"\n'
-                        f'client_secret = "{saved_secret}"\n'
-                        f'refresh_token = "{refresh_token}"\n'
-                        'token_uri = "https://oauth2.googleapis.com/token"\n',
-                        language="toml",
-                    )
-            except Exception as e:
-                st.error(f"換取 token 失敗：{e}")
+                    resp.raise_for_status()
+                    token_data = resp.json()
+                    refresh_token = token_data.get("refresh_token")
+                    st.query_params.clear()
+                    if not refresh_token:
+                        st.warning(
+                            "Google 沒有回傳 refresh_token，通常是這個帳號先前已授權過。"
+                            "請先到 https://myaccount.google.com/permissions 移除舊授權後再重試一次。"
+                        )
+                    else:
+                        st.success("✅ 已取得新授權，請把以下貼到 Secrets 的 [oauth_drive]，貼完記得 Reboot app：")
+                        st.code(
+                            "[oauth_drive]\n"
+                            f'client_id = "{confirm_client_id}"\n'
+                            f'client_secret = "{confirm_client_secret}"\n'
+                            f'refresh_token = "{refresh_token}"\n'
+                            'token_uri = "https://oauth2.googleapis.com/token"\n',
+                            language="toml",
+                        )
+                except Exception as e:
+                    st.error(f"換取 token 失敗：{e}")
+
+    else:
+        oauth_client_id = st.text_input("Client ID", key="oauth_setup_client_id")
+        oauth_client_secret = st.text_input("Client Secret", type="password", key="oauth_setup_client_secret")
+
+        if st.button("🔗 產生授權連結", use_container_width=True, disabled=not redirect_uri):
+            if not oauth_client_id or not oauth_client_secret:
+                st.error("請先輸入 Client ID 與 Client Secret")
+            else:
+                import base64, json, secrets as _secrets
+                from urllib.parse import urlencode
+                nonce = _secrets.token_urlsafe(8)
+                state_payload = base64.urlsafe_b64encode(
+                    json.dumps({"client_id": oauth_client_id, "n": nonce}).encode()
+                ).decode()
+                params = {
+                    "response_type": "code",
+                    "client_id": oauth_client_id,
+                    "redirect_uri": redirect_uri,
+                    "scope": "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets",
+                    "access_type": "offline",
+                    "prompt": "consent",
+                    "state": state_payload,
+                }
+                auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
+                st.link_button("➡️ 點此前往 Google 登入同意", auth_url, use_container_width=True)
