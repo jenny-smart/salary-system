@@ -487,12 +487,12 @@ FUNCTION_MAP = {
         "⑥ 04新人實習",
         "⑦ 05組長津貼",
         "⑧ 06季獎金",
-        "結算作業",
-        "一鍵執行",
-        "新人實境實習期別",
-        "工具包押金",
-        "產生PDF",
-        "產生專案PDF",
+        "⑨ 結算作業",
+        "⑩ 一鍵執行",
+        "⑪ 新人實境實習期別",
+        "⑫ 工具包押金",
+        "⑬ 產生PDF",
+        "⑭ 產生專案PDF",
     ],
     "📦 其他承攬": [
         "① 執行前置作業",
@@ -905,7 +905,7 @@ if run_clicked and execution_engine == "PYTHON":
 
                     # 儲值獎金需要金流對帳 ID，提前取得（其他作業不需要）
                     _payment_file_id = None
-                    if cleaning_file_id and _func == "02儲值獎金":
+                    if cleaning_file_id and _func == "④ 02儲值獎金":
                         try:
                             _payment_file_id = find_payment_file(root_id, _period, _name)
                             add_log(f"找到金流對帳檔案：{_payment_file_id}")
@@ -940,58 +940,58 @@ if run_clicked and execution_engine == "PYTHON":
                             )
                             return success
 
-                        if _func == "前置作業":
+                        if _func == "① 前置作業":
                             from modules.cleaning_process_1 import run_preparation
                             success = _run(run_preparation)
 
-                        elif _func == "00調薪":
+                        elif _func == "② 00調薪":
                             from modules.cleaning_process_1 import run_adjustment
                             success = _run(run_adjustment)
 
-                        elif _func == "01專員請款":
+                        elif _func == "③ 01專員請款":
                             from modules.cleaning_process_2 import run_allowance
                             success = _run(run_allowance)
 
-                        elif _func == "02儲值獎金":
+                        elif _func == "④ 02儲值獎金":
                             from modules.cleaning_process_2 import run_voucher
                             success = _run(run_voucher, payment_file_id=_payment_file_id)
 
-                        elif _func == "03新人實境":
+                        elif _func == "⑤ 03新人實境":
                             from modules.cleaning_process_2 import run_newcomer
                             success = _run(run_newcomer)
 
-                        elif _func == "04新人實習":
+                        elif _func == "⑥ 04新人實習":
                             from modules.cleaning_process_2 import run_intern
                             success = _run(run_intern)
 
-                        elif _func == "05組長津貼":
+                        elif _func == "⑦ 05組長津貼":
                             from modules.cleaning_process_2 import run_leader
                             success = _run(run_leader)
 
-                        elif _func == "06季獎金":
+                        elif _func == "⑧ 06季獎金":
                             from modules.cleaning_process_3 import run_season_bonus
                             success = _run(run_season_bonus)
 
-                        elif _func == "結算作業":
+                        elif _func == "⑨ 結算作業":
                             from modules.cleaning_process_3 import run_settlement
                             success = _run(run_settlement)
 
-                        elif _func == "一鍵執行":
+                        elif _func == "⑩ 一鍵執行":
                             add_log("一鍵執行尚未實作", "warning")
                             success = False
 
-                        elif _func == "新人實境實習期別":
+                        elif _func == "⑪ 新人實境實習期別":
                             from modules.cleaning_process_2 import run_newcomer_label
                             success = _run(run_newcomer_label)
 
-                        elif _func == "工具包押金":
+                        elif _func == "⑫ 工具包押金":
                             from modules.cleaning_process_4 import run_tool_deposit
                             success = _run(run_tool_deposit)
 
-                        elif _func in ("產生PDF", "產生專案PDF"):
+                        elif _func in ("⑬ 產生PDF", "⑭ 產生專案PDF"):
                             from modules.cleaning_pdf import run_pdf
                             root_id  = _region.get("root_folder_id", "")
-                            job_type = "CLEANING" if _func == "產生PDF" else "PROJECT"
+                            job_type = "CLEANING" if _func == "⑬ 產生PDF" else "PROJECT"
                             live     = _make_live_log()
                             pdf_result = run_pdf(
                                 cleaning_file_id = cleaning_file_id,
