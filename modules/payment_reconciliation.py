@@ -1432,7 +1432,7 @@ SOURCE_SHEETS = {
     "01藍新收款": {
         "rec_col": COL_REC_NEWEBPAY_IN,
         "key_idx": 3,       # D 商店訂單編號
-        "alt_key_idx": None,
+        "alt_key_idx": 23,  # X 商店訂單編號（鏡射欄，金流對帳BS公式實際查的是X:Y）
         "date_idx": 1,      # B 訂單交易日期
         "read_end_col": "AB",
     },
@@ -1476,6 +1476,25 @@ def _clean_order_key(value) -> str:
 def _is_blank_or_error(value) -> bool:
     text = str(value or "").strip()
     return text == "" or text.startswith("#")
+
+
+PAY_METHOD_CREDIT_CARD = "信用卡"
+PAY_METHOD_NEWEBPAY_ATM = "藍新ATM"
+PAY_METHOD_ATM = "ATM"
+
+
+def _row_needs_check(sheet_name: str, pay_method: str, amount: float, invoice_no: str) -> bool:
+    """複製「金流對帳」BR:BU 既有公式各自的判斷條件（不含月份，月份在
+    呼叫端先篩過），決定這一列該不該對這張來源表有值。"""
+    if sheet_name == "00發票":
+        return bool(invoice_no) and amount > 0
+    if sheet_name == "01藍新收款":
+        return pay_method in (PAY_METHOD_CREDIT_CARD, PAY_METHOD_NEWEBPAY_ATM) and amount > 0
+    if sheet_name == "02藍新退款":
+        return pay_method == PAY_METHOD_CREDIT_CARD and amount < 0
+    if sheet_name == "03ATM":
+        return pay_method == PAY_METHOD_ATM
+    return False
 
 
 def _to_number(value) -> float:
@@ -1606,11 +1625,19 @@ def check_reconciliation(
     root_folder_id: str, period: str, region_name: str, log_fn=None
 ) -> dict:
     """
-    ⑨-2 對帳檢核：讀「金流對帳」本期（BL欄付款日期的月份＝本期別）的
-    每一列，檢查 BR（發票核對／比對00發票）、BS（藍新收款／比對01藍新
-    收款）、BT（藍新退款／比對02藍新退款）、BU（ATM／比對03ATM）是否
-    已經對上；只看「本期且有發票號碼或金額」的列，儲值金／$0 等不需
-    對帳的列不會列入。
+    ⑨-2 對帳檢核：只要「金流對帳」BL欄（付款日期）的月份＝本期別
+    （BK1），這一列就需要檢查 BR（發票核對）、BS（藍新收款）、BT（藍新
+    退款）、BU（ATM）——但四欄各自何時「應該」有值，是照工作表本身
+    既有公式的判斷條件來（不是每一列四欄都要有值）：
+
+      BR：發票號碼(BO)<>0 且 金額(BP)>0 → 應比對 00發票
+      BS：付款方式(BN)＝信用卡或藍新ATM 且 金額(BP)>0 → 應比對 01藍新收款
+      BT：付款方式(BN)＝信用卡 且 金額(BP)<0（退款是負數）→ 應比對 02藍新退款
+      BU：付款方式(BN)＝ATM → 應比對 03ATM
+
+    只有「這一列照上面條件本來就應該對得上」但欄位仍空白/錯誤時，才
+    算一筆缺漏；不適用的欄位（例如儲值金列，四欄都不適用）不會列入，
+    也不會去查來源表。
 
     對不上的欄位，直接查對應來源工作表的訂單編號欄，區分兩種最常見
     原因：
@@ -1649,30 +1676,48 @@ def check_reconciliation(
         if _extract_year_month(cell(COL_REC_PAID_DATE)) != month_text:
             continue
 
-        order_no   = _clean_order_key(cell(COL_REC_ORDER_NO))
-        invoice_no = str(cell(COL_REC_INVOICE_NO) or "").strip()
-        amount     = _to_number(cell(COL_REC_AMOUNT))
-        if not order_no or (not invoice_no and amount <= 0):
-            continue  # 無需對帳的列（例如儲值金、$0）
+        order_no = _clean_order_key(cell(COL_REC_ORDER_NO))
+        if not order_no:
+            continue
 
-        checked += 1
+        invoice_no = str(cell(COL_REC_INVOICE_NO) or "").strip()
+        pay_method = str(cell(COL_REC_PAY_METHOD) or "").strip()
+        amount     = _to_number(cell(COL_REC_AMOUNT))
+
+        row_checked = False
         for name, meta in SOURCE_SHEETS.items():
+            if not _row_needs_check(name, pay_method, amount, invoice_no):
+                continue  # 這一列照公式條件本來就不需要比對這張來源表
+            row_checked = True
             if not _is_blank_or_error(cell(meta["rec_col"])):
                 continue
             col_letter = _column_letter(meta["rec_col"])
             if order_no in source_key_sets[name]:
+                reason_type = "來源查得到但金流對帳仍空白"
                 reason = (
                     f"{name} 查得到訂單 {order_no}，但「{RECONCILIATION_SHEET_NAME}」"
                     f"{col_letter}{row_num} 仍空白/錯誤，請檢查該列 BK:BX 公式是否已"
                     f"下拉，或付款日期是否落在 {month_text}"
                 )
             else:
+                reason_type = "來源查無此訂單"
                 reason = f"{name} 查無訂單 {order_no}，請確認是否已執行⑥～⑧搬運，或訂單編號格式是否一致"
             issues.append({
                 "row": row_num, "order_no": order_no, "sheet": name,
-                "column": col_letter, "reason": reason,
+                "column": col_letter, "reason_type": reason_type, "reason": reason,
             })
-            log(f"❌ 第{row_num}列（{order_no}）：{reason}")
+
+        if row_checked:
+            checked += 1
+
+    # 只記錄「來源工作表／原因類型」的彙總筆數到執行日誌，逐筆明細改由
+    # 呼叫端（Streamlit UI）用表格呈現，避免上千筆訊息洗版執行日誌。
+    summary: dict[tuple[str, str], int] = {}
+    for issue in issues:
+        key = (issue["sheet"], issue["reason_type"])
+        summary[key] = summary.get(key, 0) + 1
+    for (sheet_name, reason_type), count in sorted(summary.items()):
+        log(f"❌ {sheet_name}／{reason_type}：{count} 筆")
 
     log(f"===== 對帳檢核完成：本期需對帳 {checked} 筆，缺漏 {len(issues)} 筆 =====")
     return {"checked": checked, "issues": issues}
@@ -1716,7 +1761,6 @@ def reverse_check_sources(
         result[name] = {"period_count": len(period_keys), "missing": missing}
         log(f"🔵 {name}：本期（{month_text}）{len(period_keys)} 筆，"
             f"「{RECONCILIATION_SHEET_NAME}」查無 {len(missing)} 筆")
-        for key in missing:
-            log(f"❌ {name} 訂單 {key}：「{RECONCILIATION_SHEET_NAME}」查無此訂單編號")
+        # 逐筆訂單編號改由呼叫端（Streamlit UI）用表格呈現，不逐筆寫進執行日誌。
 
     return result
