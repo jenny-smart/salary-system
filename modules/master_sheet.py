@@ -89,23 +89,7 @@ PAYMENT_TASKS = [
     "複製發票",
     "複製藍新收款",
     "複製藍新退款",
-    "金流對帳彙總",
-    "對帳檢核缺漏筆數",
-    "反向比對缺漏筆數",
 ]
-
-# 主控表建立之後才新增的作業：既有地區工作表不會自動補新增的作業列
-# （init_region_sheet 對已存在的表只更新標題行，避免插入列破壞既有打卡
-# 資料），所以這些作業第一次打卡時，若在 A 欄找不到，就自動補在最後一列，
-# 之後就能正常用 A 欄比對找到。新增作業到 PAYMENT_TASKS／CLEANING_TASKS
-# 時，記得也把作業名稱加進這裡，六區既有工作表才補得到列。
-LATE_ADDED_TASKS = (
-    "清潔承攬mail",
-    "其他承攬mail",
-    "金流對帳彙總",
-    "對帳檢核缺漏筆數",
-    "反向比對缺漏筆數",
-)
 
 # ★ 對應主控表圖片（第59-72列）★
 CLEANING_TASKS = [
@@ -299,19 +283,6 @@ def record_batch(region_name: str, period: str, records: list) -> None:
 
         a_col = _get_all_a_col(sheet)
 
-        # 補上 LATE_ADDED_TASKS 裡、這張地區工作表 A 欄還沒有的作業列
-        # （既有工作表不會自動插入新作業列，第一次打卡時補在最後一列）。
-        missing_late_tasks = [
-            r.get("task_key", "") for r in records
-            if r.get("task_key", "") in LATE_ADDED_TASKS
-            and r.get("task_key", "") not in a_col
-        ]
-        missing_late_tasks = list(dict.fromkeys(missing_late_tasks))  # 去重，保留順序
-        if missing_late_tasks:
-            append_start = len(a_col) + 1
-            sheet.update(f"A{append_start}", [[k] for k in missing_late_tasks])
-            a_col = a_col + missing_late_tasks
-
         def find_row_from_cache(task_name: str) -> int | None:
             for i, val in enumerate(a_col):
                 if val == task_name.strip():
@@ -377,8 +348,16 @@ def get_recorded_values(region_name: str, period: str, task_keys: list[str]) -> 
 
 
 # ═══════════════════════════════════════
-# ⑨ 對帳檢核逐筆明細 Log（跨地區共用同一分頁）
+# ⑨ 對帳檢核專用的執行記錄／錯誤記錄
+# 各只有一個分頁、跨地區共用，用「地區」欄區分——不像既有打卡表
+# 那樣每區各一個分頁，避免為了⑨這一個作業又多開六個分頁。
 # ═══════════════════════════════════════
+
+RECONCILIATION_EXEC_SHEET = "對帳檢核執行記錄"
+RECONCILIATION_EXEC_HEADER = [
+    "執行時間", "地區", "期別",
+    "金流對帳彙總筆數", "對帳檢核缺漏筆數", "反向比對缺漏筆數",
+]
 
 RECONCILIATION_LOG_SHEET = "對帳檢核Log"
 RECONCILIATION_LOG_HEADER = [
@@ -427,3 +406,26 @@ def append_reconciliation_log(region_name: str, period: str, entries: list[dict]
     except Exception as e:
         import streamlit as st
         st.warning(f"⚠️ 「{RECONCILIATION_LOG_SHEET}」寫入失敗：{e}")
+
+
+def append_reconciliation_execution(
+    region_name: str, period: str,
+    summarized_count: int, checked_issue_count: int, reverse_missing_count: int,
+) -> None:
+    """
+    記錄⑨這次執行的三個彙總數字，寫進主控試算表的「對帳檢核執行記錄」
+    分頁（跨地區共用一個分頁，用「地區」欄區分，每次執行新增一列）。
+    """
+    try:
+        ss = open_spreadsheet(MASTER_SHEET_ID)
+        sheet = _get_or_create_log_sheet(ss, RECONCILIATION_EXEC_SHEET, RECONCILIATION_EXEC_HEADER)
+        time_str = datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %H:%M:%S")
+        next_row = max(len(sheet.col_values(1)) + 1, 2)
+        sheet.update(
+            f"A{next_row}",
+            [[time_str, region_name, period, summarized_count, checked_issue_count, reverse_missing_count]],
+            value_input_option="RAW",
+        )
+    except Exception as e:
+        import streamlit as st
+        st.warning(f"⚠️ 「{RECONCILIATION_EXEC_SHEET}」寫入失敗：{e}")

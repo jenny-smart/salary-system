@@ -948,7 +948,7 @@ if run_clicked and execution_engine == "PYTHON":
                         else:
                             add_log("反向比對完成：來源工作表本期資料皆能在「金流對帳」找到", "success")
 
-                        from modules.master_sheet import append_reconciliation_log
+                        from modules.master_sheet import append_reconciliation_log, append_reconciliation_execution
                         log_entries = [
                             {
                                 "檢查類型": "對帳檢核", "來源工作表": it["sheet"],
@@ -970,11 +970,9 @@ if run_clicked and execution_engine == "PYTHON":
                             append_reconciliation_log(_name, _period, log_entries)
                             add_log(f"🔵 已寫入主控表「對帳檢核Log」：{len(log_entries)} 筆", "success")
 
-                        record_batch(_name, _period, [
-                            {"task_key": "金流對帳彙總",     "count": result["count"]},
-                            {"task_key": "對帳檢核缺漏筆數", "count": len(issues)},
-                            {"task_key": "反向比對缺漏筆數", "count": total_missing},
-                        ])
+                        append_reconciliation_execution(
+                            _name, _period, result["count"], len(issues), total_missing,
+                        )
 
                 # ───────────────────────────────────────────────
                 # █ 區塊8-B：清潔承攬執行邏輯
