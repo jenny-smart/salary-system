@@ -904,6 +904,31 @@ if run_clicked and execution_engine == "PYTHON":
                         issues = check_result.get("issues", [])
                         if issues:
                             add_log(f"⚠️ 對帳檢核：本期 {check_result['checked']} 筆中，{len(issues)} 筆缺漏", "warning")
+
+                            issue_summary: dict[tuple, int] = {}
+                            for it in issues:
+                                key = (it["sheet"], it["reason_type"])
+                                issue_summary[key] = issue_summary.get(key, 0) + 1
+                            st.markdown("**⑨ 對帳檢核缺漏彙總**")
+                            st.dataframe(
+                                [
+                                    {"來源工作表": sheet, "原因": reason_type, "筆數": count}
+                                    for (sheet, reason_type), count in sorted(issue_summary.items())
+                                ],
+                                use_container_width=True,
+                            )
+                            st.markdown("**⑨ 對帳檢核缺漏明細**")
+                            st.dataframe(
+                                [
+                                    {
+                                        "列號": it["row"], "訂單編號": it["order_no"],
+                                        "來源工作表": it["sheet"], "金流對帳欄位": it["column"],
+                                        "原因": it["reason_type"], "詳細說明": it["reason"],
+                                    }
+                                    for it in issues
+                                ],
+                                use_container_width=True,
+                            )
                         else:
                             add_log(f"對帳檢核完成：本期 {check_result['checked']} 筆全部對上", "success")
 
@@ -911,6 +936,15 @@ if run_clicked and execution_engine == "PYTHON":
                         total_missing = sum(len(v["missing"]) for v in reverse_result.values())
                         if total_missing:
                             add_log(f"⚠️ 反向比對：來源工作表共 {total_missing} 筆本期資料在「金流對帳」查無對應訂單", "warning")
+                            st.markdown("**⑨ 反向比對缺漏明細**")
+                            st.dataframe(
+                                [
+                                    {"來源工作表": name, "訂單編號": order_no}
+                                    for name, v in reverse_result.items()
+                                    for order_no in v["missing"]
+                                ],
+                                use_container_width=True,
+                            )
                         else:
                             add_log("反向比對完成：來源工作表本期資料皆能在「金流對帳」找到", "success")
 

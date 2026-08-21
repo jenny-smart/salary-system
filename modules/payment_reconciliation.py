@@ -1661,18 +1661,27 @@ def check_reconciliation(
                 continue
             col_letter = _column_letter(meta["rec_col"])
             if order_no in source_key_sets[name]:
+                reason_type = "來源查得到但金流對帳仍空白"
                 reason = (
                     f"{name} 查得到訂單 {order_no}，但「{RECONCILIATION_SHEET_NAME}」"
                     f"{col_letter}{row_num} 仍空白/錯誤，請檢查該列 BK:BX 公式是否已"
                     f"下拉，或付款日期是否落在 {month_text}"
                 )
             else:
+                reason_type = "來源查無此訂單"
                 reason = f"{name} 查無訂單 {order_no}，請確認是否已執行⑥～⑧搬運，或訂單編號格式是否一致"
             issues.append({
                 "row": row_num, "order_no": order_no, "sheet": name,
-                "column": col_letter, "reason": reason,
+                "column": col_letter, "reason_type": reason_type, "reason": reason,
             })
-            log(f"❌ 第{row_num}列（{order_no}）：{reason}")
+    # 只記錄「來源工作表／原因類型」的彙總筆數到執行日誌，逐筆明細改由
+    # 呼叫端（Streamlit UI）用表格呈現，避免上千筆訊息洗版執行日誌。
+    summary: dict[tuple[str, str], int] = {}
+    for issue in issues:
+        key = (issue["sheet"], issue["reason_type"])
+        summary[key] = summary.get(key, 0) + 1
+    for (sheet_name, reason_type), count in sorted(summary.items()):
+        log(f"❌ {sheet_name}／{reason_type}：{count} 筆")
 
     log(f"===== 對帳檢核完成：本期需對帳 {checked} 筆，缺漏 {len(issues)} 筆 =====")
     return {"checked": checked, "issues": issues}
@@ -1716,7 +1725,6 @@ def reverse_check_sources(
         result[name] = {"period_count": len(period_keys), "missing": missing}
         log(f"🔵 {name}：本期（{month_text}）{len(period_keys)} 筆，"
             f"「{RECONCILIATION_SHEET_NAME}」查無 {len(missing)} 筆")
-        for key in missing:
-            log(f"❌ {name} 訂單 {key}：「{RECONCILIATION_SHEET_NAME}」查無此訂單編號")
+        # 逐筆訂單編號改由呼叫端（Streamlit UI）用表格呈現，不逐筆寫進執行日誌。
 
     return result
