@@ -477,6 +477,7 @@ FUNCTION_MAP = {
         "⑥ 金流對帳轉檔（zip/csv/xlsx → Google Sheet）",
         "⑦ 搬運退款＋預收",
         "⑧ 搬運發票＋藍新",
+        "⑨ 金流對帳彙總＋檢核",
     ],
     "🧹 清潔承攬": [
         "① 前置作業",
@@ -888,6 +889,35 @@ if run_clicked and execution_engine == "PYTHON":
                             {"task_key": "複製發票",     "count": counts.get("發票")},
                             {"task_key": "複製藍新收款", "count": counts.get("藍新收款")},
                             {"task_key": "複製藍新退款", "count": counts.get("藍新退款")},
+                        ])
+
+                    elif "⑨ 金流對帳彙總" in _func:
+                        from modules.payment_reconciliation import (
+                            copy_template_to_reconciliation,
+                            check_reconciliation,
+                            reverse_check_sources,
+                        )
+                        result = copy_template_to_reconciliation(root_id, _period, _name, add_log)
+                        add_log(f"範本彙總完成：{result['count']} 筆，起始列：{result['start_row']}", "success")
+
+                        check_result = check_reconciliation(root_id, _period, _name, add_log)
+                        issues = check_result.get("issues", [])
+                        if issues:
+                            add_log(f"⚠️ 對帳檢核：本期 {check_result['checked']} 筆中，{len(issues)} 筆缺漏", "warning")
+                        else:
+                            add_log(f"對帳檢核完成：本期 {check_result['checked']} 筆全部對上", "success")
+
+                        reverse_result = reverse_check_sources(root_id, _period, _name, add_log)
+                        total_missing = sum(len(v["missing"]) for v in reverse_result.values())
+                        if total_missing:
+                            add_log(f"⚠️ 反向比對：來源工作表共 {total_missing} 筆本期資料在「金流對帳」查無對應訂單", "warning")
+                        else:
+                            add_log("反向比對完成：來源工作表本期資料皆能在「金流對帳」找到", "success")
+
+                        record_batch(_name, _period, [
+                            {"task_key": "金流對帳彙總",     "count": result["count"]},
+                            {"task_key": "對帳檢核缺漏筆數", "count": len(issues)},
+                            {"task_key": "反向比對缺漏筆數", "count": total_missing},
                         ])
 
                 # ───────────────────────────────────────────────

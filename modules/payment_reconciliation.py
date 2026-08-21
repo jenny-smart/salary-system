@@ -1381,3 +1381,342 @@ def move_invoice_and_bluenew(
             counts[keyword] = 0
 
     return counts
+
+
+# ═══════════════════════════════════════════════════════════════
+# ⑨ 金流對帳彙總與檢核
+#
+# 「金流對帳」工作表 A:BJ 跟「範本」同一份配置，緊接著 BK:BX 是核對
+# 用的欄位（BK1＝本期別月份，供 BR:BU 既有公式的 $BK$1 參照；BL:BX
+# 是從範本欄位整理出來、逐列下拉的公式，包含 BR～BU 分別對 00發票／
+# 01藍新收款／02藍新退款／03ATM 四張工作表的 VLOOKUP 核對結果）：
+#
+#   BJ=62 VIP券的訂單編號　BK=63 期別月份　BL=64 付款日期
+#   BM=65 訂單編號　BN=66 付款方式　BO=67 發票號碼　BP=68 金額
+#   BQ=69 檢核　BR=70 發票核對　BS=71 藍新收款　BT=72 藍新退款
+#   BU=73 ATM　BV=74 專員收現　BW=75 異動費用　BX=76 消毒服務
+#
+# ⑨-1 只搬 A2:BJ（跟其他步驟一致），BK:BX 一律用「複製上一列公式」
+# 的方式往下延伸，不重新寫死公式字串——公式本來就已經在工作表裡，
+# 改天公式若調整，這裡不用跟著改。
+# ═══════════════════════════════════════════════════════════════
+
+RECONCILIATION_SHEET_NAME = "金流對帳"
+
+COL_REC_VIP_ORDER   = 62  # BJ VIP券的訂單編號
+COL_REC_MONTH       = 63  # BK 期別月份（例如 "2026/07"）
+COL_REC_PAID_DATE   = 64  # BL 付款日期
+COL_REC_ORDER_NO    = 65  # BM 訂單編號
+COL_REC_PAY_METHOD  = 66  # BN 付款方式
+COL_REC_INVOICE_NO  = 67  # BO 發票號碼
+COL_REC_AMOUNT      = 68  # BP 金額
+COL_REC_CHECK       = 69  # BQ 檢核
+COL_REC_INVOICE_CHK = 70  # BR 發票核對（比對 00發票）
+COL_REC_NEWEBPAY_IN = 71  # BS 藍新收款（比對 01藍新收款）
+COL_REC_NEWEBPAY_RE = 72  # BT 藍新退款（比對 02藍新退款）
+COL_REC_ATM_CHK     = 73  # BU ATM（比對 03ATM）
+REC_LAST_COL        = 76  # BX 消毒服務，BK:BX 公式區塊的最後一欄
+
+# 四張來源工作表：訂單編號欄（0-based）、日期欄（0-based，用來篩本期）、
+# 以及「金流對帳」對應的核對欄。02藍新退款／03ATM 另有 alt_key_idx：
+# 拆退款/異動費等子單在來源表會補上 "-1" 後綴的鏡射欄，跟「金流對帳」
+# 拆出來的子單訂單編號（LCxxxx-1）對得上。
+SOURCE_SHEETS = {
+    "00發票": {
+        "rec_col": COL_REC_INVOICE_CHK,
+        "key_idx": 2,       # C 訂單編號
+        "alt_key_idx": None,
+        "date_idx": 3,      # D 訂單日期
+        "read_end_col": "X",
+    },
+    "01藍新收款": {
+        "rec_col": COL_REC_NEWEBPAY_IN,
+        "key_idx": 3,       # D 商店訂單編號
+        "alt_key_idx": None,
+        "date_idx": 1,      # B 訂單交易日期
+        "read_end_col": "AB",
+    },
+    "02藍新退款": {
+        "rec_col": COL_REC_NEWEBPAY_RE,
+        "key_idx": 1,       # B 商店訂單編號（基礎訂單編號，不含 -1 後綴）
+        "alt_key_idx": 24,  # Y 商店訂單編號（含 -1 後綴，對應拆退款子單）
+        "date_idx": 8,      # I 商店執行日期
+        "read_end_col": "AB",
+    },
+    "03ATM": {
+        "rec_col": COL_REC_ATM_CHK,
+        "key_idx": 2,       # C 訂單編號（新訓費等非訂單收入此欄為空，略過）
+        "alt_key_idx": 9,   # J 訂單編號（含 -1 後綴之異動費等子單）
+        "date_idx": 0,      # A ATM日期
+        "read_end_col": "M",
+    },
+}
+
+
+def _month_text(period: str) -> str:
+    """期別 "202607-2" → "2026/07"，對應「金流對帳」BK1 的格式。"""
+    return f"{period[:4]}/{period[4:6]}"
+
+
+def _extract_year_month(value) -> str | None:
+    """從各種日期字串（"2026/6/22"、"2026-07-31 21:45:24" 等）取出
+    "YYYY/MM"；取不到就回傳 None。"""
+    text = str(value or "").strip()
+    m = re.match(r"^(\d{4})[/-](\d{1,2})", text)
+    if not m:
+        return None
+    y, mo = m.groups()
+    return f"{int(y):04d}/{int(mo):02d}"
+
+
+def _clean_order_key(value) -> str:
+    return str(value or "").strip()
+
+
+def _is_blank_or_error(value) -> bool:
+    text = str(value or "").strip()
+    return text == "" or text.startswith("#")
+
+
+def _to_number(value) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").replace(",", "").strip()
+    if not text:
+        return 0.0
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
+
+
+def copy_template_to_reconciliation(
+    root_folder_id: str, period: str, region_name: str, log_fn=None
+) -> dict:
+    """
+    ⑨-1 範本彙總：把「範本」工作表的 A2:BJ 貼進「金流對帳」工作表，
+    並把「金流對帳」BK1 更新成本期別月份（例如 "2026/07"），讓 BR:BU
+    既有的核對公式（$BK$1 參照）比對到正確的月份。
+
+    上半月：清空「金流對帳」A2:BJ 後從第2列貼入。
+    下半月：接在「金流對帳」B欄最後一筆資料後面貼入。
+
+    貼入新列後，把「金流對帳」BK:BX（核對公式區塊）從貼入起始列的
+    上一列，用「複製貼上公式」往下延伸到新貼入的每一列，讓每一列都有
+    BR～BU 可以算；不重寫公式字串，改天工作表上的公式若調整，這裡
+    不用跟著改。
+    """
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    reconciliation_id = _get_period_file_id(root_folder_id, period, "金流對帳", region_name)
+    ss       = open_spreadsheet(reconciliation_id)
+    template = ss.worksheet("範本")
+    recon    = ss.worksheet(RECONCILIATION_SHEET_NAME)
+
+    data = get_all_data(template, "A2", "BJ")
+    if not data:
+        raise Exception("「範本」無資料，請先完成③～⑤搬運/加工/分類")
+
+    log(f"📋 讀取「範本」{len(data)} 筆")
+
+    first_half = is_first_half(period)
+    start_row  = _get_period_paste_row(recon, first_half, log_fn=log)
+    count      = paste_data(recon, start_row, data)
+    log(f"✅ 已貼入「{RECONCILIATION_SHEET_NAME}」：{count} 筆（起始列：{start_row}，"
+        f"{'上半月清空後貼入' if first_half else '下半月接續貼入'}）")
+
+    month_text = _month_text(period)
+    recon.update_cell(1, COL_REC_MONTH, month_text)
+    log(f"🔵 已更新「{RECONCILIATION_SHEET_NAME}」BK1 期別月份＝{month_text}")
+
+    fill_from_row = start_row - 1
+    if fill_from_row >= 2:
+        try:
+            requests = [{
+                "copyPaste": {
+                    "source": {
+                        "sheetId": recon.id,
+                        "startRowIndex": fill_from_row - 1,
+                        "endRowIndex": fill_from_row,
+                        "startColumnIndex": COL_REC_MONTH - 1,
+                        "endColumnIndex": REC_LAST_COL,
+                    },
+                    "destination": {
+                        "sheetId": recon.id,
+                        "startRowIndex": start_row - 1,
+                        "endRowIndex": start_row - 1 + count,
+                        "startColumnIndex": COL_REC_MONTH - 1,
+                        "endColumnIndex": REC_LAST_COL,
+                    },
+                    "pasteType": "PASTE_FORMULA",
+                    "pasteOrientation": "NORMAL",
+                }
+            }]
+            ss.batch_update({"requests": requests})
+            log(f"🔵 已將 BK:BX 核對公式從第 {fill_from_row} 列複製到新貼入的 {count} 列")
+        except Exception as e:
+            log(f"⚠️ 核對公式複製失敗，請手動下拉公式：{e}")
+    elif not first_half:
+        log("⚠️ 找不到可複製的公式列（第2列以上皆為空），請先在第2列手動建立 BK:BX 公式")
+    # 上半月從第2列開始貼：第2列本來就已經有 BK:BX 公式（建立期別時複製整份
+    # 檔案帶過來的），只是清空 A2:BJ 後隨新資料重新算，不需要另外複製公式。
+
+    return {"count": count, "start_row": start_row}
+
+
+def _load_source_rows(ss, sheet_name: str, meta: dict) -> list[list]:
+    ws = ss.worksheet(sheet_name)
+    return get_all_data(ws, "A2", meta["read_end_col"])
+
+
+def _source_key_set(rows: list[list], meta: dict) -> set[str]:
+    keys = set()
+    for row in rows:
+        key = _clean_order_key(row[meta["key_idx"]] if len(row) > meta["key_idx"] else "")
+        if key:
+            keys.add(key)
+        alt_idx = meta.get("alt_key_idx")
+        if alt_idx is not None:
+            alt = _clean_order_key(row[alt_idx] if len(row) > alt_idx else "")
+            if alt:
+                keys.add(alt)
+    return keys
+
+
+def _source_keys_in_period(rows: list[list], meta: dict, month_text: str) -> set[str]:
+    keys = set()
+    for row in rows:
+        date_val = row[meta["date_idx"]] if len(row) > meta["date_idx"] else ""
+        if _extract_year_month(date_val) != month_text:
+            continue
+        key = _clean_order_key(row[meta["key_idx"]] if len(row) > meta["key_idx"] else "")
+        if key:
+            keys.add(key)
+        alt_idx = meta.get("alt_key_idx")
+        if alt_idx is not None:
+            alt = _clean_order_key(row[alt_idx] if len(row) > alt_idx else "")
+            if alt:
+                keys.add(alt)
+    return keys
+
+
+def check_reconciliation(
+    root_folder_id: str, period: str, region_name: str, log_fn=None
+) -> dict:
+    """
+    ⑨-2 對帳檢核：讀「金流對帳」本期（BL欄付款日期的月份＝本期別）的
+    每一列，檢查 BR（發票核對／比對00發票）、BS（藍新收款／比對01藍新
+    收款）、BT（藍新退款／比對02藍新退款）、BU（ATM／比對03ATM）是否
+    已經對上；只看「本期且有發票號碼或金額」的列，儲值金／$0 等不需
+    對帳的列不會列入。
+
+    對不上的欄位，直接查對應來源工作表的訂單編號欄，區分兩種最常見
+    原因：
+      1. 來源工作表查無此訂單編號
+         → 通常是還沒執行⑥～⑧搬運，或訂單編號格式不一致
+      2. 來源工作表查得到此訂單編號，但金流對帳欄位仍空白/錯誤
+         → 通常是該列 BK:BX 公式還沒往下拉，或日期不在 BK1 期別內
+    """
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    reconciliation_id = _get_period_file_id(root_folder_id, period, "金流對帳", region_name)
+    ss    = open_spreadsheet(reconciliation_id)
+    recon = ss.worksheet(RECONCILIATION_SHEET_NAME)
+
+    month_text = _month_text(period)
+    all_rows = recon.get(f"A2:{_column_letter(REC_LAST_COL)}")
+    log(f"📋 讀取「{RECONCILIATION_SHEET_NAME}」{len(all_rows)} 列，篩選本期（{month_text}）")
+
+    source_key_sets = {}
+    for name, meta in SOURCE_SHEETS.items():
+        rows = _load_source_rows(ss, name, meta)
+        source_key_sets[name] = _source_key_set(rows, meta)
+        log(f"🔵 {name}：{len(rows)} 筆（全表）")
+
+    issues: list[dict] = []
+    checked = 0
+    for offset, row in enumerate(all_rows):
+        row_num = offset + 2
+
+        def cell(idx_1based, _row=row):
+            idx = idx_1based - 1
+            return _row[idx] if idx < len(_row) else ""
+
+        if _extract_year_month(cell(COL_REC_PAID_DATE)) != month_text:
+            continue
+
+        order_no   = _clean_order_key(cell(COL_REC_ORDER_NO))
+        invoice_no = str(cell(COL_REC_INVOICE_NO) or "").strip()
+        amount     = _to_number(cell(COL_REC_AMOUNT))
+        if not order_no or (not invoice_no and amount <= 0):
+            continue  # 無需對帳的列（例如儲值金、$0）
+
+        checked += 1
+        for name, meta in SOURCE_SHEETS.items():
+            if not _is_blank_or_error(cell(meta["rec_col"])):
+                continue
+            col_letter = _column_letter(meta["rec_col"])
+            if order_no in source_key_sets[name]:
+                reason = (
+                    f"{name} 查得到訂單 {order_no}，但「{RECONCILIATION_SHEET_NAME}」"
+                    f"{col_letter}{row_num} 仍空白/錯誤，請檢查該列 BK:BX 公式是否已"
+                    f"下拉，或付款日期是否落在 {month_text}"
+                )
+            else:
+                reason = f"{name} 查無訂單 {order_no}，請確認是否已執行⑥～⑧搬運，或訂單編號格式是否一致"
+            issues.append({
+                "row": row_num, "order_no": order_no, "sheet": name,
+                "column": col_letter, "reason": reason,
+            })
+            log(f"❌ 第{row_num}列（{order_no}）：{reason}")
+
+    log(f"===== 對帳檢核完成：本期需對帳 {checked} 筆，缺漏 {len(issues)} 筆 =====")
+    return {"checked": checked, "issues": issues}
+
+
+def reverse_check_sources(
+    root_folder_id: str, period: str, region_name: str, log_fn=None
+) -> dict:
+    """
+    ⑨-3 反向比對：分別檢查 00發票／01藍新收款／02藍新退款／03ATM 本期
+    （依各自的日期欄篩選月份＝本期別）的每一筆訂單編號，是否都能在
+    「金流對帳」BM欄（訂單編號）找到；找不到的視為金流對帳漏收/漏搬運，
+    逐筆列出。
+
+    「金流對帳」這邊比對用的訂單編號集合不依月份篩選（用整張表），
+    因為同一份金流對帳檔案本來就會跨月（例如7月檔案裡也有6月才收款
+    的ATM訂單），只依「金流對帳」是否找得到這筆訂單編號來判斷，比較
+    不會誤判成漏收。
+    """
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    reconciliation_id = _get_period_file_id(root_folder_id, period, "金流對帳", region_name)
+    ss    = open_spreadsheet(reconciliation_id)
+    recon = ss.worksheet(RECONCILIATION_SHEET_NAME)
+
+    month_text = _month_text(period)
+    recon_orders = {
+        _clean_order_key(v)
+        for v in recon.col_values(COL_REC_ORDER_NO)[1:]
+        if _clean_order_key(v)
+    }
+    log(f"📋 「{RECONCILIATION_SHEET_NAME}」訂單編號共 {len(recon_orders)} 筆（全表，不分月份）")
+
+    result: dict[str, dict] = {}
+    for name, meta in SOURCE_SHEETS.items():
+        rows = _load_source_rows(ss, name, meta)
+        period_keys = _source_keys_in_period(rows, meta, month_text)
+        missing = sorted(k for k in period_keys if k not in recon_orders)
+        result[name] = {"period_count": len(period_keys), "missing": missing}
+        log(f"🔵 {name}：本期（{month_text}）{len(period_keys)} 筆，"
+            f"「{RECONCILIATION_SHEET_NAME}」查無 {len(missing)} 筆")
+        for key in missing:
+            log(f"❌ {name} 訂單 {key}：「{RECONCILIATION_SHEET_NAME}」查無此訂單編號")
+
+    return result
