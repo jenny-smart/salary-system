@@ -1517,13 +1517,14 @@ def copy_template_to_reconciliation(
     並把「金流對帳」BK1 更新成本期別月份（例如 "2026/07"），讓 BR:BU
     既有的核對公式（$BK$1 參照）比對到正確的月份。
 
-    上半月：清空「金流對帳」A2:BJ 後從第2列貼入。
-    下半月：接在「金流對帳」B欄最後一筆資料後面貼入。
+    「金流對帳」是每次執行都完整反映「範本」目前內容的快照，不是像
+    範本本身那樣分上/下半月累加——所以每次都先清空 A2:BJ，再從第2列
+    重新貼入，不會一直往下新增列數。
 
-    貼入新列後，把「金流對帳」BK:BX（核對公式區塊）從貼入起始列的
-    上一列，用「複製貼上公式」往下延伸到新貼入的每一列，讓每一列都有
-    BR～BU 可以算；不重寫公式字串，改天工作表上的公式若調整，這裡
-    不用跟著改。
+    貼入後，把「金流對帳」BK:BX（核對公式區塊）從第2列（本來就有公式，
+    建立期別時複製整份檔案帶過來的）往下複製貼上到貼入的每一列，讓
+    每一列都有 BR～BU 可以算；不重寫公式字串，改天工作表上的公式若
+    調整，這裡不用跟著改。
     """
     def log(msg):
         if log_fn:
@@ -1540,32 +1541,29 @@ def copy_template_to_reconciliation(
 
     log(f"📋 讀取「範本」{len(data)} 筆")
 
-    first_half = is_first_half(period)
-    start_row  = _get_period_paste_row(recon, first_half, log_fn=log)
-    count      = paste_data(recon, start_row, data)
-    log(f"✅ 已貼入「{RECONCILIATION_SHEET_NAME}」：{count} 筆（起始列：{start_row}，"
-        f"{'上半月清空後貼入' if first_half else '下半月接續貼入'}）")
+    _clear_a2_bj_contents_and_formats(recon, log_fn=log)
+    count = paste_data(recon, 2, data)
+    log(f"✅ 已清空「{RECONCILIATION_SHEET_NAME}」A2:BJ 後重新貼入：{count} 筆")
 
     month_text = _month_text(period)
     recon.update_cell(1, COL_REC_MONTH, month_text)
     log(f"🔵 已更新「{RECONCILIATION_SHEET_NAME}」BK1 期別月份＝{month_text}")
 
-    fill_from_row = start_row - 1
-    if fill_from_row >= 2:
+    if count > 1:
         try:
             requests = [{
                 "copyPaste": {
                     "source": {
                         "sheetId": recon.id,
-                        "startRowIndex": fill_from_row - 1,
-                        "endRowIndex": fill_from_row,
+                        "startRowIndex": 1,
+                        "endRowIndex": 2,
                         "startColumnIndex": COL_REC_MONTH - 1,
                         "endColumnIndex": REC_LAST_COL,
                     },
                     "destination": {
                         "sheetId": recon.id,
-                        "startRowIndex": start_row - 1,
-                        "endRowIndex": start_row - 1 + count,
+                        "startRowIndex": 1,
+                        "endRowIndex": 1 + count,
                         "startColumnIndex": COL_REC_MONTH - 1,
                         "endColumnIndex": REC_LAST_COL,
                     },
@@ -1574,15 +1572,11 @@ def copy_template_to_reconciliation(
                 }
             }]
             ss.batch_update({"requests": requests})
-            log(f"🔵 已將 BK:BX 核對公式從第 {fill_from_row} 列複製到新貼入的 {count} 列")
+            log(f"🔵 已將 BK:BX 核對公式從第 2 列複製到全部 {count} 列")
         except Exception as e:
             log(f"⚠️ 核對公式複製失敗，請手動下拉公式：{e}")
-    elif not first_half:
-        log("⚠️ 找不到可複製的公式列（第2列以上皆為空），請先在第2列手動建立 BK:BX 公式")
-    # 上半月從第2列開始貼：第2列本來就已經有 BK:BX 公式（建立期別時複製整份
-    # 檔案帶過來的），只是清空 A2:BJ 後隨新資料重新算，不需要另外複製公式。
 
-    return {"count": count, "start_row": start_row}
+    return {"count": count, "start_row": 2}
 
 
 def _load_source_rows(ss, sheet_name: str, meta: dict) -> list[list]:
