@@ -1882,36 +1882,49 @@ LIGHT_CYAN_2 = {"red": 162 / 255, "green": 196 / 255, "blue": 198 / 255}
 
 # 各工作表：比對前要清空的確認/標記欄（1-based欄號）、判斷是否消色的
 # 確認欄，以及要重設底色＋加註異常標註的比對欄範圍（起訖皆1-based）。
+_ABNORMAL_FORMULA_REC = (
+    'OR($BQ2<>0,ISNA($BR2),ISNA($BS2),ISNA($BT2),ISNA($BU2),'
+    'AND($BR2<>"",$BR2<>$BO2),AND($BS2<>"",$BS2<>$BP2),'
+    'AND($BT2<>"",$BP2<>$BT2),AND($BU2<>"",$BU2<>$BP2))'
+)
+_ABNORMAL_FORMULA_INVOICE = 'OR(ISNA($AD2),ISNA($AF2),ISNA($AG2),$AG2<>0)'
+_ABNORMAL_FORMULA_AE = 'OR(ISNA($AD2),ISNA($AE2),$AE2<>0)'  # 01/02/03共用
+
 MARK_SHEETS = {
     RECONCILIATION_SHEET_NAME: {
         "clear_cols": [COL_REC_MONTH],       # BK2:BK
         "confirm_col": COL_REC_MONTH,        # BK 非空白 → 消色
         "mark_start": COL_REC_CHECK,         # BQ
         "mark_end": COL_REC_ATM_CHK,         # BU
+        "abnormal_formula": _ABNORMAL_FORMULA_REC,
     },
     "00發票": {
         "clear_cols": [27, 34],              # AA2:AA、AH2:AH
         "confirm_col": 34,                   # AH
         "mark_start": 28,                    # AB
         "mark_end": 33,                      # AG
+        "abnormal_formula": _ABNORMAL_FORMULA_INVOICE,
     },
     "01藍新收款": {
         "clear_cols": [27, 32],              # AA2:AA、AF2:AF
         "confirm_col": 32,                   # AF
         "mark_start": 28,                    # AB
         "mark_end": 31,                      # AE
+        "abnormal_formula": _ABNORMAL_FORMULA_AE,
     },
     "02藍新退款": {
         "clear_cols": [32],                  # AF2:AF（無AA）
         "confirm_col": 32,
         "mark_start": 28,
         "mark_end": 31,
+        "abnormal_formula": _ABNORMAL_FORMULA_AE,
     },
     "03ATM": {
         "clear_cols": [27, 32],              # AA2:AA、AF2:AF
         "confirm_col": 32,
         "mark_start": 28,
         "mark_end": 31,
+        "abnormal_formula": _ABNORMAL_FORMULA_AE,
     },
 }
 
@@ -1946,9 +1959,9 @@ def _clear_marks_and_backgrounds(ws, cfg: dict, log_fn=None) -> None:
 
 def _replace_abnormal_highlight_rule(ws, cfg: dict, log_fn=None) -> None:
     """
-    設定條件式格式：mark_start:mark_end 範圍內，該欄空白/錯誤且確認欄
-    未填時標淺青色2；確認欄一填值，Sheets 自動重新判斷並消色。
-    每次都先移除同範圍舊規則再新增，避免重跑後規則越疊越多。
+    設定條件式格式：mark_start:mark_end 範圍內，cfg["abnormal_formula"]
+    判定異常且確認欄未填時標淺青色2；確認欄一填值，Sheets 自動重新判斷
+    並消色。每次都先移除同範圍舊規則再新增，避免重跑後規則越疊越多。
     """
     def log(msg):
         if log_fn:
@@ -1993,8 +2006,7 @@ def _replace_abnormal_highlight_rule(ws, cfg: dict, log_fn=None) -> None:
                         "type": "CUSTOM_FORMULA",
                         "values": [{
                             "userEnteredValue":
-                                f'=AND(OR(ISBLANK({first_col_letter}2),ISERROR({first_col_letter}2)),'
-                                f'${confirm_letter}2="")'
+                                f'=AND({cfg["abnormal_formula"]},${confirm_letter}2="")'
                         }],
                     },
                     "format": {"backgroundColor": LIGHT_CYAN_2},
