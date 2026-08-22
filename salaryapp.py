@@ -903,7 +903,10 @@ if run_clicked and execution_engine == "PYTHON":
                             copy_template_to_reconciliation,
                             check_reconciliation,
                             reverse_check_sources,
+                            setup_reconciliation_marks,
                         )
+                        setup_reconciliation_marks(root_id, _period, _name, add_log)
+
                         result = copy_template_to_reconciliation(root_id, _period, _name, add_log)
                         add_log(f"範本彙總完成：{result['count']} 筆，起始列：{result['start_row']}", "success")
 
