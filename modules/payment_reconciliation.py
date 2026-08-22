@@ -1388,18 +1388,15 @@ def move_invoice_and_bluenew(
 #
 # ATM資料的來源不是像發票/藍新那樣每期轉檔出來的檔案，而是各地區
 # 「請款」試算表（地區設定的 allowance_id）裡一份持續累積、跨期別的
-# 「ATM」工作表。那份表本身已經有 AA:AG 這組鏡射公式（AA=A、AB=I、
-# AC=J、AD=K、AE=L、AF=N、AG=O），這裡只需要：
+# 「ATM」工作表。AA:AG 這組鏡射公式（AA=A、AB=I、AC=J、AD=K、AE=L、
+# AF=N、AG=O）只有零星示範列有填，大部分列是空的，所以要：
 #   1. 用 A 欄（ATM日期）篩出屬於本期別（年/月）的列
-#   2. 把這些列的 AA:AG（共7欄）當作值，貼進「金流對帳」03ATM工作表的
-#      A:G（一樣先清空再貼，不累加）
+#   2. 幫這些列補上 AA:AG 公式（沒有就新增，已有就覆蓋，結果一樣）
+#   3. 讀回算出來的值，貼進「金流對帳」03ATM工作表的 A:G
+#      （一樣先清空再貼，不累加）
 # ═══════════════════════════════════════════════════════════════
 
 ATM_ALLOWANCE_SHEET_NAME = "ATM"
-ATM_ALLOWANCE_DATE_COL = 0     # A（0-based）：ATM日期，篩期別用
-ATM_ALLOWANCE_MIRROR_START = 26  # AA（0-based）
-ATM_ALLOWANCE_MIRROR_END = 33    # AG（0-based，exclusive）＝ AA:AG 共7欄
-ATM_ALLOWANCE_READ_END_COL = "AG"
 
 
 def move_atm_from_allowance(
@@ -1407,8 +1404,10 @@ def move_atm_from_allowance(
 ) -> dict:
     """
     ⑨ 搬運ATM：從地區「請款」試算表（allowance_id）的「ATM」工作表，
-    篩出A欄日期屬於本期別（年/月）的列，把這些列已經算好的 AA:AG
-    （共7欄）貼進「金流對帳」03ATM工作表的 A:G（清空後重新貼入）。
+    篩出A欄日期屬於本期別（年/月）的列，幫這些列補上 AA:AG 公式
+    （AA=A、AB=I、AC=J、AD=K、AE=L、AF=N、AG=O——大部分列本來沒有這組
+    公式，只有零星示範列有），再把算出來的值貼進「金流對帳」03ATM
+    工作表的 A:G（清空後重新貼入）。
     """
     def log(msg):
         if log_fn:
@@ -1423,20 +1422,36 @@ def move_atm_from_allowance(
 
     ss_allowance = open_spreadsheet(allowance_id)
     allowance_ws = ss_allowance.worksheet(ATM_ALLOWANCE_SHEET_NAME)
-    all_rows = get_all_data(allowance_ws, "A2", ATM_ALLOWANCE_READ_END_COL)
-    log(f"📋 讀取請款試算表「{ATM_ALLOWANCE_SHEET_NAME}」{len(all_rows)} 列")
+    a_col = allowance_ws.get("A2:A") or []
+    log(f"📋 讀取請款試算表「{ATM_ALLOWANCE_SHEET_NAME}」{len(a_col)} 列")
 
     month_text = _month_text(period)
-    matched_rows = []
-    for row in all_rows:
-        date_val = row[ATM_ALLOWANCE_DATE_COL] if len(row) > ATM_ALLOWANCE_DATE_COL else ""
-        if _extract_year_month(date_val) != month_text:
-            continue
-        mirror = row[ATM_ALLOWANCE_MIRROR_START:ATM_ALLOWANCE_MIRROR_END]
-        mirror = mirror + [""] * (7 - len(mirror))
-        matched_rows.append(mirror)
+    matched_row_nums = [
+        offset + 2 for offset, row in enumerate(a_col)
+        if _extract_year_month(row[0] if row else "") == month_text
+    ]
+    log(f"🔵 本期（{month_text}）共 {len(matched_row_nums)} 列")
 
-    log(f"🔵 本期（{month_text}）共 {len(matched_rows)} 列")
+    matched_rows: list[list] = []
+    if matched_row_nums:
+        formula_updates = [
+            {
+                "range": f"AA{r}:AG{r}",
+                "values": [[f"=A{r}", f"=I{r}", f"=J{r}", f"=K{r}", f"=L{r}", f"=N{r}", f"=O{r}"]],
+            }
+            for r in matched_row_nums
+        ]
+        allowance_ws.batch_update(formula_updates, value_input_option="USER_ENTERED")
+        log(f"🔵 已補上 AA:AG 公式：{len(matched_row_nums)} 列")
+
+        min_r, max_r = min(matched_row_nums), max(matched_row_nums)
+        block = allowance_ws.get(f"AA{min_r}:AG{max_r}") or []
+        wanted = set(matched_row_nums)
+        for i, row_num in enumerate(range(min_r, max_r + 1)):
+            if row_num not in wanted:
+                continue
+            vals = block[i] if i < len(block) else []
+            matched_rows.append(vals + [""] * (7 - len(vals)))
 
     atm_sheet.batch_clear([f"A2:G{max(atm_sheet.row_count, 2)}"])
     count = paste_data(atm_sheet, 2, matched_rows) if matched_rows else 0
