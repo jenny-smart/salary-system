@@ -1457,17 +1457,8 @@ def move_atm_from_allowance(
     count = paste_data(atm_sheet, 2, matched_rows) if matched_rows else 0
     log(f"✅ 已清空「03ATM」A2:G 後重新貼入：{count} 筆")
 
-    # G欄（收款類別）不是「服務費用」的列，AA欄加註「-1」，讓AB欄併出
-    # 子單訂單編號，才能對到金流對帳拆出來的子單列。
     atm_sheet.batch_clear([f"AA2:AA{max(atm_sheet.row_count, 2)}"])
-    marker_updates = [
-        {"range": f"AA{2 + i}", "values": [["-1"]]}
-        for i, row in enumerate(matched_rows)
-        if (row[6] if len(row) > 6 else "").strip() != "服務費用"
-    ]
-    if marker_updates:
-        atm_sheet.batch_update(marker_updates, value_input_option="USER_ENTERED")
-        log(f"🔵 已在AA欄加註「-1」：{len(marker_updates)} 列（G欄非服務費用）")
+    _mark_atm_non_service_rows(atm_sheet, log_fn=log)
 
     return {"count": count}
 
@@ -1890,8 +1881,14 @@ _ABNORMAL_FORMULA_REC = (
     'AND($BR2<>"",$BR2<>$BO2),AND($BS2<>"",$BS2<>$BP2),'
     'AND($BT2<>"",$BP2<>$BT2),AND($BU2<>"",$BU2<>$BP2)),TRUE)'
 )
-_ABNORMAL_FORMULA_INVOICE = 'OR(ISNA($AD2),ISNA($AF2),ISNA($AG2),$AG2<>0)'
-_ABNORMAL_FORMULA_AE = 'OR(ISNA($AD2),ISNA($AE2),$AE2<>0)'  # 01/02/03共用
+# 比較運算遇到 #N/A 會直接傳播錯誤，條件格式就不會生效。
+# 外層 IFERROR(...,TRUE) 保證 AD/AE/AF/AG 任一錯誤都會被視為異常。
+_ABNORMAL_FORMULA_INVOICE = (
+    'IFERROR(OR(ISNA($AD2),ISNA($AF2),ISNA($AG2),$AG2<>0),TRUE)'
+)
+_ABNORMAL_FORMULA_AE = (
+    'IFERROR(OR(ISNA($AD2),ISNA($AE2),$AE2<>0),TRUE)'
+)  # 01/02/03共用
 
 MARK_SHEETS = {
     RECONCILIATION_SHEET_NAME: {
@@ -1930,6 +1927,33 @@ MARK_SHEETS = {
         "abnormal_formula": _ABNORMAL_FORMULA_AE,
     },
 }
+
+
+def _mark_atm_non_service_rows(ws, log_fn=None) -> int:
+    """在03ATM的AA欄加註子單後綴：只處理 A:G 有資料，且 G 欄
+    不是「服務費用」的列。呼叫端需先清空 AA2:AA，避免舊標記殘留。
+    """
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    max_rows = max(ws.row_count, 2)
+    rows = ws.get(f"A2:G{max_rows}") or []
+    marker_updates = []
+    for offset, row in enumerate(rows):
+        if not any(str(value or "").strip() for value in row):
+            continue
+        category = str(row[6] if len(row) > 6 else "").strip()
+        if category != "服務費用":
+            marker_updates.append({
+                "range": f"AA{offset + 2}",
+                "values": [["-1"]],
+            })
+
+    if marker_updates:
+        ws.batch_update(marker_updates, value_input_option="USER_ENTERED")
+    log(f"🔵 「03ATM」AA欄已加註 -1：{len(marker_updates)} 列（G欄非服務費用）")
+    return len(marker_updates)
 
 
 def _clear_marks_and_backgrounds(ws, cfg: dict, log_fn=None) -> None:
@@ -2101,6 +2125,9 @@ def setup_reconciliation_marks(
     for sheet_name, cfg in MARK_SHEETS.items():
         ws = ss.worksheet(sheet_name)
         _clear_marks_and_backgrounds(ws, cfg, log_fn=log)
+        if sheet_name == "03ATM":
+            # 先清空 AA，再依 G 欄重建 -1；完成後才進行異常比對。
+            _mark_atm_non_service_rows(ws, log_fn=log)
         _replace_abnormal_highlight_rule(ws, cfg, log_fn=log)
         _set_abnormal_filter(ws, cfg, log_fn=log)
 
