@@ -1457,6 +1457,18 @@ def move_atm_from_allowance(
     count = paste_data(atm_sheet, 2, matched_rows) if matched_rows else 0
     log(f"✅ 已清空「03ATM」A2:G 後重新貼入：{count} 筆")
 
+    # G欄（收款類別）不是「服務費用」的列，AA欄加註「-1」，讓AB欄併出
+    # 子單訂單編號，才能對到金流對帳拆出來的子單列。
+    atm_sheet.batch_clear([f"AA2:AA{max(atm_sheet.row_count, 2)}"])
+    marker_updates = [
+        {"range": f"AA{2 + i}", "values": [["-1"]]}
+        for i, row in enumerate(matched_rows)
+        if (row[6] if len(row) > 6 else "").strip() != "服務費用"
+    ]
+    if marker_updates:
+        atm_sheet.batch_update(marker_updates, value_input_option="USER_ENTERED")
+        log(f"🔵 已在AA欄加註「-1」：{len(marker_updates)} 列（G欄非服務費用）")
+
     return {"count": count}
 
 
