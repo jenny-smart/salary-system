@@ -1485,9 +1485,8 @@ def move_atm_from_allowance(
 #   BQ=69 檢核　BR=70 發票核對　BS=71 藍新收款　BT=72 藍新退款
 #   BU=73 ATM　BV=74 專員收現　BW=75 異動費用　BX=76 消毒服務
 #
-# ⑨-1 只搬 A2:BJ（跟其他步驟一致），BK:BX 一律用「複製上一列公式」
-# 的方式往下延伸，不重新寫死公式字串——公式本來就已經在工作表裡，
-# 改天公式若調整，這裡不用跟著改。
+# ⑨-1 只搬 A2:BJ（跟其他步驟一致），BK1 固定設月份公式；BL:BQ 用
+# 「複製第2列公式」的方式延伸到 B 欄最後一筆，不動 BK2:BK 人工確認欄。
 # ═══════════════════════════════════════════════════════════════
 
 RECONCILIATION_SHEET_NAME = "金流對帳"
@@ -1606,18 +1605,20 @@ def copy_template_to_reconciliation(
     root_folder_id: str, period: str, region_name: str, log_fn=None
 ) -> dict:
     """
-    ⑨-1 範本彙總：把「範本」工作表的 A2:BJ 貼進「金流對帳」工作表，
-    並把「金流對帳」BK1 更新成本期別月份（例如 "2026/07"），讓 BR:BU
-    既有的核對公式（$BK$1 參照）比對到正確的月份。
+    ⑨-1 範本彙總，固定順序：
+      1. 清空「金流對帳」A2:BJ。
+      2. 把「範本」A2:BJ 搬到「金流對帳」A2:BJ。
+      3. 設定 BK1 月份公式，再將 BL:BQ 下拉到 B 欄最後一筆。
+
+    完成以上搬運後，才由 setup_reconciliation_marks 清空核對欄與底色，
+    然後進行比對、異常標記及篩選。
 
     「金流對帳」是每次執行都完整反映「範本」目前內容的快照，不是像
     範本本身那樣分上/下半月累加——所以每次都先清空 A2:BJ，再從第2列
     重新貼入，不會一直往下新增列數。
 
-    貼入後，把「金流對帳」BK:BX（核對公式區塊）從第2列（本來就有公式，
-    建立期別時複製整份檔案帶過來的）往下複製貼上到貼入的每一列，讓
-    每一列都有 BR～BU 可以算；不重寫公式字串，改天工作表上的公式若
-    調整，這裡不用跟著改。
+    貼入後，把「金流對帳」BL:BQ 從第2列往下複製到 B 欄最後一筆；
+    BR:BU 原有公式會依 BK1 的月份判斷是否比對四張來源表。
     """
     def log(msg):
         if log_fn:
@@ -1636,15 +1637,19 @@ def copy_template_to_reconciliation(
 
     _clear_a2_bj_contents_and_formats(recon, log_fn=log)
     count = paste_data(recon, 2, data)
-    log(f"✅ 已清空「{RECONCILIATION_SHEET_NAME}」A2:BJ 後重新貼入：{count} 筆")
+    log(f"✅ 已將「範本」A2:BJ 搬到「{RECONCILIATION_SHEET_NAME}」A2:BJ：{count} 筆")
 
-    # BK1＝"=text(H2,\"YYYY/MM\")"，會自己依第2列（服務日期）算出本期月份，
-    # 不用也不能由這裡寫死覆蓋——寫死會蓋掉公式，變成固定值就不會再跟著
-    # 資料自動更新。這裡只讀回目前算出來的值做確認，不寫入。
-    bk1_value = recon.acell(f"{_column_letter(COL_REC_MONTH)}1").value
-    log(f"🔵 「{RECONCILIATION_SHEET_NAME}」BK1 本期月份（公式自動計算）＝{bk1_value}")
+    # BK 是人工確認欄，只有 BK1 放本期月份公式，不可把 BK1/BK2 往下拉。
+    recon.update_acell(f"{_column_letter(COL_REC_MONTH)}1", '=TEXT(H2,"YYYY/MM")')
+    log(f"🔵 「{RECONCILIATION_SHEET_NAME}」BK1 已設為 =TEXT(H2,\"YYYY/MM\")")
 
-    if count > 1:
+    # 公式只拉到 B 欄最後一筆非空白資料，避免空白列也進入對帳。
+    formula_count = max(
+        (idx for idx, row in enumerate(data, start=1)
+         if len(row) >= 2 and str(row[1] or "").strip()),
+        default=0,
+    )
+    if formula_count > 1:
         try:
             requests = [{
                 "copyPaste": {
@@ -1652,24 +1657,24 @@ def copy_template_to_reconciliation(
                         "sheetId": recon.id,
                         "startRowIndex": 1,
                         "endRowIndex": 2,
-                        "startColumnIndex": COL_REC_MONTH - 1,
-                        "endColumnIndex": REC_LAST_COL,
+                        "startColumnIndex": COL_REC_PAID_DATE - 1,
+                        "endColumnIndex": COL_REC_CHECK,
                     },
                     "destination": {
                         "sheetId": recon.id,
                         "startRowIndex": 1,
-                        "endRowIndex": 1 + count,
-                        "startColumnIndex": COL_REC_MONTH - 1,
-                        "endColumnIndex": REC_LAST_COL,
+                        "endRowIndex": 1 + formula_count,
+                        "startColumnIndex": COL_REC_PAID_DATE - 1,
+                        "endColumnIndex": COL_REC_CHECK,
                     },
                     "pasteType": "PASTE_FORMULA",
                     "pasteOrientation": "NORMAL",
                 }
             }]
             ss.batch_update({"requests": requests})
-            log(f"🔵 已將 BK:BX 核對公式從第 2 列複製到全部 {count} 列")
+            log(f"🔵 已將 BL:BQ 公式從第 2 列複製到 B 欄最後一筆（共 {formula_count} 列）")
         except Exception as e:
-            log(f"⚠️ 核對公式複製失敗，請手動下拉公式：{e}")
+            log(f"⚠️ BL:BQ 公式複製失敗，請手動下拉公式：{e}")
 
     return {"count": count, "start_row": 2}
 
@@ -1873,9 +1878,7 @@ def reverse_check_sources(
 # （金流對帳BK／00發票AH／01藍新收款AF／02藍新退款AF／03ATM AF）填值，
 # Sheets 會自動依規則重新判斷並把底色消掉，不用重跑程式。
 #
-# 「篩選淺青色2」是 Google Sheets 內建「依顏色篩選」的手動操作（資料 >
-# 建立篩選器 > 篩選依據 > 顏色），Sheets API 的 FilterCriteria 沒有底色
-# 條件，這裡不處理，仍需在試算表上手動設定一次。
+# 條件式格式完成後，再用 BasicFilter 依「淺青色2」可見底色篩選。
 # ═══════════════════════════════════════════════════════════════
 
 LIGHT_CYAN_2 = {"red": 162 / 255, "green": 196 / 255, "blue": 198 / 255}
@@ -1883,9 +1886,9 @@ LIGHT_CYAN_2 = {"red": 162 / 255, "green": 196 / 255, "blue": 198 / 255}
 # 各工作表：比對前要清空的確認/標記欄（1-based欄號）、判斷是否消色的
 # 確認欄，以及要重設底色＋加註異常標註的比對欄範圍（起訖皆1-based）。
 _ABNORMAL_FORMULA_REC = (
-    'OR($BQ2<>0,ISNA($BR2),ISNA($BS2),ISNA($BT2),ISNA($BU2),'
+    'IFERROR(OR($BQ2<>0,ISNA($BR2),ISNA($BS2),ISNA($BT2),ISNA($BU2),'
     'AND($BR2<>"",$BR2<>$BO2),AND($BS2<>"",$BS2<>$BP2),'
-    'AND($BT2<>"",$BP2<>$BT2),AND($BU2<>"",$BU2<>$BP2))'
+    'AND($BT2<>"",$BP2<>$BT2),AND($BU2<>"",$BU2<>$BP2)),TRUE)'
 )
 _ABNORMAL_FORMULA_INVOICE = 'OR(ISNA($AD2),ISNA($AF2),ISNA($AG2),$AG2<>0)'
 _ABNORMAL_FORMULA_AE = 'OR(ISNA($AD2),ISNA($AE2),$AE2<>0)'  # 01/02/03共用
@@ -1949,7 +1952,9 @@ def _clear_marks_and_backgrounds(ws, cfg: dict, log_fn=None) -> None:
                 "startColumnIndex": cfg["mark_start"] - 1,
                 "endColumnIndex": cfg["mark_end"],
             },
-            "cell": {"userEnteredFormat": {"backgroundColor": {}}},
+            # backgroundColor={} 會被 Sheets 當成 RGB(0,0,0)，就是截圖的黑底。
+            # 格式物件不帶 backgroundColor，再指定 fields，才是真正「移除底色」。
+            "cell": {"userEnteredFormat": {}},
             "fields": "userEnteredFormat.backgroundColor",
         }
     }]
@@ -1991,6 +1996,15 @@ def _replace_abnormal_highlight_rule(ws, cfg: dict, log_fn=None) -> None:
     confirm_letter = _column_letter(cfg["confirm_col"])
     first_col_letter = _column_letter(cfg["mark_start"])
 
+    extra_conditions = [f'${confirm_letter}2=""']
+    if ws.title == RECONCILIATION_SHEET_NAME:
+        # 只比對 BL 付款日期屬於 BK1 月份的列；其他月份不著色。
+        extra_conditions.insert(0, 'IFERROR(TEXT($BL2,"yyyy/mm")=$BK$1,FALSE)')
+
+    condition_formula = (
+        f'=AND({",".join(extra_conditions)},{cfg["abnormal_formula"]})'
+    )
+
     ws.spreadsheet.batch_update({"requests": [{
         "addConditionalFormatRule": {
             "rule": {
@@ -2005,8 +2019,7 @@ def _replace_abnormal_highlight_rule(ws, cfg: dict, log_fn=None) -> None:
                     "condition": {
                         "type": "CUSTOM_FORMULA",
                         "values": [{
-                            "userEnteredValue":
-                                f'=AND({cfg["abnormal_formula"]},${confirm_letter}2="")'
+                            "userEnteredValue": condition_formula
                         }],
                     },
                     "format": {"backgroundColor": LIGHT_CYAN_2},
@@ -2019,6 +2032,54 @@ def _replace_abnormal_highlight_rule(ws, cfg: dict, log_fn=None) -> None:
         f"淺青色2異常標註（{confirm_letter} 非空白自動消色）")
 
 
+def _set_abnormal_filter(ws, cfg: dict, log_fn=None) -> None:
+    """只顯示淺青色2異常列。「金流對帳」再叠加 BL 月份＝BK1，
+    確保例如 202607-2 只會顯示 2026/07 的異常資料。
+    """
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    max_rows = max(ws.row_count, 2)
+    filter_specs = [{
+        "columnIndex": cfg["mark_start"] - 1,
+        "filterCriteria": {
+            "visibleBackgroundColorStyle": {"rgbColor": LIGHT_CYAN_2}
+        }
+    }]
+    if ws.title == RECONCILIATION_SHEET_NAME:
+        filter_specs.append({
+            "columnIndex": COL_REC_PAID_DATE - 1,
+            "filterCriteria": {
+                "condition": {
+                    "type": "CUSTOM_FORMULA",
+                    "values": [{
+                        "userEnteredValue": '=IFERROR(TEXT($BL2,"yyyy/mm")=$BK$1,FALSE)'
+                    }],
+                }
+            }
+        })
+
+    ws.spreadsheet.batch_update({"requests": [{
+        "setBasicFilter": {
+            "filter": {
+                "range": {
+                    "sheetId": ws.id,
+                    "startRowIndex": 0,
+                    "endRowIndex": max_rows,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": cfg["mark_end"],
+                },
+                "filterSpecs": filter_specs,
+            }
+        }
+    }]})
+    if ws.title == RECONCILIATION_SHEET_NAME:
+        log("🔎 「金流對帳」已篩選 BL 為 BK1 月份，並只顯示淺青色2異常列")
+    else:
+        log(f"🔎 「{ws.title}」已只顯示淺青色2異常列")
+
+
 def setup_reconciliation_marks(
     root_folder_id: str, period: str, region_name: str, log_fn=None
 ) -> None:
@@ -2027,8 +2088,8 @@ def setup_reconciliation_marks(
     格式。規則只需設定一次即持續生效，之後人工填確認欄會自動消色，不用
     重跑本函式；但重跑也安全（會先移除同範圍舊規則再重建，不會疊加）。
 
-    「篩選淺青色2」需在試算表手動操作一次：資料 > 建立篩選器 > 篩選
-    依據 > 顏色，Sheets API 沒有依底色篩選的介面可以自動化。
+    條件式格式建立後自動依淺青色2篩選；金流對帳另同時限定
+    BL 付款日期的月份等於 BK1。
     """
     def log(msg):
         if log_fn:
@@ -2041,5 +2102,6 @@ def setup_reconciliation_marks(
         ws = ss.worksheet(sheet_name)
         _clear_marks_and_backgrounds(ws, cfg, log_fn=log)
         _replace_abnormal_highlight_rule(ws, cfg, log_fn=log)
+        _set_abnormal_filter(ws, cfg, log_fn=log)
 
-    log("===== 比對前清空與淺青色2異常標註設定完成（篩選淺青色2請於試算表手動操作一次）=====")
+    log("===== 比對前清空、異常標註與篩選設定完成 =====")
