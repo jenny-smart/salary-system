@@ -477,7 +477,8 @@ FUNCTION_MAP = {
         "⑥ 金流對帳轉檔（zip/csv/xlsx → Google Sheet）",
         "⑦ 搬運退款＋預收",
         "⑧ 搬運發票＋藍新",
-        "⑨ 金流對帳彙總＋檢核",
+        "⑨ 搬運ATM",
+        "⑩ 金流對帳彙總＋檢核",
     ],
     "🧹 清潔承攬": [
         "① 前置作業",
@@ -891,7 +892,13 @@ if run_clicked and execution_engine == "PYTHON":
                             {"task_key": "複製藍新退款", "count": counts.get("藍新退款")},
                         ])
 
-                    elif "⑨ 金流對帳彙總" in _func:
+                    elif "⑨ 搬運ATM" in _func:
+                        from modules.payment_reconciliation import move_atm_from_allowance
+                        allowance_id = _region.get("allowance_id", "")
+                        result = move_atm_from_allowance(allowance_id, root_id, _period, _name, add_log)
+                        add_log(f"搬運ATM完成：{result['count']} 筆", "success")
+
+                    elif "⑩ 金流對帳彙總" in _func:
                         from modules.payment_reconciliation import (
                             copy_template_to_reconciliation,
                             check_reconciliation,
