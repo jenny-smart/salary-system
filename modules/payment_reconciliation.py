@@ -1545,9 +1545,11 @@ def copy_template_to_reconciliation(
     count = paste_data(recon, 2, data)
     log(f"✅ 已清空「{RECONCILIATION_SHEET_NAME}」A2:BJ 後重新貼入：{count} 筆")
 
-    month_text = _month_text(period)
-    recon.update_cell(1, COL_REC_MONTH, month_text)
-    log(f"🔵 已更新「{RECONCILIATION_SHEET_NAME}」BK1 期別月份＝{month_text}")
+    # BK1＝"=text(H2,\"YYYY/MM\")"，會自己依第2列（服務日期）算出本期月份，
+    # 不用也不能由這裡寫死覆蓋——寫死會蓋掉公式，變成固定值就不會再跟著
+    # 資料自動更新。這裡只讀回目前算出來的值做確認，不寫入。
+    bk1_value = recon.acell(f"{_column_letter(COL_REC_MONTH)}1").value
+    log(f"🔵 「{RECONCILIATION_SHEET_NAME}」BK1 本期月份（公式自動計算）＝{bk1_value}")
 
     if count > 1:
         try:
@@ -1704,13 +1706,17 @@ def check_reconciliation(
         if row_checked:
             checked += 1
 
+    # 相同問題（同一張來源表＋同一種原因）排在一起，方便一次看完同類問題，
+    # 不用在上千筆裡跳著找。
+    issues.sort(key=lambda it: (it["sheet"], it["reason_type"], it["row"]))
+
     # 只記錄「來源工作表／原因類型」的彙總筆數到執行日誌，逐筆明細改由
     # 呼叫端（Streamlit UI）用表格呈現，避免上千筆訊息洗版執行日誌。
     summary: dict[tuple[str, str], int] = {}
     for issue in issues:
         key = (issue["sheet"], issue["reason_type"])
         summary[key] = summary.get(key, 0) + 1
-    for (sheet_name, reason_type), count in sorted(summary.items()):
+    for (sheet_name, reason_type), count in sorted(summary.items(), key=lambda kv: -kv[1]):
         log(f"❌ {sheet_name}／{reason_type}：{count} 筆")
 
     log(f"===== 對帳檢核完成：本期需對帳 {checked} 筆，缺漏 {len(issues)} 筆 =====")

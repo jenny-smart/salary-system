@@ -913,7 +913,9 @@ if run_clicked and execution_engine == "PYTHON":
                             st.dataframe(
                                 [
                                     {"來源工作表": sheet, "原因": reason_type, "筆數": count}
-                                    for (sheet, reason_type), count in sorted(issue_summary.items())
+                                    for (sheet, reason_type), count in sorted(
+                                        issue_summary.items(), key=lambda kv: -kv[1]
+                                    )
                                 ],
                                 use_container_width=True,
                             )
