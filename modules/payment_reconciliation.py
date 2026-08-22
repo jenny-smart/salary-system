@@ -1384,6 +1384,68 @@ def move_invoice_and_bluenew(
 
 
 # ═══════════════════════════════════════════════════════════════
+# ⑨ 搬運ATM
+#
+# ATM資料的來源不是像發票/藍新那樣每期轉檔出來的檔案，而是各地區
+# 「請款」試算表（地區設定的 allowance_id）裡一份持續累積、跨期別的
+# 「ATM」工作表。那份表本身已經有 AA:AG 這組鏡射公式（AA=A、AB=I、
+# AC=J、AD=K、AE=L、AF=N、AG=O），這裡只需要：
+#   1. 用 A 欄（ATM日期）篩出屬於本期別（年/月）的列
+#   2. 把這些列的 AA:AG（共7欄）當作值，貼進「金流對帳」03ATM工作表的
+#      A:G（一樣先清空再貼，不累加）
+# ═══════════════════════════════════════════════════════════════
+
+ATM_ALLOWANCE_SHEET_NAME = "ATM"
+ATM_ALLOWANCE_DATE_COL = 0     # A（0-based）：ATM日期，篩期別用
+ATM_ALLOWANCE_MIRROR_START = 26  # AA（0-based）
+ATM_ALLOWANCE_MIRROR_END = 33    # AG（0-based，exclusive）＝ AA:AG 共7欄
+ATM_ALLOWANCE_READ_END_COL = "AG"
+
+
+def move_atm_from_allowance(
+    allowance_id: str, root_folder_id: str, period: str, region_name: str, log_fn=None
+) -> dict:
+    """
+    ⑨ 搬運ATM：從地區「請款」試算表（allowance_id）的「ATM」工作表，
+    篩出A欄日期屬於本期別（年/月）的列，把這些列已經算好的 AA:AG
+    （共7欄）貼進「金流對帳」03ATM工作表的 A:G（清空後重新貼入）。
+    """
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    if not allowance_id:
+        raise Exception("這個地區的地區設定缺少 allowance_id（請款 ID）")
+
+    reconciliation_id = _get_period_file_id(root_folder_id, period, "金流對帳", region_name)
+    ss_recon = open_spreadsheet(reconciliation_id)
+    atm_sheet = ss_recon.worksheet("03ATM")
+
+    ss_allowance = open_spreadsheet(allowance_id)
+    allowance_ws = ss_allowance.worksheet(ATM_ALLOWANCE_SHEET_NAME)
+    all_rows = get_all_data(allowance_ws, "A2", ATM_ALLOWANCE_READ_END_COL)
+    log(f"📋 讀取請款試算表「{ATM_ALLOWANCE_SHEET_NAME}」{len(all_rows)} 列")
+
+    month_text = _month_text(period)
+    matched_rows = []
+    for row in all_rows:
+        date_val = row[ATM_ALLOWANCE_DATE_COL] if len(row) > ATM_ALLOWANCE_DATE_COL else ""
+        if _extract_year_month(date_val) != month_text:
+            continue
+        mirror = row[ATM_ALLOWANCE_MIRROR_START:ATM_ALLOWANCE_MIRROR_END]
+        mirror = mirror + [""] * (7 - len(mirror))
+        matched_rows.append(mirror)
+
+    log(f"🔵 本期（{month_text}）共 {len(matched_rows)} 列")
+
+    atm_sheet.batch_clear([f"A2:G{max(atm_sheet.row_count, 2)}"])
+    count = paste_data(atm_sheet, 2, matched_rows) if matched_rows else 0
+    log(f"✅ 已清空「03ATM」A2:G 後重新貼入：{count} 筆")
+
+    return {"count": count}
+
+
+# ═══════════════════════════════════════════════════════════════
 # ⑨ 金流對帳彙總與檢核
 #
 # 「金流對帳」工作表 A:BJ 跟「範本」同一份配置，緊接著 BK:BX 是核對
@@ -1421,34 +1483,38 @@ REC_LAST_COL        = 76  # BX 消毒服務，BK:BX 公式區塊的最後一欄
 # 以及「金流對帳」對應的核對欄。02藍新退款／03ATM 另有 alt_key_idx：
 # 拆退款/異動費等子單在來源表會補上 "-1" 後綴的鏡射欄，跟「金流對帳」
 # 拆出來的子單訂單編號（LCxxxx-1）對得上。
+
+# 四張來源表的欄位排布已經統一（使用者在表上手動整理過）：AA＝手動加註的
+# "-1" 等子單後綴標記（預設空白），AB＝訂單編號（已經把AA的後綴併進去的
+# 最終比對鍵值，金流對帳BR:BU公式查的就是這欄開始的 AB:AC），AC＝比對
+# 結果值。四張表只有各自原本的日期欄位不同。
+_SOURCE_KEY_IDX = 27    # AB（0-based）：四張表統一的訂單編號比對鍵值欄
+_SOURCE_MARKER_IDX = 26  # AA（0-based）：手動加註的子單後綴標記欄
+
 SOURCE_SHEETS = {
     "00發票": {
         "rec_col": COL_REC_INVOICE_CHK,
-        "key_idx": 2,       # C 訂單編號
-        "alt_key_idx": None,
+        "key_idx": _SOURCE_KEY_IDX,
         "date_idx": 3,      # D 訂單日期
-        "read_end_col": "X",
+        "read_end_col": "AG",
     },
     "01藍新收款": {
         "rec_col": COL_REC_NEWEBPAY_IN,
-        "key_idx": 3,       # D 商店訂單編號
-        "alt_key_idx": 23,  # X 商店訂單編號（鏡射欄，金流對帳BS公式實際查的是X:Y）
+        "key_idx": _SOURCE_KEY_IDX,
         "date_idx": 1,      # B 訂單交易日期
-        "read_end_col": "AB",
+        "read_end_col": "AG",
     },
     "02藍新退款": {
         "rec_col": COL_REC_NEWEBPAY_RE,
-        "key_idx": 1,       # B 商店訂單編號（基礎訂單編號，不含 -1 後綴）
-        "alt_key_idx": 24,  # Y 商店訂單編號（含 -1 後綴，對應拆退款子單）
+        "key_idx": _SOURCE_KEY_IDX,
         "date_idx": 8,      # I 商店執行日期
-        "read_end_col": "AB",
+        "read_end_col": "AG",
     },
     "03ATM": {
         "rec_col": COL_REC_ATM_CHK,
-        "key_idx": 2,       # C 訂單編號（新訓費等非訂單收入此欄為空，略過）
-        "alt_key_idx": 9,   # J 訂單編號（含 -1 後綴之異動費等子單）
+        "key_idx": _SOURCE_KEY_IDX,
         "date_idx": 0,      # A ATM日期
-        "read_end_col": "M",
+        "read_end_col": "AG",
     },
 }
 
@@ -1586,17 +1652,17 @@ def _load_source_rows(ss, sheet_name: str, meta: dict) -> list[list]:
     return get_all_data(ws, "A2", meta["read_end_col"])
 
 
+def _strip_order_suffix(order_no: str) -> str:
+    """"LC00211258-1" → "LC00211258"；沒有 "-數字" 後綴就原樣回傳。"""
+    return re.sub(r"-\d+$", "", order_no)
+
+
 def _source_key_set(rows: list[list], meta: dict) -> set[str]:
     keys = set()
     for row in rows:
         key = _clean_order_key(row[meta["key_idx"]] if len(row) > meta["key_idx"] else "")
         if key:
             keys.add(key)
-        alt_idx = meta.get("alt_key_idx")
-        if alt_idx is not None:
-            alt = _clean_order_key(row[alt_idx] if len(row) > alt_idx else "")
-            if alt:
-                keys.add(alt)
     return keys
 
 
@@ -1609,11 +1675,6 @@ def _source_keys_in_period(rows: list[list], meta: dict, month_text: str) -> set
         key = _clean_order_key(row[meta["key_idx"]] if len(row) > meta["key_idx"] else "")
         if key:
             keys.add(key)
-        alt_idx = meta.get("alt_key_idx")
-        if alt_idx is not None:
-            alt = _clean_order_key(row[alt_idx] if len(row) > alt_idx else "")
-            if alt:
-                keys.add(alt)
     return keys
 
 
@@ -1696,8 +1757,18 @@ def check_reconciliation(
                     f"下拉，或付款日期是否落在 {month_text}"
                 )
             else:
-                reason_type = "來源查無此訂單"
-                reason = f"{name} 查無訂單 {order_no}，請確認是否已執行⑥～⑧搬運，或訂單編號格式是否一致"
+                base_order = _strip_order_suffix(order_no)
+                if base_order != order_no and base_order in source_key_sets[name]:
+                    reason_type = "子單需在來源表加註後綴"
+                    reason = (
+                        f"{name} 查無子單訂單 {order_no}，但查得到母單 {base_order}——"
+                        f"子單有時無法帶入發票/第三方金流系統，請到 {name} 找到 {base_order} "
+                        f"那一列，在 AA 欄加註「{order_no[len(base_order):]}」（例如 -1），"
+                        f"讓 AB 欄自動併出 {order_no} 後即可核對"
+                    )
+                else:
+                    reason_type = "來源查無此訂單"
+                    reason = f"{name} 查無訂單 {order_no}，請確認是否已執行⑥～⑧搬運，或訂單編號格式是否一致"
             issues.append({
                 "row": row_num, "order_no": order_no, "sheet": name,
                 "column": col_letter, "reason_type": reason_type, "reason": reason,
