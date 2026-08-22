@@ -948,11 +948,31 @@ if run_clicked and execution_engine == "PYTHON":
                         else:
                             add_log("反向比對完成：來源工作表本期資料皆能在「金流對帳」找到", "success")
 
-                        record_batch(_name, _period, [
-                            {"task_key": "金流對帳彙總",     "count": result["count"]},
-                            {"task_key": "對帳檢核缺漏筆數", "count": len(issues)},
-                            {"task_key": "反向比對缺漏筆數", "count": total_missing},
-                        ])
+                        from modules.master_sheet import append_reconciliation_log, append_reconciliation_execution
+                        log_entries = [
+                            {
+                                "檢查類型": "對帳檢核", "來源工作表": it["sheet"],
+                                "列號": it["row"], "訂單編號": it["order_no"],
+                                "金流對帳欄位": it["column"], "原因": it["reason"],
+                            }
+                            for it in issues
+                        ] + [
+                            {
+                                "檢查類型": "反向比對", "來源工作表": name,
+                                "列號": "", "訂單編號": order_no,
+                                "金流對帳欄位": "",
+                                "原因": f"{name} 本期訂單在「金流對帳」查無對應",
+                            }
+                            for name, v in reverse_result.items()
+                            for order_no in v["missing"]
+                        ]
+                        if log_entries:
+                            append_reconciliation_log(_name, _period, log_entries)
+                            add_log(f"🔵 已寫入主控表「對帳檢核Log」：{len(log_entries)} 筆", "success")
+
+                        append_reconciliation_execution(
+                            _name, _period, result["count"], len(issues), total_missing,
+                        )
 
                 # ───────────────────────────────────────────────
                 # █ 區塊8-B：清潔承攬執行邏輯
