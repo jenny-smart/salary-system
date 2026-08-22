@@ -1862,3 +1862,172 @@ def reverse_check_sources(
         # 逐筆訂單編號改由呼叫端（Streamlit UI）用表格呈現，不逐筆寫進執行日誌。
 
     return result
+
+
+# ═══════════════════════════════════════════════════════════════
+# 比對前清空＋異常淺青色2標註（人工確認後自動消色）
+#
+# 執行對帳前先清空「確認欄」的值與比對欄底色，避免看到上次殘留的標註
+# 或舊確認值；比對欄空白/錯誤視為異常，用 Google Sheets 原生「條件式
+# 格式」標淺青色2——只要設定一次規則就會持續生效，之後人工在確認欄
+# （金流對帳BK／00發票AH／01藍新收款AF／02藍新退款AF／03ATM AF）填值，
+# Sheets 會自動依規則重新判斷並把底色消掉，不用重跑程式。
+#
+# 「篩選淺青色2」是 Google Sheets 內建「依顏色篩選」的手動操作（資料 >
+# 建立篩選器 > 篩選依據 > 顏色），Sheets API 的 FilterCriteria 沒有底色
+# 條件，這裡不處理，仍需在試算表上手動設定一次。
+# ═══════════════════════════════════════════════════════════════
+
+LIGHT_CYAN_2 = {"red": 162 / 255, "green": 196 / 255, "blue": 198 / 255}
+
+# 各工作表：比對前要清空的確認/標記欄（1-based欄號）、判斷是否消色的
+# 確認欄，以及要重設底色＋加註異常標註的比對欄範圍（起訖皆1-based）。
+MARK_SHEETS = {
+    RECONCILIATION_SHEET_NAME: {
+        "clear_cols": [COL_REC_MONTH],       # BK2:BK
+        "confirm_col": COL_REC_MONTH,        # BK 非空白 → 消色
+        "mark_start": COL_REC_CHECK,         # BQ
+        "mark_end": COL_REC_ATM_CHK,         # BU
+    },
+    "00發票": {
+        "clear_cols": [27, 34],              # AA2:AA、AH2:AH
+        "confirm_col": 34,                   # AH
+        "mark_start": 28,                    # AB
+        "mark_end": 33,                      # AG
+    },
+    "01藍新收款": {
+        "clear_cols": [27, 32],              # AA2:AA、AF2:AF
+        "confirm_col": 32,                   # AF
+        "mark_start": 28,                    # AB
+        "mark_end": 31,                      # AE
+    },
+    "02藍新退款": {
+        "clear_cols": [32],                  # AF2:AF（無AA）
+        "confirm_col": 32,
+        "mark_start": 28,
+        "mark_end": 31,
+    },
+    "03ATM": {
+        "clear_cols": [27, 32],              # AA2:AA、AF2:AF
+        "confirm_col": 32,
+        "mark_start": 28,
+        "mark_end": 31,
+    },
+}
+
+
+def _clear_marks_and_backgrounds(ws, cfg: dict, log_fn=None) -> None:
+    """比對前：清空確認/標記欄的值，並把比對欄範圍底色重設為無色。"""
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    max_rows = max(ws.row_count, 2)
+
+    clear_ranges = [f"{_column_letter(c)}2:{_column_letter(c)}{max_rows}" for c in cfg["clear_cols"]]
+    ws.batch_clear(clear_ranges)
+
+    requests = [{
+        "repeatCell": {
+            "range": {
+                "sheetId": ws.id,
+                "startRowIndex": 1,
+                "endRowIndex": max_rows,
+                "startColumnIndex": cfg["mark_start"] - 1,
+                "endColumnIndex": cfg["mark_end"],
+            },
+            "cell": {"userEnteredFormat": {"backgroundColor": {}}},
+            "fields": "userEnteredFormat.backgroundColor",
+        }
+    }]
+    ws.spreadsheet.batch_update({"requests": requests})
+    log(f"🧹 「{ws.title}」已清空 {'、'.join(_column_letter(c) for c in cfg['clear_cols'])} 欄並重設底色")
+
+
+def _replace_abnormal_highlight_rule(ws, cfg: dict, log_fn=None) -> None:
+    """
+    設定條件式格式：mark_start:mark_end 範圍內，該欄空白/錯誤且確認欄
+    未填時標淺青色2；確認欄一填值，Sheets 自動重新判斷並消色。
+    每次都先移除同範圍舊規則再新增，避免重跑後規則越疊越多。
+    """
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    start_idx = cfg["mark_start"] - 1
+    end_idx = cfg["mark_end"]
+
+    meta = ws.spreadsheet.fetch_sheet_metadata()
+    for s in meta.get("sheets", []):
+        if s["properties"]["sheetId"] != ws.id:
+            continue
+        old_indexes = [
+            idx for idx, rule in enumerate(s.get("conditionalFormats", []))
+            if any(rng.get("sheetId") == ws.id
+                   and rng.get("startColumnIndex") == start_idx
+                   and rng.get("endColumnIndex") == end_idx
+                   for rng in rule.get("ranges", []))
+        ]
+        for idx in sorted(old_indexes, reverse=True):
+            ws.spreadsheet.batch_update({"requests": [{
+                "deleteConditionalFormatRule": {"sheetId": ws.id, "index": idx}
+            }]})
+        break
+
+    max_rows = max(ws.row_count, 2)
+    confirm_letter = _column_letter(cfg["confirm_col"])
+    first_col_letter = _column_letter(cfg["mark_start"])
+
+    ws.spreadsheet.batch_update({"requests": [{
+        "addConditionalFormatRule": {
+            "rule": {
+                "ranges": [{
+                    "sheetId": ws.id,
+                    "startRowIndex": 1,
+                    "endRowIndex": max_rows,
+                    "startColumnIndex": start_idx,
+                    "endColumnIndex": end_idx,
+                }],
+                "booleanRule": {
+                    "condition": {
+                        "type": "CUSTOM_FORMULA",
+                        "values": [{
+                            "userEnteredValue":
+                                f'=AND(OR(ISBLANK({first_col_letter}2),ISERROR({first_col_letter}2)),'
+                                f'${confirm_letter}2="")'
+                        }],
+                    },
+                    "format": {"backgroundColor": LIGHT_CYAN_2},
+                },
+            },
+            "index": 0,
+        }
+    }]})
+    log(f"🔵 「{ws.title}」已設定 {first_col_letter}:{_column_letter(cfg['mark_end'])} "
+        f"淺青色2異常標註（{confirm_letter} 非空白自動消色）")
+
+
+def setup_reconciliation_marks(
+    root_folder_id: str, period: str, region_name: str, log_fn=None
+) -> None:
+    """
+    比對前執行：清空各表確認/標記欄與底色，並設定淺青色2異常標註的條件式
+    格式。規則只需設定一次即持續生效，之後人工填確認欄會自動消色，不用
+    重跑本函式；但重跑也安全（會先移除同範圍舊規則再重建，不會疊加）。
+
+    「篩選淺青色2」需在試算表手動操作一次：資料 > 建立篩選器 > 篩選
+    依據 > 顏色，Sheets API 沒有依底色篩選的介面可以自動化。
+    """
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    reconciliation_id = _get_period_file_id(root_folder_id, period, "金流對帳", region_name)
+    ss = open_spreadsheet(reconciliation_id)
+
+    for sheet_name, cfg in MARK_SHEETS.items():
+        ws = ss.worksheet(sheet_name)
+        _clear_marks_and_backgrounds(ws, cfg, log_fn=log)
+        _replace_abnormal_highlight_rule(ws, cfg, log_fn=log)
+
+    log("===== 比對前清空與淺青色2異常標註設定完成（篩選淺青色2請於試算表手動操作一次）=====")
