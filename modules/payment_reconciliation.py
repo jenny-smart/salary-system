@@ -1494,6 +1494,7 @@ COL_REC_INVOICE_CHK = 70  # BR 發票核對（比對 00發票）
 COL_REC_NEWEBPAY_IN = 71  # BS 藍新收款（比對 01藍新收款）
 COL_REC_NEWEBPAY_RE = 72  # BT 藍新退款（比對 02藍新退款）
 COL_REC_ATM_CHK     = 73  # BU ATM（比對 03ATM）
+COL_REC_SERVICE_LINK = 74 # BV 服務日期訂單連結
 REC_LAST_COL        = 76  # BX 消毒服務，BK:BX 公式區塊的最後一欄
 
 # 四張來源工作表：訂單編號欄（0-based）、日期欄（0-based，用來篩本期）、
@@ -1907,35 +1908,35 @@ _ABNORMAL_FORMULA_ATM = (
 
 MARK_SHEETS = {
     RECONCILIATION_SHEET_NAME: {
-        "clear_cols": [COL_REC_MONTH],       # BK2:BK
+        "clear_cols": [COL_REC_MONTH, COL_REC_SERVICE_LINK], # BK2:BK、BV2:BV
         "confirm_col": COL_REC_MONTH,        # BK 非空白 → 消色
         "mark_start": COL_REC_CHECK,         # BQ
         "mark_end": COL_REC_ATM_CHK,         # BU
         "abnormal_formula": _ABNORMAL_FORMULA_REC,
     },
     "00發票": {
-        "clear_cols": [27, 34],              # AA2:AA、AH2:AH
+        "clear_cols": [27, 34, 35],          # AA2:AA、AH2:AH、AI2:AI
         "confirm_col": 34,                   # AH
         "mark_start": 28,                    # AB
         "mark_end": 33,                      # AG
         "abnormal_formula": _ABNORMAL_FORMULA_INVOICE,
     },
     "01藍新收款": {
-        "clear_cols": [27, 32],              # AA2:AA、AF2:AF
+        "clear_cols": [27, 32, 33],          # AA2:AA、AF2:AF、AG2:AG
         "confirm_col": 32,                   # AF
         "mark_start": 28,                    # AB
         "mark_end": 31,                      # AE
         "abnormal_formula": _ABNORMAL_FORMULA_NEWEBPAY_IN,
     },
     "02藍新退款": {
-        "clear_cols": [32],                  # AF2:AF（無AA）
+        "clear_cols": [32, 33],              # AF2:AF、AG2:AG（無AA）
         "confirm_col": 32,
         "mark_start": 28,
         "mark_end": 31,
         "abnormal_formula": _ABNORMAL_FORMULA_NEWEBPAY_REFUND,
     },
     "03ATM": {
-        "clear_cols": [27, 32],              # AA2:AA、AF2:AF
+        "clear_cols": [27, 32, 33],          # AA2:AA、AF2:AF、AG2:AG
         "confirm_col": 32,
         "mark_start": 28,
         "mark_end": 31,
