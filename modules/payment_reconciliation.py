@@ -1597,9 +1597,10 @@ def copy_template_to_reconciliation(
 ) -> dict:
     """
     ⑨-1 範本彙總，固定順序：
-      1. 清空「金流對帳」A2:BJ。
-      2. 把「範本」A2:BJ 搬到「金流對帳」A2:BJ。
-      3. 設定 BK1 月份公式，再將 BL:BQ 下拉到 B 欄最後一筆。
+      1. 移除「金流對帳」舊篩選。
+      2. 清空「金流對帳」A2:BJ。
+      3. 把「範本」A2:BJ 搬到「金流對帳」A2:BJ。
+      4. 設定 BK1 月份公式，再將 BL:BQ 下拉到 B 欄最後一筆。
 
     完成以上搬運後，才由 setup_reconciliation_marks 清空核對欄與底色，
     然後進行比對、異常標記及篩選。
@@ -1626,6 +1627,7 @@ def copy_template_to_reconciliation(
 
     log(f"📋 讀取「範本」{len(data)} 筆")
 
+    _remove_basic_filter(recon, log_fn=log)
     _clear_a2_bj_contents_and_formats(recon, log_fn=log)
     count = paste_data(recon, 2, data)
     log(f"✅ 已將「範本」A2:BJ 搬到「{RECONCILIATION_SHEET_NAME}」A2:BJ：{count} 筆")
@@ -2140,7 +2142,8 @@ PURCHASE_SEARCH_URL = (
 def _hyperlink_formula(order_no: str, service_date) -> str:
     """以服務日期為顯示文字，連到後台訂單查詢；訂單編號先移除 -1/-2。"""
     base_order = _base_purchase_order_no(order_no)
-    date_text = str(service_date or "").strip().replace('"', '""')
+    date_text = str(service_date or "").strip() or "查詢服務日期"
+    date_text = date_text.replace('"', '""')
     url = PURCHASE_SEARCH_URL.format(order_no=base_order).replace('"', '""')
     return f'=HYPERLINK("{url}","{date_text}")'
 
@@ -2183,13 +2186,17 @@ def _add_service_date_order_links(ss, log_fn=None) -> dict[str, int]:
 
     service_date_by_order: dict[str, object] = {}
     recon_updates: list[dict] = []
+    recon_missing_date = 0
     for offset, row in enumerate(recon_rows):
         order_no = _clean_order_key(row[1] if len(row) > 1 else "")  # B 訂單編號
         service_date = row[7] if len(row) > 7 else ""  # H 服務日期
         base_order = _base_purchase_order_no(order_no)
-        if not base_order or not str(service_date or "").strip():
+        if not base_order:
             continue
-        service_date_by_order.setdefault(base_order, service_date)
+        if str(service_date or "").strip():
+            service_date_by_order.setdefault(base_order, service_date)
+        else:
+            recon_missing_date += 1
         recon_updates.append({
             "range": f"BV{offset + 2}",
             "values": [[_hyperlink_formula(order_no, service_date)]],
@@ -2199,6 +2206,8 @@ def _add_service_date_order_links(ss, log_fn=None) -> dict[str, int]:
     _batch_formula_updates(recon, recon_updates)
     counts = {RECONCILIATION_SHEET_NAME: len(recon_updates)}
     log(f"🔗 「{RECONCILIATION_SHEET_NAME}」BV 已加入服務日期訂單連結：{len(recon_updates)} 列")
+    if recon_missing_date:
+        log(f"⚠️ 「{RECONCILIATION_SHEET_NAME}」有 {recon_missing_date} 列 H 無服務日期，連結文字改顯示「查詢服務日期」")
 
     source_link_cols = {
         "00發票": "AI",
@@ -2210,14 +2219,19 @@ def _add_service_date_order_links(ss, log_fn=None) -> dict[str, int]:
         ws = ss.worksheet(sheet_name)
         rows = ws.get(f"AB2:AB{max(ws.row_count, 2)}") or []
         updates: list[dict] = []
+        missing_date_count = 0
+        invalid_order_count = 0
         for offset, row in enumerate(rows):
             order_no = _clean_order_key(row[0] if row else "")
             if not order_no:
                 continue
             base_order = _base_purchase_order_no(order_no)
+            if not base_order:
+                invalid_order_count += 1
+                continue
             service_date = service_date_by_order.get(base_order)
             if not service_date:
-                continue
+                missing_date_count += 1
             updates.append({
                 "range": f"{link_col}{offset + 2}",
                 "values": [[_hyperlink_formula(order_no, service_date)]],
@@ -2226,6 +2240,10 @@ def _add_service_date_order_links(ss, log_fn=None) -> dict[str, int]:
         _batch_formula_updates(ws, updates)
         counts[sheet_name] = len(updates)
         log(f"🔗 「{sheet_name}」{link_col} 已加入服務日期訂單連結：{len(updates)} 列")
+        if missing_date_count:
+            log(f"⚠️ 「{sheet_name}」有 {missing_date_count} 筆在金流對帳 B/H 查無服務日期，已改標「查詢服務日期」連結")
+        if invalid_order_count:
+            log(f"⚠️ 「{sheet_name}」有 {invalid_order_count} 筆 AB 沒有完整 LC 訂單編號，無法建立連結")
 
     return counts
 
@@ -2250,7 +2268,9 @@ def setup_reconciliation_marks(
 
     for sheet_name, cfg in MARK_SHEETS.items():
         ws = ss.worksheet(sheet_name)
-        _remove_basic_filter(ws, log_fn=log)
+        # 金流對帳已在搬運 A2:BJ 之前移除篩選；來源表在這裡移除。
+        if sheet_name != RECONCILIATION_SHEET_NAME:
+            _remove_basic_filter(ws, log_fn=log)
         _clear_marks_and_backgrounds(ws, cfg, log_fn=log)
         if sheet_name == "03ATM":
             # 先清空 AA，再依 G 欄重建 -1；完成後才進行異常比對。
