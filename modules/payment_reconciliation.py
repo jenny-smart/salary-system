@@ -2139,10 +2139,21 @@ PURCHASE_SEARCH_URL = (
 
 def _hyperlink_formula(order_no: str, service_date) -> str:
     """以服務日期為顯示文字，連到後台訂單查詢；訂單編號先移除 -1/-2。"""
-    base_order = _strip_order_suffix(_clean_order_key(order_no))
+    base_order = _base_purchase_order_no(order_no)
     date_text = str(service_date or "").strip().replace('"', '""')
     url = PURCHASE_SEARCH_URL.format(order_no=base_order).replace('"', '""')
     return f'=HYPERLINK("{url}","{date_text}")'
+
+
+def _base_purchase_order_no(value) -> str:
+    """
+    從公式結果或手動內容取出 LC訂單編號，統一大寫並移除 -1/-2。
+    只剩「-1」而沒有 LC 編號的值無法建立訂單連結，回傳空字串。
+    """
+    text = unicodedata.normalize("NFKC", str(value or "")).upper()
+    text = re.sub(r"\s+", "", text)
+    match = re.search(r"LC\d+", text)
+    return match.group(0) if match else ""
 
 
 def _batch_formula_updates(ws, updates: list[dict], chunk_size: int = 500) -> None:
@@ -2166,19 +2177,18 @@ def _add_service_date_order_links(ss, log_fn=None) -> dict[str, int]:
             log_fn(msg)
 
     recon = ss.worksheet(RECONCILIATION_SHEET_NAME)
-    recon_rows = recon.get(f"A2:{_column_letter(COL_REC_ORDER_NO)}") or []
+    # 以剛從範本搬入的原始 B 訂單編號／H 服務日期建立對照。
+    # 不依賴 BM 的公式計算時機，避免有些列尚未算出 BM 而漏標。
+    recon_rows = recon.get("A2:H") or []
 
     service_date_by_order: dict[str, object] = {}
     recon_updates: list[dict] = []
     for offset, row in enumerate(recon_rows):
-        order_no = _clean_order_key(
-            row[COL_REC_ORDER_NO - 1] if len(row) >= COL_REC_ORDER_NO else ""
-        )
+        order_no = _clean_order_key(row[1] if len(row) > 1 else "")  # B 訂單編號
         service_date = row[7] if len(row) > 7 else ""  # H 服務日期
-        if not order_no or not str(service_date or "").strip():
+        base_order = _base_purchase_order_no(order_no)
+        if not base_order or not str(service_date or "").strip():
             continue
-        base_order = _strip_order_suffix(order_no)
-        service_date_by_order.setdefault(order_no, service_date)
         service_date_by_order.setdefault(base_order, service_date)
         recon_updates.append({
             "range": f"BV{offset + 2}",
@@ -2204,10 +2214,8 @@ def _add_service_date_order_links(ss, log_fn=None) -> dict[str, int]:
             order_no = _clean_order_key(row[0] if row else "")
             if not order_no:
                 continue
-            service_date = (
-                service_date_by_order.get(order_no)
-                or service_date_by_order.get(_strip_order_suffix(order_no))
-            )
+            base_order = _base_purchase_order_no(order_no)
+            service_date = service_date_by_order.get(base_order)
             if not service_date:
                 continue
             updates.append({
