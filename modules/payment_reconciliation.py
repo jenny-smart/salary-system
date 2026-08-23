@@ -1882,13 +1882,25 @@ _ABNORMAL_FORMULA_REC = (
     'AND($BT2<>"",$BP2<>$BT2),AND($BU2<>"",$BU2<>$BP2)),TRUE)'
 )
 # 比較運算遇到 #N/A 會直接傳播錯誤，條件格式就不會生效。
-# 外層 IFERROR(...,TRUE) 保證 AD/AE/AF/AG 任一錯誤都會被視為異常。
+# 外層 IFERROR(...,TRUE) 保證 AD/AE/AF/AG 任一錯誤都會被視為異常；
+# 各張表的免異常條件放在最外層 IF，優先於通用異常條件。
 _ABNORMAL_FORMULA_INVOICE = (
-    'IFERROR(OR(ISNA($AD2),ISNA($AF2),ISNA($AG2),$AG2<>0),TRUE)'
+    'IF(AND($AA2="-1",IFERROR($AG2=0,FALSE)),FALSE,'
+    'IFERROR(OR(ISNA($AD2),ISNA($AF2),ISNA($AG2),$AG2<>0),TRUE))'
 )
-_ABNORMAL_FORMULA_AE = (
+_ABNORMAL_FORMULA_NEWEBPAY_IN = (
     'IFERROR(OR(ISNA($AD2),ISNA($AE2),$AE2<>0),TRUE)'
-)  # 01/02/03共用
+)
+_ABNORMAL_FORMULA_NEWEBPAY_REFUND = (
+    'IF(IFERROR(VLOOKUP($AB2,INDIRECT("\'金流對帳\'!$BM:$BP"),4,FALSE)'
+    '+$AC2=0,FALSE),FALSE,'
+    'IFERROR(OR(ISNA($AD2),ISNA($AE2),$AE2<>0),TRUE))'
+)
+_ABNORMAL_FORMULA_ATM = (
+    'IF(OR($G2="新訓費",$G2="車馬費",'
+    'AND($G2="減時",IFERROR($AC2+$AD2=0,FALSE))),FALSE,'
+    'IFERROR(OR(ISNA($AD2),ISNA($AE2),$AE2<>0),TRUE))'
+)
 
 MARK_SHEETS = {
     RECONCILIATION_SHEET_NAME: {
@@ -1910,21 +1922,21 @@ MARK_SHEETS = {
         "confirm_col": 32,                   # AF
         "mark_start": 28,                    # AB
         "mark_end": 31,                      # AE
-        "abnormal_formula": _ABNORMAL_FORMULA_AE,
+        "abnormal_formula": _ABNORMAL_FORMULA_NEWEBPAY_IN,
     },
     "02藍新退款": {
         "clear_cols": [32],                  # AF2:AF（無AA）
         "confirm_col": 32,
         "mark_start": 28,
         "mark_end": 31,
-        "abnormal_formula": _ABNORMAL_FORMULA_AE,
+        "abnormal_formula": _ABNORMAL_FORMULA_NEWEBPAY_REFUND,
     },
     "03ATM": {
         "clear_cols": [27, 32],              # AA2:AA、AF2:AF
         "confirm_col": 32,
         "mark_start": 28,
         "mark_end": 31,
-        "abnormal_formula": _ABNORMAL_FORMULA_AE,
+        "abnormal_formula": _ABNORMAL_FORMULA_ATM,
     },
 }
 
