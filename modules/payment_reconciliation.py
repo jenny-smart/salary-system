@@ -1880,7 +1880,9 @@ LIGHT_CYAN_2 = {"red": 162 / 255, "green": 196 / 255, "blue": 198 / 255}
 # 各工作表：比對前要清空的確認/標記欄（1-based欄號）、判斷是否消色的
 # 確認欄，以及要重設底色＋加註異常標註的比對欄範圍（起訖皆1-based）。
 _ABNORMAL_FORMULA_REC = (
-    'IF(OR($BO2="儲值金",$BO2="不開立發票"),FALSE,'
+    'IF(OR($BO2="儲值金",$BO2="不開立發票",'
+    'AND($BP2<0,OR(IFERROR($BP2+$BT2=0,FALSE),'
+    'IFERROR($BP2+$BU2=0,FALSE)))),FALSE,'
     'IFERROR(OR($BQ2<>0,ISNA($BR2),ISNA($BS2),ISNA($BT2),ISNA($BU2),'
     'AND($BR2<>"",$BR2<>$BO2),AND($BS2<>"",$BS2<>$BP2),'
     'AND($BT2<>"",$BP2<>$BT2),AND($BU2<>"",$BU2<>$BP2)),TRUE))'
