@@ -1877,9 +1877,10 @@ LIGHT_CYAN_2 = {"red": 162 / 255, "green": 196 / 255, "blue": 198 / 255}
 # 各工作表：比對前要清空的確認/標記欄（1-based欄號）、判斷是否消色的
 # 確認欄，以及要重設底色＋加註異常標註的比對欄範圍（起訖皆1-based）。
 _ABNORMAL_FORMULA_REC = (
+    'IF(OR($BO2="儲值金",$BO2="不開立發票"),FALSE,'
     'IFERROR(OR($BQ2<>0,ISNA($BR2),ISNA($BS2),ISNA($BT2),ISNA($BU2),'
     'AND($BR2<>"",$BR2<>$BO2),AND($BS2<>"",$BS2<>$BP2),'
-    'AND($BT2<>"",$BP2<>$BT2),AND($BU2<>"",$BU2<>$BP2)),TRUE)'
+    'AND($BT2<>"",$BP2<>$BT2),AND($BU2<>"",$BU2<>$BP2)),TRUE))'
 )
 # 比較運算遇到 #N/A 會直接傳播錯誤，條件格式就不會生效。
 # 外層 IFERROR(...,TRUE) 保證 AD/AE/AF/AG 任一錯誤都會被視為異常；
@@ -1996,6 +1997,18 @@ def _clear_marks_and_backgrounds(ws, cfg: dict, log_fn=None) -> None:
     }]
     ws.spreadsheet.batch_update({"requests": requests})
     log(f"🧹 「{ws.title}」已清空 {'、'.join(_column_letter(c) for c in cfg['clear_cols'])} 欄並重設底色")
+
+
+def _remove_basic_filter(ws, log_fn=None) -> None:
+    """清空及重建異常篩選前，先移除舊 BasicFilter，讓所有列恢復顯示。"""
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    ws.spreadsheet.batch_update({"requests": [{
+        "clearBasicFilter": {"sheetId": ws.id}
+    }]})
+    log(f"🧹 「{ws.title}」已移除舊篩選結果")
 
 
 def _replace_abnormal_highlight_rule(ws, cfg: dict, log_fn=None) -> None:
@@ -2116,6 +2129,99 @@ def _set_abnormal_filter(ws, cfg: dict, log_fn=None) -> None:
         log(f"🔎 「{ws.title}」已只顯示淺青色2異常列")
 
 
+PURCHASE_SEARCH_URL = (
+    "https://backend.lemonclean.com.tw/purchase?keyword=&name=&phone=&orderNo={order_no}"
+    "&date_s=&date_e=&clean_date_s=&clean_date_e=&paid_at_s=&paid_at_e="
+    "&refundDateS=&refundDateE=&buy=&area_id=&isCharge=&isRefund=&payway="
+    "&purchase_status=&progress_status=&invoiceStatus=&otherFee=&orderBy="
+)
+
+
+def _hyperlink_formula(order_no: str, service_date) -> str:
+    """以服務日期為顯示文字，連到後台訂單查詢；訂單編號先移除 -1/-2。"""
+    base_order = _strip_order_suffix(_clean_order_key(order_no))
+    date_text = str(service_date or "").strip().replace('"', '""')
+    url = PURCHASE_SEARCH_URL.format(order_no=base_order).replace('"', '""')
+    return f'=HYPERLINK("{url}","{date_text}")'
+
+
+def _batch_formula_updates(ws, updates: list[dict], chunk_size: int = 500) -> None:
+    for start in range(0, len(updates), chunk_size):
+        ws.batch_update(
+            updates[start:start + chunk_size],
+            value_input_option="USER_ENTERED",
+        )
+
+
+def _add_service_date_order_links(ss, log_fn=None) -> dict[str, int]:
+    """
+    在異常規則與篩選建立後加上訂單連結：
+      - 金流對帳：BV（服務日期來自本列 H，訂單來自 BM）
+      - 00發票：AI（AH 保留為人工確認欄）
+      - 01藍新收款／02藍新退款／03ATM：AG（AF 保留為人工確認欄）
+        （以 AB 訂單編號回查金流對帳 BM 對應的 H 服務日期）。
+    """
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    recon = ss.worksheet(RECONCILIATION_SHEET_NAME)
+    recon_rows = recon.get(f"A2:{_column_letter(COL_REC_ORDER_NO)}") or []
+
+    service_date_by_order: dict[str, object] = {}
+    recon_updates: list[dict] = []
+    for offset, row in enumerate(recon_rows):
+        order_no = _clean_order_key(
+            row[COL_REC_ORDER_NO - 1] if len(row) >= COL_REC_ORDER_NO else ""
+        )
+        service_date = row[7] if len(row) > 7 else ""  # H 服務日期
+        if not order_no or not str(service_date or "").strip():
+            continue
+        base_order = _strip_order_suffix(order_no)
+        service_date_by_order.setdefault(order_no, service_date)
+        service_date_by_order.setdefault(base_order, service_date)
+        recon_updates.append({
+            "range": f"BV{offset + 2}",
+            "values": [[_hyperlink_formula(order_no, service_date)]],
+        })
+
+    recon.batch_clear([f"BV2:BV{max(recon.row_count, 2)}"])
+    _batch_formula_updates(recon, recon_updates)
+    counts = {RECONCILIATION_SHEET_NAME: len(recon_updates)}
+    log(f"🔗 「{RECONCILIATION_SHEET_NAME}」BV 已加入服務日期訂單連結：{len(recon_updates)} 列")
+
+    source_link_cols = {
+        "00發票": "AI",
+        "01藍新收款": "AG",
+        "02藍新退款": "AG",
+        "03ATM": "AG",
+    }
+    for sheet_name, link_col in source_link_cols.items():
+        ws = ss.worksheet(sheet_name)
+        rows = ws.get(f"AB2:AB{max(ws.row_count, 2)}") or []
+        updates: list[dict] = []
+        for offset, row in enumerate(rows):
+            order_no = _clean_order_key(row[0] if row else "")
+            if not order_no:
+                continue
+            service_date = (
+                service_date_by_order.get(order_no)
+                or service_date_by_order.get(_strip_order_suffix(order_no))
+            )
+            if not service_date:
+                continue
+            updates.append({
+                "range": f"{link_col}{offset + 2}",
+                "values": [[_hyperlink_formula(order_no, service_date)]],
+            })
+        ws.batch_clear([f"{link_col}2:{link_col}{max(ws.row_count, 2)}"])
+        _batch_formula_updates(ws, updates)
+        counts[sheet_name] = len(updates)
+        log(f"🔗 「{sheet_name}」{link_col} 已加入服務日期訂單連結：{len(updates)} 列")
+
+    return counts
+
+
 def setup_reconciliation_marks(
     root_folder_id: str, period: str, region_name: str, log_fn=None
 ) -> None:
@@ -2136,11 +2242,14 @@ def setup_reconciliation_marks(
 
     for sheet_name, cfg in MARK_SHEETS.items():
         ws = ss.worksheet(sheet_name)
+        _remove_basic_filter(ws, log_fn=log)
         _clear_marks_and_backgrounds(ws, cfg, log_fn=log)
         if sheet_name == "03ATM":
             # 先清空 AA，再依 G 欄重建 -1；完成後才進行異常比對。
             _mark_atm_non_service_rows(ws, log_fn=log)
         _replace_abnormal_highlight_rule(ws, cfg, log_fn=log)
         _set_abnormal_filter(ws, cfg, log_fn=log)
+
+    _add_service_date_order_links(ss, log_fn=log)
 
     log("===== 比對前清空、異常標註與篩選設定完成 =====")
