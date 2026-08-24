@@ -679,6 +679,7 @@ if run_clicked and execution_engine == "PYTHON":
     _period = period
     _system = system
     _func   = selected_function
+    _plain_func = _func.split(" ", 1)[-1]
     _name   = selected_name
     _region = selected_region
 
@@ -1132,7 +1133,7 @@ if run_clicked and execution_engine == "PYTHON":
                                 "warning" if "⚠️" in message else "info"
                         add_log(message, level)
 
-                    if _func == "執行前置作業":
+                    if _plain_func == "執行前置作業":
                         result = run_other_preprocess(
                             root_folder_id=root_id, region=_name, period=_period,
                             is_first_half=_is_first_half, service_type=None, log=other_log,
@@ -1142,13 +1143,13 @@ if run_clicked and execution_engine == "PYTHON":
                             add_log(f"其他承攬前置部分失敗：{'、'.join(failed)}；請稍後重跑", "warning")
                         else:
                             add_log(f"其他承攬前置完成：{result}", "success")
-                    elif _func == "執行全部結算":
+                    elif _plain_func == "執行全部結算":
                         result = run_other_settlement(
                             root_folder_id=root_id, region=_name, period=_period,
                             service_type=None, log=other_log,
                         )
                         add_log("其他承攬結算完成", "success")
-                    elif _func == "產出全部薪資單":
+                    elif _plain_func == "產出全部薪資單":
                         result = run_other_pdf(
                             root_folder_id=root_id, region=_name, period=_period,
                             service_type=None, log=other_log,
@@ -1165,7 +1166,7 @@ if run_clicked and execution_engine == "PYTHON":
 
                 elif _system == "📨 承攬作業":
 
-                    if _func == "承攬費通知信":
+                    if _plain_func == "承攬費通知信":
                         from modules.service_fee_mail import sync_service_fee_mail
                         
                         def contract_log(message):
@@ -1188,7 +1189,7 @@ if run_clicked and execution_engine == "PYTHON":
 
                         add_log(f"承攬費通知信完成：{count} 筆", "success")
 
-                    elif _func == "元大帳戶":
+                    elif _plain_func == "元大帳戶":
                         from modules.cleaning_process_1 import find_cleaning_file
                         from modules.cleaning_process_4 import run_yuanta
 
