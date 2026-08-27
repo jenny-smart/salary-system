@@ -1339,10 +1339,25 @@ with sc4:
 
 sc5, sc6 = st.columns(2)
 with sc5:
-    sched_all = st.checkbox(
-        "套用全部地區",
-        value=bool(schedule.get("all_regions", True)),
-        key="sched_all_regions",
+    region_names_for_schedule = [r["name"] for r in regions]
+    schedule_region_options = ["全區", *region_names_for_schedule]
+    saved_schedule_region = (
+        "全區"
+        if bool(schedule.get("all_regions", True))
+        else str(schedule.get("region", "") or "")
+    )
+    default_schedule_region_index = (
+        schedule_region_options.index(saved_schedule_region)
+        if saved_schedule_region in schedule_region_options
+        else 0
+    )
+    st.markdown('<div class="field-label">🗺️ 排程地區</div>', unsafe_allow_html=True)
+    sched_region = st.selectbox(
+        "排程地區",
+        schedule_region_options,
+        index=default_schedule_region_index,
+        label_visibility="collapsed",
+        key="sched_region",
     )
 with sc6:
     sched_enabled = st.checkbox(
@@ -1351,25 +1366,7 @@ with sc6:
         key="sched_enabled",
     )
 
-sched_region = ""
-if not sched_all:
-    region_names_for_schedule = [r["name"] for r in regions]
-    default_region = str(schedule.get("region", "") or "")
-    default_index = 0
-    if default_region in region_names_for_schedule:
-        default_index = region_names_for_schedule.index(default_region)
-
-    if region_names_for_schedule:
-        st.markdown('<div class="field-label">🗺️ 指定排程地區</div>', unsafe_allow_html=True)
-        sched_region = st.selectbox(
-            "指定排程地區",
-            region_names_for_schedule,
-            index=default_index,
-            label_visibility="collapsed",
-            key="sched_region",
-        )
-    else:
-        st.warning("尚未設定任何地區，無法指定單一地區。")
+sched_all = sched_region == "全區"
 
 last_run = schedule.get("last_run", "")
 last_result = schedule.get("last_result", "")
