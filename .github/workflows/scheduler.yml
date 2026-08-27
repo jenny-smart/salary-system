@@ -1,49 +1,79 @@
-- name: Run period scheduler
-  shell: bash
-  env:
-    JENNY_GOOGLE_TOKEN: ${{ secrets.JENNY_GOOGLE_TOKEN }}
-    GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+name: Lemon Clean 期別排程
 
-    LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
-    LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-    NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+on:
+  workflow_dispatch:
+    inputs:
+      period:
+        description: "指定期別，例如 202606-2；留空則自動判斷"
+        required: false
+        default: ""
+      region:
+        description: "指定地區；多地區用逗號分隔；留空則全部地區"
+        required: false
+        default: ""
+      action:
+        description: "執行功能"
+        required: false
+        default: "create_period"
 
-    FORCE_PERIOD: ${{ github.event.inputs.period }}
-    FORCE_REGION: ${{ github.event.inputs.region }}
-    FORCE_ACTION: ${{ github.event.inputs.action }}
-    EVENT_NAME: ${{ github.event_name }}
+jobs:
+  run-scheduler:
+    name: 建立期別資料夾
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
 
-  run: |
-    set -Eeuo pipefail
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    ACTION="${FORCE_ACTION:-create_period}"
-    REGION="${FORCE_REGION:-}"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
 
-    # 自動排程只執行五區，不執行新北
-    if [[ "$EVENT_NAME" == "schedule" ]]; then
-      REGION="台北,台中,桃園,新竹,高雄"
-    fi
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-    CMD=(
-      python
-      -m
-      modules.scheduler_service
-      --force
-      --action
-      "$ACTION"
-    )
+      - name: Run period scheduler
+        shell: bash
+        env:
+          JENNY_GOOGLE_TOKEN: ${{ secrets.JENNY_GOOGLE_TOKEN }}
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          FORCE_PERIOD: ${{ inputs.period }}
+          FORCE_REGION: ${{ inputs.region }}
+          FORCE_ACTION: ${{ inputs.action }}
+        run: |
+          set -Eeuo pipefail
 
-    if [[ -n "${FORCE_PERIOD:-}" ]]; then
-      CMD+=(--period "$FORCE_PERIOD")
-    fi
+          ACTION="${FORCE_ACTION:-create_period}"
+          # 留空時固定執行五區，不執行新北。
+          REGION="${FORCE_REGION:-台北,台中,桃園,新竹,高雄}"
 
-    if [[ -n "$REGION" ]]; then
-      CMD+=(--region "$REGION")
-    fi
+          CMD=(
+            python
+            -m
+            modules.scheduler_service
+            --force
+            --action
+            "$ACTION"
+          )
 
-    echo "觸發方式：$EVENT_NAME"
-    echo "執行功能：$ACTION"
-    echo "執行地區：${REGION:-全部地區}"
-    echo "指定期別：${FORCE_PERIOD:-自動判斷}"
+          if [[ -n "${FORCE_PERIOD:-}" ]]; then
+            CMD+=(--period "$FORCE_PERIOD")
+          fi
 
-    "${CMD[@]}"
+          if [[ -n "$REGION" ]]; then
+            CMD+=(--region "$REGION")
+          fi
+
+          echo "執行功能：$ACTION"
+          echo "執行地區：$REGION"
+          echo "指定期別：${FORCE_PERIOD:-自動判斷}"
+
+          "${CMD[@]}"
