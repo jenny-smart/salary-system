@@ -270,7 +270,7 @@ def _write_period_rows(
     other_rows,
     log=None,
 ):
-    period_ws.update_cell(1, 4, period)  # D1
+    period_ws.update_cell(1, 4, "")  # D1：D2:D 已是含期別的實際 PDF 檔名
     period_ws.batch_clear(["B2:D", "F2:F"])
 
     data = []
@@ -451,7 +451,7 @@ def sync_service_fee_mail(
 
     1. 依地區 mail_id 開啟承攬服務費 mail
     2. mail!A1/A2 更新 roster_id 與當月名冊 IMPORTRANGE
-    3. 複製前一期工作表為目前期別；D1=目前期別；清 B2:C、F2:F
+    3. 複製前一期工作表為目前期別；D1 清空；清 B2:D、F2:F
     4. 依序寫入 清潔PDF、專案PDF、其他承攬PDF 的姓名/連結
     5. 其他承攬列依 I 欄服務名稱把「清潔」改為水洗/家電/其他服務
     6. 若 清潔承攬 PDF產出!A121:B 有資料，建立目前期別工具包押金
