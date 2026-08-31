@@ -170,6 +170,18 @@ def _pairs_with_service(
     return out
 
 
+def _contiguous_names(ws: gspread.Worksheet, range_name: str) -> list[str]:
+    """由起始列往下取連續姓名，遇第一個空白即停止。"""
+    rows = ws.get(range_name, value_render_option="UNFORMATTED_VALUE") or []
+    names = []
+    for row in rows:
+        name = str(row[0]).strip() if row and row[0] is not None else ""
+        if not name:
+            break
+        names.append(name)
+    return names
+
+
 def _service_label(raw: str) -> str:
     text = str(raw or "").strip()
     if "水洗" in text:
@@ -484,6 +496,17 @@ def sync_service_fee_mail(
 
     cleaning_rows = _pairs_with_service(cleaning_ss, "PDF產出", drive)
     project_rows = _pairs_with_service(cleaning_ss, "專案PDF產出", drive)
+    project_names = set(_contiguous_names(
+        cleaning_ss.worksheet("專案薪資單"), "E4:E"
+    ))
+    raw_project_count = len(project_rows)
+    project_rows = [row for row in project_rows if row[0] in project_names]
+    if len(project_rows) != raw_project_count:
+        _emit(
+            log,
+            f"專案通知名單依專案薪資單 E4:E 過濾："
+            f"{raw_project_count} → {len(project_rows)} 筆",
+        )
     other_rows = (
         _pairs_with_service(other_ss, "PDF產出", drive, include_service=True)
         if other_ss is not None else []
