@@ -156,7 +156,7 @@ def run_settlement(
         # ── 步驟3：PDF產出 ─────────────────────────────────────
         _log(log, f"  步驟3：PDF產出（{label}）")
         _step3_pdf_output(
-            ws_summary, ws_pdf, ws_proj_pdf, is_first_half, project_rows, log
+            ws_summary, ws_pdf, ws_proj_pdf, ws_proj_salary, is_first_half, log
         )
 
         ts = _punch("結算作業", region, period)
@@ -428,8 +428,8 @@ def _step3_pdf_output(
     ws_summary: gspread.Worksheet,
     ws_pdf: gspread.Worksheet,
     ws_proj_pdf: gspread.Worksheet,
+    ws_project_salary: gspread.Worksheet,
     is_first_half: bool,
-    project_rows: list[int],
     log: List[str],
 ) -> None:
     """
@@ -450,19 +450,15 @@ def _step3_pdf_output(
     ) or []
     names = [str(r[0]).strip() for r in src_vals if r and str(r[0]).strip()]
 
-    value_col = "D" if is_first_half else "E"
-    project_names = []
-    for row_num in project_rows:
-        values = ws_summary.get(
-            f"A{row_num}:{value_col}{row_num}",
-            value_render_option="UNFORMATTED_VALUE",
-        ) or [[]]
-        row = values[0] if values else []
-        name = str(row[0]).strip() if row else ""
-        value_idx = 3 if is_first_half else 4
-        amount = _to_num(row[value_idx] if len(row) > value_idx else 0)
-        if name and amount > 0:
-            project_names.append(name)
+    project_values = ws_project_salary.get(
+        "F2:F", value_render_option="UNFORMATTED_VALUE"
+    ) or []
+    project_pdf_names = [
+        str(row[0]).strip() if row else "" for row in project_values
+    ]
+    while project_pdf_names and not project_pdf_names[-1]:
+        project_pdf_names.pop()
+    project_names = [name for name in project_pdf_names if name]
 
     # 合併清單中每個專案列移除一次；同人兼具一般與專案時仍會各產一份。
     normal_names = list(names)
@@ -481,13 +477,17 @@ def _step3_pdf_output(
             value_input_option="USER_ENTERED",
         )
         ws_pdf.update(f"H2:H{1+n}", [["Y"]] * n, value_input_option="USER_ENTERED")
-    if project_names:
-        n = len(project_names)
+    if project_pdf_names:
+        n = len(project_pdf_names)
         ws_proj_pdf.update(
-            f"B2:B{1+n}", [[name] for name in project_names],
+            f"B2:B{1+n}", [[name] for name in project_pdf_names],
             value_input_option="USER_ENTERED",
         )
-        ws_proj_pdf.update(f"H2:H{1+n}", [["Y"]] * n, value_input_option="USER_ENTERED")
+        ws_proj_pdf.update(
+            f"H2:H{1+n}",
+            [["Y" if name else ""] for name in project_pdf_names],
+            value_input_option="USER_ENTERED",
+        )
     _log(
         log,
         f"    PDF名單：清潔 {len(normal_names)} 人，專案 {len(project_names)} 人",
