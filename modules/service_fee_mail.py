@@ -170,6 +170,18 @@ def _pairs_with_service(
     return out
 
 
+def _contiguous_names(ws: gspread.Worksheet, range_name: str) -> list[str]:
+    """由起始列往下取連續姓名，遇第一個空白即停止。"""
+    rows = ws.get(range_name, value_render_option="UNFORMATTED_VALUE") or []
+    names = []
+    for row in rows:
+        name = str(row[0]).strip() if row and row[0] is not None else ""
+        if not name:
+            break
+        names.append(name)
+    return names
+
+
 def _service_label(raw: str) -> str:
     text = str(raw or "").strip()
     if "水洗" in text:
@@ -258,7 +270,7 @@ def _write_period_rows(
     other_rows,
     log=None,
 ):
-    period_ws.update_cell(1, 4, period)  # D1
+    period_ws.update_cell(1, 4, "")  # D1：D2:D 已是含期別的實際 PDF 檔名
     period_ws.batch_clear(["B2:D", "F2:F"])
 
     data = []
@@ -439,7 +451,7 @@ def sync_service_fee_mail(
 
     1. 依地區 mail_id 開啟承攬服務費 mail
     2. mail!A1/A2 更新 roster_id 與當月名冊 IMPORTRANGE
-    3. 複製前一期工作表為目前期別；D1=目前期別；清 B2:C、F2:F
+    3. 複製前一期工作表為目前期別；D1 清空；清 B2:D、F2:F
     4. 依序寫入 清潔PDF、專案PDF、其他承攬PDF 的姓名/連結
     5. 其他承攬列依 I 欄服務名稱把「清潔」改為水洗/家電/其他服務
     6. 若 清潔承攬 PDF產出!A121:B 有資料，建立目前期別工具包押金
@@ -484,6 +496,17 @@ def sync_service_fee_mail(
 
     cleaning_rows = _pairs_with_service(cleaning_ss, "PDF產出", drive)
     project_rows = _pairs_with_service(cleaning_ss, "專案PDF產出", drive)
+    project_names = set(_contiguous_names(
+        cleaning_ss.worksheet("專案薪資單"), "E4:E"
+    ))
+    raw_project_count = len(project_rows)
+    project_rows = [row for row in project_rows if row[0] in project_names]
+    if len(project_rows) != raw_project_count:
+        _emit(
+            log,
+            f"專案通知名單依專案薪資單 E4:E 過濾："
+            f"{raw_project_count} → {len(project_rows)} 筆",
+        )
     other_rows = (
         _pairs_with_service(other_ss, "PDF產出", drive, include_service=True)
         if other_ss is not None else []
