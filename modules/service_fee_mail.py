@@ -8,12 +8,18 @@ from typing import Callable, Iterable, Optional
 
 import gspread
 
-from modules.auth import get_gspread_client, get_drive_service, get_jenny_gspread_client
+from modules.auth import (
+    get_drive_service,
+    get_gspread_client,
+    get_jenny_drive_service,
+    get_jenny_gspread_client,
+)
 from modules.master_sheet import MASTER_SHEET_ID, record_execution
 
 
 PERIOD_RE = re.compile(r"^(\d{6})-([12])$")
 DEPOSIT_RE = re.compile(r"^(\d{6}-[12])工具包押金$")
+DRIVE_FILE_ID_RE = re.compile(r"/d/([A-Za-z0-9_-]+)")
 
 
 def _emit(log, message: str) -> None:
@@ -44,24 +50,45 @@ def _find_period_file(root_id: str, period: str, label: str, region: str) -> str
             f"'{root_id}' in parents and name='{period}' "
             "and mimeType='application/vnd.google-apps.folder' and trashed=false"
         ),
-        fields="files(id)",
-        pageSize=2,
+        fields="files(id,name,modifiedTime)",
+        pageSize=100,
         supportsAllDrives=True,
         includeItemsFromAllDrives=True,
     ).execute().get("files", [])
     if not folders:
         return ""
+    if len(folders) > 1:
+        ids = "、".join(str(item.get("id", "")) for item in folders)
+        raise ValueError(f"期別資料夾「{period}」有 {len(folders)} 份：{ids}")
 
     safe_region = region.replace("區", "").strip()
     name = f"{period}{label}-{safe_region}"
     files = drive.files().list(
         q=f"'{folders[0]['id']}' in parents and name='{name}' and trashed=false",
-        fields="files(id)",
-        pageSize=2,
+        fields="files(id,name,modifiedTime)",
+        pageSize=100,
         supportsAllDrives=True,
         includeItemsFromAllDrives=True,
     ).execute().get("files", [])
+    if len(files) > 1:
+        ids = "、".join(str(item.get("id", "")) for item in files)
+        raise ValueError(f"同名檔案「{name}」有 {len(files)} 份：{ids}")
     return files[0]["id"] if files else ""
+
+
+def _drive_file_name(drive, link: str) -> str:
+    match = DRIVE_FILE_ID_RE.search(str(link or ""))
+    if not match:
+        raise ValueError(f"無法從 Drive 連結取得檔案 ID：{link}")
+    metadata = drive.files().get(
+        fileId=match.group(1),
+        fields="id,name",
+        supportsAllDrives=True,
+    ).execute()
+    name = str(metadata.get("name", "") or "").strip()
+    if not name:
+        raise ValueError(f"Drive 檔案名稱為空：{match.group(1)}")
+    return name
 
 
 def _previous_period(period: str) -> str:
@@ -112,7 +139,12 @@ def _copy_period_sheet(mail_ss: gspread.Spreadsheet, period: str, log=None):
     return ws
 
 
-def _pairs_with_service(ss: gspread.Spreadsheet, sheet_name: str, include_service=False):
+def _pairs_with_service(
+    ss: gspread.Spreadsheet,
+    sheet_name: str,
+    drive,
+    include_service=False,
+):
     ws = _sheet_or_none(ss, sheet_name)
     if ws is None:
         return []
@@ -125,7 +157,7 @@ def _pairs_with_service(ss: gspread.Spreadsheet, sheet_name: str, include_servic
             link = r[3] if len(r) > 3 else ""
             service = str(r[7]).strip() if len(r) > 7 and r[7] is not None else ""
             if name and str(link).strip():
-                out.append((name, link, service))
+                out.append((name, link, service, _drive_file_name(drive, link)))
         return out
 
     rows = ws.get("B2:E", value_render_option="UNFORMATTED_VALUE") or []
@@ -134,7 +166,7 @@ def _pairs_with_service(ss: gspread.Spreadsheet, sheet_name: str, include_servic
         name = str(r[0]).strip() if len(r) > 0 and r[0] is not None else ""
         link = r[3] if len(r) > 3 else ""
         if name and str(link).strip():
-            out.append((name, link))
+            out.append((name, link, _drive_file_name(drive, link)))
     return out
 
 
@@ -169,11 +201,11 @@ def _replace_cleaning_text_for_other_rows(
     ) or []
 
     updates = []
-    for i, (name, _link, raw_service) in enumerate(other_rows):
+    for i, (name, _link, raw_service, _file_name) in enumerate(other_rows):
         row_num = start_row + i
         label = _service_label(raw_service)
 
-        for j, col in enumerate(("D", "E")):
+        for j, col in ((1, "E"),):
             formula = ""
             if i < len(formula_rows) and j < len(formula_rows[i]):
                 formula = str(formula_rows[i][j] or "")
@@ -189,8 +221,6 @@ def _replace_cleaning_text_for_other_rows(
                     shown = str(display_rows[i][j] or "")
                 if "清潔" in shown:
                     value = shown.replace("清潔", label)
-                elif col == "D":
-                    value = f"檸檬家事｜{label}"
                 else:
                     value = f"{period} 檸檬家事｜{label}承攬服務費_{name}"
 
@@ -229,16 +259,19 @@ def _write_period_rows(
     log=None,
 ):
     period_ws.update_cell(1, 4, period)  # D1
-    period_ws.batch_clear(["B2:C", "F2:F"])
+    period_ws.batch_clear(["B2:D", "F2:F"])
 
     data = []
-    data.extend([[name, link] for name, link in cleaning_rows])
-    data.extend([[name, link] for name, link in project_rows])
-    data.extend([[name, link] for name, link, _service in other_rows])
+    data.extend([[name, link, file_name] for name, link, file_name in cleaning_rows])
+    data.extend([[name, link, file_name] for name, link, file_name in project_rows])
+    data.extend([
+        [name, link, file_name]
+        for name, link, _service, file_name in other_rows
+    ])
 
     if data:
         period_ws.update(
-            f"B2:C{1 + len(data)}",
+            f"B2:D{1 + len(data)}",
             data,
             value_input_option="USER_ENTERED",
         )
@@ -441,13 +474,18 @@ def sync_service_fee_mail(
     mail_ss = mail_gc.open_by_key(mail_id)
     cleaning_ss = gc.open_by_key(cleaning_file_id)
     other_ss = gc.open_by_key(other_file_id) if other_file_id else None
+    drive = get_jenny_drive_service()
+
+    _emit(log, f"清潔承攬來源：{cleaning_ss.title}（ID={cleaning_file_id}）")
+    if other_ss is not None:
+        _emit(log, f"其他承攬來源：{other_ss.title}（ID={other_file_id}）")
 
     _setup_mail_sheet(mail_ss, roster_id, period, log=log)
 
-    cleaning_rows = _pairs_with_service(cleaning_ss, "PDF產出")
-    project_rows = _pairs_with_service(cleaning_ss, "專案PDF產出")
+    cleaning_rows = _pairs_with_service(cleaning_ss, "PDF產出", drive)
+    project_rows = _pairs_with_service(cleaning_ss, "專案PDF產出", drive)
     other_rows = (
-        _pairs_with_service(other_ss, "PDF產出", include_service=True)
+        _pairs_with_service(other_ss, "PDF產出", drive, include_service=True)
         if other_ss is not None else []
     )
 
