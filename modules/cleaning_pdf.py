@@ -58,6 +58,28 @@ PDF_JOBS = {
 }
 
 
+def _collect_targets(raw: list, allowed_names: Optional[List[str]] = None) -> list:
+    """取得 H=Y 名單；指定 allowed_names 時依其順序過濾舊控制列。"""
+    pending_rows = {}
+    targets = []
+    for i, row in enumerate(raw):
+        name = str(row[1]).strip() if len(row) > 1 else ""
+        flag = str(row[7]).strip() if len(row) > 7 else ""
+        if not name or flag != "Y":
+            continue
+        if allowed_names is None:
+            targets.append({"name": name, "row": i + 2})
+        elif name not in pending_rows:
+            pending_rows[name] = i + 2
+    if allowed_names is not None:
+        targets = [
+            {"name": name, "row": pending_rows[name]}
+            for name in allowed_names
+            if name in pending_rows
+        ]
+    return targets
+
+
 # ──────────────────────────────────────────────────────────────
 # 主函數（salaryapp.py 呼叫）
 # ──────────────────────────────────────────────────────────────
@@ -91,7 +113,7 @@ def run_pdf(
     try:
         # 直接使用 Python 產出 PDF，不再依賴中控 GAS。
         # Python 會：
-        # 1. 讀取 PDF產出 / 專案PDF產出 的 H=Y 名單
+        # 1. 讀取 PDF產出 / 專案PDF產出 的 H=Y 名單；專案另以薪資單 E4:E 核對
         # 2. 寫入薪資單並呼叫 Google Sheets export API 取得 PDF bytes
         # 3. 優先用 OAuth Drive 上傳；若 Drive 不可用，保留 Streamlit 下載檔
         _log(log, "    使用 Python PDF 引擎")
@@ -102,12 +124,21 @@ def run_pdf(
         ws_list   = ss.worksheet(job["list_sheet"])
 
         raw = ws_list.get("A2:H", value_render_option="UNFORMATTED_VALUE") or []
-        targets = []
-        for i, row in enumerate(raw):
-            name = str(row[1]).strip() if len(row) > 1 else ""
-            flag = str(row[7]).strip() if len(row) > 7 else ""
-            if name and flag == "Y":
-                targets.append({"name": name, "row": i + 2})
+        if job_type == "PROJECT":
+            slip_values = ss.worksheet("專案薪資單").get(
+                "E4:E", value_render_option="UNFORMATTED_VALUE"
+            ) or []
+            allowed_names = []
+            for row in slip_values:
+                name = str(row[0]).strip() if row else ""
+                if not name:
+                    break
+                allowed_names.append(name)
+
+            targets = _collect_targets(raw, allowed_names)
+            _log(log, f"    專案人員依專案薪資單 E4:E 核對：{len(targets)} 人")
+        else:
+            targets = _collect_targets(raw)
 
         if not targets:
             _log(log, f"    [{job['list_sheet']}] 無 H=Y 的待產出人員")
