@@ -105,6 +105,8 @@ CLEANING_TASKS = [
     "結算作業",
     "一鍵執行",
     "新人實境實習期別",
+    "場次時數",
+    "承攬費申報",
     "工具包押金",
     "元大帳戶",
 ]
@@ -248,6 +250,11 @@ def record_execution(
             next_row = max(sheet.row_count and len(sheet.col_values(1)) + 2, 3)
             sheet.update(f"A{next_row}:A{next_row + 1}", [["承攬mail系統"], [task_key]])
             row = next_row + 1
+        if row is None and task_key in ("場次時數", "承攬費申報"):
+            # 既有地區工作表建立於這兩個作業項目新增之前，補一列讓打卡有位置寫入。
+            next_row = max(sheet.row_count and len(sheet.col_values(1)) + 1, 3)
+            sheet.update(f"A{next_row}", [[task_key]])
+            row = next_row
         if row is None:
             import streamlit as st
             st.warning(f"⚠️ 打卡找不到作業：{task_key}")
