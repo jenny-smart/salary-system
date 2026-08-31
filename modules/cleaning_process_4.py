@@ -1,10 +1,15 @@
 """
-Lemon Clean 清潔承攬 — 工具包押金 / 介紹獎金 / 元大帳戶
+Lemon Clean 清潔承攬 — 場次時數 / 承攬費申報 / 工具包押金 / 介紹獎金 / 元大帳戶
 檔案：modules/cleaning_process_4.py
 
 公開函式：
-    run_tool_deposit()  工具包押金＋介紹獎金
-    run_yuanta()        元大帳戶 / 元大工具包押金 xlsx
+    run_session_hours()   場次時數（cleaning_file_id 寫入 salary_id「場次和時數」）
+    run_contract_report() 承攬費申報（寫入 contract_report_id／contract_report_sheet）
+    run_tool_deposit()    工具包押金＋介紹獎金
+    run_yuanta()          元大帳戶 / 元大工具包押金 xlsx
+
+三者為各自獨立的作業，彼此不再互相呼叫；執行「工具包押金」不會
+連帶執行「場次時數」或「承攬費申報」。
 
 工作日規則：
     10 日 / 20 日若遇週六、週日或台灣國定假日，
@@ -99,6 +104,93 @@ def _yuanta_target_date(period: str, is_first_half: bool) -> datetime.date:
 
 
 # ============================================================
+# 場次時數
+# ============================================================
+
+def run_session_hours(
+    cleaning_file_id: str,
+    region: str,
+    period: str,
+    is_first_half: bool,
+    log: List[str],
+    region_cfg: dict = None,
+    **kwargs,
+) -> bool:
+    """將清潔承攬檔案 ID 寫入 salary_id 試算表的「場次和時數」分頁。"""
+    label = "上半月" if is_first_half else "下半月"
+    _log(log, f"▶ 場次時數 {label} 開始")
+
+    if is_first_half:
+        _log(log, "  上半月不需寫入場次時數，略過")
+        _log(log, f"✅ 場次時數 {label} 完成｜{_now_ts()}")
+        return True
+
+    try:
+        salary_id = str((region_cfg or {}).get("salary_id", "") or "").strip()
+        if not salary_id:
+            raise ValueError("地區設定缺少 salary_id")
+
+        gc = get_gspread_client()
+        salary_ss = gc.open_by_key(salary_id)
+        ws_counts = salary_ss.worksheet("場次和時數")
+
+        month = int(period[4:6])
+        id_col = 5 + (month - 1) * 3
+        ws_counts.update_cell(1, id_col, cleaning_file_id)
+        _log(log, f"  清潔承攬 ID 已寫入 場次和時數!{_col_letter(id_col)}1")
+
+        record_execution(region, period, "場次時數", None)
+        _log(log, f"✅ 場次時數 {label} 完成｜{_now_ts()}")
+        return True
+
+    except Exception as e:
+        detail = str(e).strip() or repr(e)
+        _log(log, f"❌ 場次時數失敗：{detail}")
+        return False
+
+
+# ============================================================
+# 承攬費申報
+# ============================================================
+
+def run_contract_report(
+    cleaning_file_id: str,
+    region: str,
+    period: str,
+    is_first_half: bool,
+    log: List[str],
+    region_cfg: dict = None,
+    **kwargs,
+) -> bool:
+    """寫入承攬費申報，目的地由地區設定的 contract_report_id／contract_report_sheet 指定。"""
+    label = "上半月" if is_first_half else "下半月"
+    _log(log, f"▶ 承攬費申報 {label} 開始")
+
+    cfg = region_cfg or {}
+    contract_report_id = str(cfg.get("contract_report_id", "") or "").strip()
+    contract_report_sheet = str(cfg.get("contract_report_sheet", "") or "").strip()
+
+    missing = []
+    if not contract_report_id:
+        missing.append("contract_report_id")
+    if not contract_report_sheet:
+        missing.append("contract_report_sheet")
+
+    if missing:
+        _log(
+            log,
+            f"⚠️ 「{region}」地區設定缺少 {'、'.join(missing)}，"
+            "請至「地區設定」回填 contract_report_id／contract_report_sheet 後再執行承攬費申報",
+        )
+        return False
+
+    # contract_report_id／contract_report_sheet 已確認存在，
+    # 但實際要寫入的資料內容與儲存格範圍尚待補齊。
+    _log(log, "⚠️ 承攬費申報尚未實作寫入內容，請提供要寫入的資料與儲存格範圍")
+    return False
+
+
+# ============================================================
 # 工具包押金 / 介紹獎金
 # ============================================================
 
@@ -130,12 +222,6 @@ def run_tool_deposit(
 
             salary_ss = gc.open_by_key(salary_id)
             ws_deposit = salary_ss.worksheet("工具包押金")
-            ws_counts = salary_ss.worksheet("場次和時數")
-
-            month = int(period[4:6])
-            id_col = 5 + (month - 1) * 3
-            ws_counts.update_cell(1, id_col, cleaning_file_id)
-            _log(log, f"  清潔承攬 ID 已寫入 場次和時數!{_col_letter(id_col)}1")
 
             amount = next(
                 (v for k, v in DEPOSIT_BY_REGION.items() if k in region),
