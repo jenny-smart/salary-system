@@ -136,6 +136,7 @@ def run_settlement(
         ws_summary = ss.worksheet("場次時數薪資總表")
         ws_pdf      = ss.worksheet("PDF產出")
         ws_proj_pdf = ss.worksheet("專案PDF產出")
+        ws_proj_slip = ss.worksheet("專案薪資單")
 
         ws_summary.batch_clear(["AB4:AE120"])
         _log(log, "  已清空場次時數薪資總表 AB4:AE")
@@ -156,7 +157,8 @@ def run_settlement(
         # ── 步驟3：PDF產出 ─────────────────────────────────────
         _log(log, f"  步驟3：PDF產出（{label}）")
         _step3_pdf_output(
-            ws_summary, ws_pdf, ws_proj_pdf, ws_proj_salary, is_first_half, log
+            ws_summary, ws_pdf, ws_proj_pdf, ws_proj_salary, ws_proj_slip,
+            is_first_half, log
         )
 
         ts = _punch("結算作業", region, period)
@@ -429,6 +431,7 @@ def _step3_pdf_output(
     ws_pdf: gspread.Worksheet,
     ws_proj_pdf: gspread.Worksheet,
     ws_project_salary: gspread.Worksheet,
+    ws_project_slip: gspread.Worksheet,
     is_first_half: bool,
     log: List[str],
 ) -> None:
@@ -453,12 +456,22 @@ def _step3_pdf_output(
     project_values = ws_project_salary.get(
         "F2:F", value_render_option="UNFORMATTED_VALUE"
     ) or []
-    project_pdf_names = [
-        str(row[0]).strip() if row else "" for row in project_values
-    ]
-    while project_pdf_names and not project_pdf_names[-1]:
-        project_pdf_names.pop()
-    project_names = [name for name in project_pdf_names if name]
+    project_pdf_names = []
+    for row in project_values:
+        name = str(row[0]).strip() if row else ""
+        if not name:
+            break
+        project_pdf_names.append(name)
+    project_names = list(project_pdf_names)
+
+    # 專案薪資單人員名單與專案薪資表 F2:F 的連續非空白區一致。
+    ws_project_slip.batch_clear(["E4:E"])
+    if project_pdf_names:
+        ws_project_slip.update(
+            f"E4:E{3 + len(project_pdf_names)}",
+            [[name] for name in project_pdf_names],
+            value_input_option="USER_ENTERED",
+        )
 
     # 合併清單中每個專案列移除一次；同人兼具一般與專案時仍會各產一份。
     normal_names = list(names)
