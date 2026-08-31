@@ -357,6 +357,7 @@ def run_preparation(
                 )
 
         ws_salary  = _ws("薪資表")
+        ws_project_salary = _ws("專案薪資表")
         ws_revenue = _ws("清潔營收明細")
         ws_order   = _ws("清潔訂單")
         ws_proj    = _ws("專案訂單")
@@ -381,7 +382,9 @@ def run_preparation(
 
         # ── 步驟1：薪資表特定列處理 ──────────────────────────
         _log(log, "  步驟1：薪資表特定列處理")
-        _prep_step1_salary_rows(ws_salary, is_first_half, log)
+        _prep_step1_salary_rows(
+            ws_salary, is_first_half, log, ws_project_salary=ws_project_salary
+        )
 
         # ── 步驟2：讀取清潔營收明細 ──────────────────────────
         _log(log, "  步驟2：讀取清潔營收明細")
@@ -430,6 +433,7 @@ def _prep_step1_salary_rows(
     ws_salary: gspread.Worksheet,
     is_first_half: bool,
     log: List[str],
+    ws_project_salary: gspread.Worksheet = None,
 ):
     """
     薪資表有自己的公式，這裡只做特定列的清空或貼值，不寫入其他任何資料。
@@ -452,6 +456,42 @@ def _prep_step1_salary_rows(
         v2040 = ws_salary.get(_range(2040), value_render_option="UNFORMATTED_VALUE") or [[]]
         ws_salary.update(_range(2041), v2040, value_input_option="RAW")
         _log(log, "    下半月：L2046→L2045、L2040→L2041 貼值完成")
+
+    if ws_project_salary is None:
+        return
+
+    project_headers = ws_project_salary.row_values(1)
+    last_project_col = max(
+        (idx for idx, value in enumerate(project_headers, start=1)
+         if str(value).strip()),
+        default=0,
+    )
+    if last_project_col < 12:
+        _log(log, "    專案薪資表 L1:1 無人員，略過專案薪資表處理")
+        return
+
+    last_project_letter = _col_letter(last_project_col)
+
+    def _project_range(row: int) -> str:
+        return f"L{row}:{last_project_letter}{row}"
+
+    if is_first_half:
+        ws_project_salary.batch_clear([
+            _project_range(2041),
+            _project_range(2045),
+            f"L2:{last_project_letter}1995",
+        ])
+        _log(log, "    上半月：專案薪資表 L2041、L2045 及 L2:1995 已清空")
+    else:
+        for source_row, target_row in ((2046, 2045), (2040, 2041)):
+            values = ws_project_salary.get(
+                _project_range(source_row),
+                value_render_option="UNFORMATTED_VALUE",
+            ) or [[]]
+            ws_project_salary.update(
+                _project_range(target_row), values, value_input_option="RAW"
+            )
+        _log(log, "    下半月：專案薪資表 L2046→L2045、L2040→L2041 貼值完成")
 
 
 # ── 步驟2：讀取清潔營收明細 ──────────────────────────────────
@@ -627,6 +667,7 @@ def run_adjustment(
 
         ws_adjust  = ss.worksheet("00調薪")
         ws_salary  = ss.worksheet("薪資表")
+        ws_project_salary = ss.worksheet("專案薪資表")
         ws_summary = ss.worksheet("場次時數薪資總表")
 
         # 從 period 取 YYYYMM，從 region_cfg 取各試算表 ID
@@ -685,6 +726,7 @@ def run_adjustment(
         salary_count = _adj_update_salary_l1(
             ws_adjust, ws_salary, is_first_half, log
         )
+        _adj_sync_project_salary_l1(ws_salary, ws_project_salary, log)
         time.sleep(3)
         # 1996列非0姓名檢查已移至結算作業（run_settlement）執行，
         # 00調薪本身不再檢查。
@@ -1231,6 +1273,32 @@ def _adj_update_salary_l1(
                 )
         _log(log, "    下半月：新增欄位 L2041/L2045 依規則設為 0")
     return new_count
+
+
+def _adj_sync_project_salary_l1(
+    ws_salary: gspread.Worksheet,
+    ws_project_salary: gspread.Worksheet,
+    log: List[str],
+) -> None:
+    """讓專案薪資表 L1:1 與薪資表 L1:1 完全一致。"""
+    salary_row = ws_salary.row_values(1)
+    names = salary_row[11:]
+    while names and not str(names[-1]).strip():
+        names.pop()
+
+    project_row = ws_project_salary.row_values(1)
+    old_count = len(project_row[11:]) if len(project_row) > 11 else 0
+    clear_count = max(old_count, len(names))
+    if clear_count:
+        end_letter = _col_letter(11 + clear_count)
+        ws_project_salary.batch_clear([f"L1:{end_letter}1"])
+
+    if names:
+        end_letter = _col_letter(11 + len(names))
+        ws_project_salary.update(
+            f"L1:{end_letter}1", [names], value_input_option="USER_ENTERED"
+        )
+    _log(log, f"    專案薪資表 L1:1 已同步（{len(names)} 人）")
 
 
 def _copy_salary_formulas(
