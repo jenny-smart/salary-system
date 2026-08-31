@@ -162,9 +162,18 @@ def run_contract_report(
     region_cfg: dict = None,
     **kwargs,
 ) -> bool:
-    """寫入承攬費申報，目的地由地區設定的 contract_report_id／contract_report_sheet 指定。"""
+    """
+    將清潔承攬檔案 ID 寫入地區設定 contract_report_id／contract_report_sheet
+    指定的試算表分頁：B{月份+1} = 該月下半月（-2）清潔承攬檔案 ID。
+    例：B2=YYYY01-2、B3=YYYY02-2、B4=YYYY03-2 ……以此類推。
+    """
     label = "上半月" if is_first_half else "下半月"
     _log(log, f"▶ 承攬費申報 {label} 開始")
+
+    if is_first_half:
+        _log(log, "  上半月不需寫入承攬費申報，略過")
+        _log(log, f"✅ 承攬費申報 {label} 完成｜{_now_ts()}")
+        return True
 
     cfg = region_cfg or {}
     contract_report_id = str(cfg.get("contract_report_id", "") or "").strip()
@@ -184,10 +193,24 @@ def run_contract_report(
         )
         return False
 
-    # contract_report_id／contract_report_sheet 已確認存在，
-    # 但實際要寫入的資料內容與儲存格範圍尚待補齊。
-    _log(log, "⚠️ 承攬費申報尚未實作寫入內容，請提供要寫入的資料與儲存格範圍")
-    return False
+    try:
+        gc = get_gspread_client()
+        report_ss = gc.open_by_key(contract_report_id)
+        ws_report = report_ss.worksheet(contract_report_sheet)
+
+        month = int(period[4:6])
+        row = month + 1
+        ws_report.update_cell(row, 2, cleaning_file_id)
+        _log(log, f"  清潔承攬 ID 已寫入 {contract_report_sheet}!B{row}")
+
+        record_execution(region, period, "承攬費申報", None)
+        _log(log, f"✅ 承攬費申報 {label} 完成｜{_now_ts()}")
+        return True
+
+    except Exception as e:
+        detail = str(e).strip() or repr(e)
+        _log(log, f"❌ 承攬費申報失敗：{detail}")
+        return False
 
 
 # ============================================================
