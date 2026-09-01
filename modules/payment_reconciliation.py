@@ -27,7 +27,7 @@ import pandas as pd
 import streamlit as st
 from gspread.exceptions import WorksheetNotFound
 
-from modules.auth import get_drive_service, get_credentials
+from modules.auth import get_drive_service, get_credentials, open_jenny_spreadsheet
 from modules.period_utils import get_file_name, is_first_half
 from modules.drive_helper import (
     get_folder_by_name,
@@ -1653,7 +1653,9 @@ def export_reconciliation_to_revenue(
         raise ValueError("「金流對帳」A1:BJ 無資料，無法搬入營收總表")
 
     sheet_name = _revenue_sheet_name(period)
-    revenue_ss = open_spreadsheet(revenue_summary_id)
+    # 營收總表由 Jenny 帳號持有，未分享給 Service Account；必須使用
+    # 既有 Jenny OAuth。來源金流對帳仍沿用 Service Account 權限。
+    revenue_ss = open_jenny_spreadsheet(revenue_summary_id)
     try:
         target_ws = revenue_ss.worksheet(sheet_name)
         if target_ws.col_count < 62:
