@@ -86,6 +86,8 @@ SCHEDULE_SHEET_NAME = "排程設定"
 REGION_HEADERS = ["name", "root_folder_id", "allowance_id", "salary_id", "roster_id", "mail_id"]
 # H/I 欄：承攬費申報目的地。G 欄（元大承攬費）不由本程式管理，讀寫時一律跳過。
 CONTRACT_REPORT_HEADERS = ["contract_report_id", "contract_report_sheet"]
+# J 欄：各地區營收總表目的地；G 欄及 H:I 既有設定均保留。
+REVENUE_SUMMARY_HEADERS = ["revenue_summary_id"]
 SCHEDULE_HEADERS = ["key", "value"]
 
 
@@ -239,6 +241,7 @@ def _ensure_config_sheets(spreadsheet_id: str):
     _ensure_header(REGION_SHEET_NAME, REGION_HEADERS)
     # H/I 欄獨立於 A:F 之外確保表頭，避免動到中間的 G 欄（元大承攬費）。
     _ensure_header(REGION_SHEET_NAME, CONTRACT_REPORT_HEADERS, start_col="H")
+    _ensure_header(REGION_SHEET_NAME, REVENUE_SUMMARY_HEADERS, start_col="J")
     _ensure_header(SCHEDULE_SHEET_NAME, SCHEDULE_HEADERS)
 
 
@@ -264,15 +267,15 @@ def _read_config_from_sheet(spreadsheet_id: str) -> dict:
     svc = _build_sheets_service()
     _ensure_config_sheets(spreadsheet_id)
 
-    # A:I 一次讀取以確保列對齊；G 欄（元大承攬費）不屬本程式管理，讀取後直接跳過。
+    # A:J 一次讀取以確保列對齊；G 欄（元大承攬費）不屬本程式管理，讀取後直接跳過。
     region_values = svc.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
-        range=f"'{REGION_SHEET_NAME}'!A2:I",
+        range=f"'{REGION_SHEET_NAME}'!A2:J",
     ).execute().get("values", [])
 
     regions = []
     for row in region_values:
-        row = row + [""] * (9 - len(row))
+        row = row + [""] * (10 - len(row))
         name = str(row[0]).strip()
         if not name:
             continue
@@ -285,6 +288,7 @@ def _read_config_from_sheet(spreadsheet_id: str) -> dict:
             "mail_id": str(row[5]).strip(),
             "contract_report_id": str(row[7]).strip(),
             "contract_report_sheet": str(row[8]).strip(),
+            "revenue_summary_id": str(row[9]).strip(),
         })
 
     schedule_values = svc.spreadsheets().values().get(
@@ -329,6 +333,7 @@ def _write_config_to_sheet(spreadsheet_id: str, cfg: dict):
     regions = cfg.get("regions", []) or []
     region_rows = [REGION_HEADERS]
     contract_report_rows = [CONTRACT_REPORT_HEADERS]
+    revenue_summary_rows = [REVENUE_SUMMARY_HEADERS]
     for r in regions:
         region_rows.append([
             r.get("name", ""),
@@ -342,6 +347,7 @@ def _write_config_to_sheet(spreadsheet_id: str, cfg: dict):
             r.get("contract_report_id", ""),
             r.get("contract_report_sheet", ""),
         ])
+        revenue_summary_rows.append([r.get("revenue_summary_id", "")])
 
     schedule = cfg.get("schedule", {}) or {}
     schedule_rows = [SCHEDULE_HEADERS]
@@ -375,6 +381,19 @@ def _write_config_to_sheet(spreadsheet_id: str, cfg: dict):
         range=f"'{REGION_SHEET_NAME}'!H1",
         valueInputOption="RAW",
         body={"values": contract_report_rows},
+    ).execute()
+
+    # J 欄獨立清空／寫回，不動 G 欄及 H:I 既有設定。
+    svc.spreadsheets().values().clear(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{REGION_SHEET_NAME}'!J:J",
+        body={},
+    ).execute()
+    svc.spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{REGION_SHEET_NAME}'!J1",
+        valueInputOption="RAW",
+        body={"values": revenue_summary_rows},
     ).execute()
 
     svc.spreadsheets().values().clear(
@@ -506,6 +525,7 @@ FUNCTION_MAP = {
         "⑨ 搬運ATM",
         "⑩ 金流對帳彙總＋檢核",
         "⑪ 立帳標記",
+        "⑫ 搬入營收總表",
     ],
     "🧹 清潔承攬": [
         "① 前置作業",
@@ -1028,6 +1048,22 @@ if run_clicked and execution_engine == "PYTHON":
                             _name, _period, "立帳標記", result["count"]
                         )
 
+                    elif "⑫ 搬入營收總表" in _func:
+                        from modules.payment_reconciliation import export_reconciliation_to_revenue
+                        revenue_summary_id = str(
+                            _region.get("revenue_summary_id", "") or ""
+                        ).strip()
+                        result = export_reconciliation_to_revenue(
+                            root_id, revenue_summary_id, _period, _name, add_log
+                        )
+                        add_log(
+                            f"搬入營收總表完成：{result['sheet']}，{result['count']} 列",
+                            "success",
+                        )
+                        record_execution(
+                            _name, _period, "搬入營收總表", result["count"]
+                        )
+
                 # ───────────────────────────────────────────────
                 # █ 區塊8-B：清潔承攬執行邏輯
                 # ───────────────────────────────────────────────
@@ -1499,6 +1535,7 @@ REGION_FIELDS = [
     ("mail_id",               "承攬服務費 mail ID"),
     ("contract_report_id",    "承攬費申報試算表 ID"),
     ("contract_report_sheet", "承攬費申報工作表名稱"),
+    ("revenue_summary_id",    "營收總表 ID"),
 ]
 
 col_hdr, col_add = st.columns([3, 1])
@@ -1518,6 +1555,7 @@ if st.session_state.adding_region:
         new_mail      = st.text_input("承攬服務費 mail ID")
         new_contract_report_id    = st.text_input("承攬費申報試算表 ID")
         new_contract_report_sheet = st.text_input("承攬費申報工作表名稱")
+        new_revenue_summary_id     = st.text_input("營收總表 ID")
 
         s1, s2 = st.columns(2)
         with s1:
@@ -1541,6 +1579,7 @@ if st.session_state.adding_region:
                         "mail_id":        new_mail,
                         "contract_report_id":    new_contract_report_id,
                         "contract_report_sheet": new_contract_report_sheet,
+                        "revenue_summary_id":     new_revenue_summary_id,
                     })
                     config["regions"] = regions
                     save_config(config)
@@ -1579,6 +1618,8 @@ for i, region in enumerate(regions):
                 "承攬費申報試算表 ID", value=region.get("contract_report_id", ""))
             e_contract_report_sheet = st.text_input(
                 "承攬費申報工作表名稱", value=region.get("contract_report_sheet", ""))
+            e_revenue_summary_id = st.text_input(
+                "營收總表 ID", value=region.get("revenue_summary_id", ""))
 
             es1, es2 = st.columns(2)
             with es1:
@@ -1596,6 +1637,7 @@ for i, region in enumerate(regions):
                     "mail_id":        e_mail,
                     "contract_report_id":    e_contract_report_id,
                     "contract_report_sheet": e_contract_report_sheet,
+                    "revenue_summary_id":     e_revenue_summary_id,
                 }
                 config["regions"] = regions
                 save_config(config)
