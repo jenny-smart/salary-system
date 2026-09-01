@@ -462,8 +462,6 @@ def _step3_pdf_output(
         if not name:
             break
         project_pdf_names.append(name)
-    project_names = list(project_pdf_names)
-
     # 專案薪資單人員名單與專案薪資表 F2:F 的連續非空白區一致。
     ws_project_slip.batch_clear(["E4:E"])
     if project_pdf_names:
@@ -473,13 +471,10 @@ def _step3_pdf_output(
             value_input_option="USER_ENTERED",
         )
 
-    # 合併清單中每個專案列移除一次；同人兼具一般與專案時仍會各產一份。
+    # 一般與專案 PDF 名單彼此獨立；同名人員必須在兩邊各產一份。
     normal_names = list(names)
-    for name in project_names:
-        if name in normal_names:
-            normal_names.remove(name)
 
-    if not names and not project_names:
+    if not names and not project_pdf_names:
         _log(log, f"    {src_col}4 無資料，跳過 PDF產出寫入")
         return
 
@@ -503,5 +498,5 @@ def _step3_pdf_output(
         )
     _log(
         log,
-        f"    PDF名單：清潔 {len(normal_names)} 人，專案 {len(project_names)} 人",
+        f"    PDF名單：清潔 {len(normal_names)} 人，專案 {len(project_pdf_names)} 人",
     )
