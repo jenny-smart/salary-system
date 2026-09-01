@@ -330,6 +330,19 @@ def _write_config_to_sheet(spreadsheet_id: str, cfg: dict):
     svc = _build_sheets_service()
     _ensure_config_sheets(spreadsheet_id)
 
+    # 頁面可能仍持有新增 J 欄前的快取資料。先讀取目前 Sheet 值；若某地區
+    # dict 根本沒有 revenue_summary_id key，寫回時保留既有 ID，避免先清空
+    # J 欄後把使用者剛填的設定洗掉。明確帶入空字串時仍視為使用者要清除。
+    existing_rows = svc.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{REGION_SHEET_NAME}'!A2:J",
+    ).execute().get("values", [])
+    existing_revenue_ids = {
+        str(row[0]).strip(): str(row[9]).strip()
+        for row in existing_rows
+        if row and str(row[0]).strip() and len(row) > 9
+    }
+
     regions = cfg.get("regions", []) or []
     region_rows = [REGION_HEADERS]
     contract_report_rows = [CONTRACT_REPORT_HEADERS]
@@ -347,7 +360,12 @@ def _write_config_to_sheet(spreadsheet_id: str, cfg: dict):
             r.get("contract_report_id", ""),
             r.get("contract_report_sheet", ""),
         ])
-        revenue_summary_rows.append([r.get("revenue_summary_id", "")])
+        revenue_summary_rows.append([
+            r.get(
+                "revenue_summary_id",
+                existing_revenue_ids.get(str(r.get("name", "")).strip(), ""),
+            )
+        ])
 
     schedule = cfg.get("schedule", {}) or {}
     schedule_rows = [SCHEDULE_HEADERS]
@@ -1053,6 +1071,24 @@ if run_clicked and execution_engine == "PYTHON":
                         revenue_summary_id = str(
                             _region.get("revenue_summary_id", "") or ""
                         ).strip()
+                        if not revenue_summary_id:
+                            # 避免 Streamlit 60 秒設定快取看不到剛在地區設定表
+                            # 填入的 ID；只在目前值空白時直接讀取最新設定。
+                            sheet_id = (
+                                config.get("config_sheet_id")
+                                or _find_or_create_config_spreadsheet(config)
+                            )
+                            fresh_config = _read_config_from_sheet(sheet_id)
+                            fresh_region = next(
+                                (
+                                    r for r in fresh_config.get("regions", [])
+                                    if r.get("name") == _name
+                                ),
+                                {},
+                            )
+                            revenue_summary_id = str(
+                                fresh_region.get("revenue_summary_id", "") or ""
+                            ).strip()
                         result = export_reconciliation_to_revenue(
                             root_id, revenue_summary_id, _period, _name, add_log
                         )
