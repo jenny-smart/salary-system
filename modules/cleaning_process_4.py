@@ -44,6 +44,29 @@ INTRO_BONUS = 1000
 TOOL_DEPOSIT_START_ROW = 121
 
 
+OPEN_RETRY_DELAYS = (5, 10)  # 秒；PermissionError 重試等待時間
+
+
+def _open_by_key_with_retry(gc: gspread.Client, file_id: str) -> gspread.Spreadsheet:
+    """
+    開啟試算表；遇到 PermissionError 時重試。
+
+    gspread 對 Google Sheets API 回傳的 403 一律轉成內建 PermissionError，
+    但 403 不只代表真的沒權限，短時間內請求過多觸發的額度限制
+    （rate limit / quota exceeded）也會回傳 403，屬於暫時性錯誤，
+    等幾秒重試通常就會成功，不代表分享設定有問題。
+    """
+    last_err: PermissionError | None = None
+    for attempt, delay in enumerate((0,) + OPEN_RETRY_DELAYS):
+        if delay:
+            time.sleep(delay)
+        try:
+            return gc.open_by_key(file_id)
+        except PermissionError as e:
+            last_err = e
+    raise last_err
+
+
 def _now_ts() -> str:
     return format_taipei_time(fmt=TS_FMT)
 
@@ -131,7 +154,7 @@ def run_session_hours(
             raise ValueError("地區設定缺少 salary_id")
 
         gc = get_gspread_client()
-        salary_ss = gc.open_by_key(salary_id)
+        salary_ss = _open_by_key_with_retry(gc, salary_id)
         ws_counts = salary_ss.worksheet("場次和時數")
 
         month = int(period[4:6])
@@ -195,7 +218,7 @@ def run_contract_report(
 
     try:
         gc = get_gspread_client()
-        report_ss = gc.open_by_key(contract_report_id)
+        report_ss = _open_by_key_with_retry(gc, contract_report_id)
         ws_report = report_ss.worksheet(contract_report_sheet)
 
         month = int(period[4:6])
@@ -231,7 +254,7 @@ def run_tool_deposit(
 
     try:
         gc = get_gspread_client()
-        cleaning_ss = gc.open_by_key(cleaning_file_id)
+        cleaning_ss = _open_by_key_with_retry(gc, cleaning_file_id)
         ws_summary = cleaning_ss.worksheet("場次時數薪資總表")
         ws_intro = cleaning_ss.worksheet("介紹獎金")
 
@@ -243,7 +266,7 @@ def run_tool_deposit(
             if not salary_id:
                 raise ValueError("地區設定缺少 salary_id")
 
-            salary_ss = gc.open_by_key(salary_id)
+            salary_ss = _open_by_key_with_retry(gc, salary_id)
             ws_deposit = salary_ss.worksheet("工具包押金")
 
             amount = next(
