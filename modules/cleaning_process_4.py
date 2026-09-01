@@ -139,7 +139,11 @@ def run_session_hours(
     region_cfg: dict = None,
     **kwargs,
 ) -> bool:
-    """將清潔承攬檔案 ID 寫入 salary_id 試算表的「場次和時數」分頁。"""
+    """
+    將清潔承攬檔案 ID 寫入 salary_id 試算表「場次和時數」分頁第 1 列
+    （依月份定欄，如 9月→AC1、10月→AF1），並把該欄與次一欄第 4 列的
+    VLOOKUP／IMPORTRANGE 公式往下複製到跟 A 欄姓名一樣多的列數。
+    """
     label = "上半月" if is_first_half else "下半月"
     _log(log, f"▶ 場次時數 {label} 開始")
 
@@ -159,8 +163,40 @@ def run_session_hours(
 
         month = int(period[4:6])
         id_col = 5 + (month - 1) * 3
+        col_letter = _col_letter(id_col)
+        next_col_letter = _col_letter(id_col + 1)
+
         ws_counts.update_cell(1, id_col, cleaning_file_id)
-        _log(log, f"  清潔承攬 ID 已寫入 場次和時數!{_col_letter(id_col)}1")
+        _log(log, f"  清潔承攬 ID 已寫入 場次和時數!{col_letter}1")
+
+        last_row = len(ws_counts.col_values(1))
+        if last_row < 4:
+            _log(log, "  A 欄無姓名資料，略過公式回填")
+        else:
+            formula_updates = []
+            for r in range(4, last_row + 1):
+                formula_updates.append({
+                    "range": f"'{ws_counts.title}'!{col_letter}{r}",
+                    "values": [[
+                        f'=IFNA(VLOOKUP($A{r},IMPORTRANGE({col_letter}$1,'
+                        f'"場次時數薪資總表!$A:$C"),2,false),"")'
+                    ]],
+                })
+                formula_updates.append({
+                    "range": f"'{ws_counts.title}'!{next_col_letter}{r}",
+                    "values": [[
+                        f'=IFNA(VLOOKUP($A{r},IMPORTRANGE({col_letter}$1,'
+                        f'"場次時數薪資總表!$A:$C"),3,false),"")'
+                    ]],
+                })
+            ws_counts.spreadsheet.values_batch_update({
+                "valueInputOption": "USER_ENTERED",
+                "data": formula_updates,
+            })
+            _log(
+                log,
+                f"  公式已回填 {col_letter}4:{next_col_letter}{last_row}",
+            )
 
         record_execution(region, period, "場次時數", None)
         _log(log, f"✅ 場次時數 {label} 完成｜{_now_ts()}")
