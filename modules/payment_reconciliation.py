@@ -1457,6 +1457,7 @@ def move_atm_from_allowance(
     count = paste_data(atm_sheet, 2, matched_rows) if matched_rows else 0
     log(f"✅ 已清空「03ATM」A2:G 後重新貼入：{count} 筆")
 
+    _ensure_sheet_columns(atm_sheet, 33, log_fn=log)  # AA:AG 標記、公式與連結區
     atm_sheet.batch_clear([f"AA2:AA{max(atm_sheet.row_count, 2)}"])
     _mark_atm_non_service_rows(atm_sheet, log_fn=log)
 
@@ -1947,6 +1948,19 @@ MARK_SHEETS = {
 }
 
 
+def _ensure_sheet_columns(ws, required_cols: int, log_fn=None) -> None:
+    """欄位不足時直接擴充，避免 AA:BV 等範圍超出工作表 grid limits。"""
+    if ws.col_count >= required_cols:
+        return
+    added = required_cols - ws.col_count
+    ws.add_cols(added)
+    if log_fn:
+        log_fn(
+            f"🔵 「{ws.title}」欄位不足，已新增 {added} 欄"
+            f"（目前共 {required_cols} 欄）"
+        )
+
+
 def _mark_atm_non_service_rows(ws, log_fn=None) -> int:
     """在03ATM的AA欄加註子單後綴：只處理 A:G 有資料，且 G 欄
     不是「服務費用」的列。呼叫端需先清空 AA2:AA，避免舊標記殘留。
@@ -2271,6 +2285,8 @@ def setup_reconciliation_marks(
 
     for sheet_name, cfg in MARK_SHEETS.items():
         ws = ss.worksheet(sheet_name)
+        required_cols = max(cfg["clear_cols"] + [cfg["confirm_col"], cfg["mark_end"]])
+        _ensure_sheet_columns(ws, required_cols, log_fn=log)
         # 金流對帳已在搬運 A2:BJ 之前移除篩選；來源表在這裡移除。
         if sheet_name != RECONCILIATION_SHEET_NAME:
             _remove_basic_filter(ws, log_fn=log)
