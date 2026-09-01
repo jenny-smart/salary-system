@@ -1554,6 +1554,69 @@ def _extract_year_month(value) -> str | None:
     return f"{int(y):04d}/{int(mo):02d}"
 
 
+ACCOUNT_MARKS = {
+    "清潔本月", "清潔預收", "水洗本月", "水洗預收",
+    "儲值金", "家電本月", "家電預收",
+}
+
+
+def _account_mark(period: str, service_date, service_name) -> str | None:
+    """依期別月份、H 服務日期與 E 服務項目產生 A 欄立帳標記。"""
+    service_month = _extract_year_month(service_date)
+    if not service_month:
+        return None
+
+    name = str(service_name or "").strip()
+    current_month = service_month == _month_text(period)
+    if "儲值金" in name:
+        return "儲值金"
+    if "3水洗" in name:
+        return "水洗本月" if current_month else "水洗預收"
+    if "4家電" in name:
+        return "家電本月" if current_month else "家電預收"
+    if name == "1專業清潔":
+        return "清潔本月" if current_month else "清潔預收"
+    return None
+
+
+def mark_reconciliation_accounts(
+    root_folder_id: str, period: str, region_name: str, log_fn=None
+) -> dict:
+    """更新「金流對帳」A 欄立帳標記；不覆蓋非本功能管理的既有內容。"""
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    reconciliation_id = _get_period_file_id(
+        root_folder_id, period, "金流對帳", region_name
+    )
+    ws = open_spreadsheet(reconciliation_id).worksheet(RECONCILIATION_SHEET_NAME)
+    rows = ws.get(f"A2:H{max(ws.row_count, 2)}") or []
+    updates = []
+    counts: dict[str, int] = {}
+
+    for offset, row in enumerate(rows, start=2):
+        current = str(row[0] if row else "").strip()
+        service_name = row[4] if len(row) > 4 else ""
+        service_date = row[7] if len(row) > 7 else ""
+        mark = _account_mark(period, service_date, service_name)
+
+        # 無法分類時，只清除本功能先前寫入的標記，保留其他既有 A 欄資料。
+        new_value = mark or ("" if current in ACCOUNT_MARKS else current)
+        if new_value == current:
+            continue
+        updates.append({"range": f"A{offset}", "values": [[new_value]]})
+        if mark:
+            counts[mark] = counts.get(mark, 0) + 1
+
+    _batch_formula_updates(ws, updates)
+    marked_count = sum(counts.values())
+    log(f"🏷️ 「金流對帳」A欄立帳標記完成：{marked_count} 筆")
+    for mark, count in sorted(counts.items()):
+        log(f"　{mark}：{count} 筆")
+    return {"count": marked_count, "counts": counts, "updated": len(updates)}
+
+
 def _clean_order_key(value) -> str:
     return str(value or "").strip()
 
