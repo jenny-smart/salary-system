@@ -496,17 +496,6 @@ def sync_service_fee_mail(
 
     cleaning_rows = _pairs_with_service(cleaning_ss, "PDF產出", drive)
     project_rows = _pairs_with_service(cleaning_ss, "專案PDF產出", drive)
-    project_names = set(_contiguous_names(
-        cleaning_ss.worksheet("專案薪資單"), "E4:E"
-    ))
-    raw_project_count = len(project_rows)
-    project_rows = [row for row in project_rows if row[0] in project_names]
-    if len(project_rows) != raw_project_count:
-        _emit(
-            log,
-            f"專案通知名單依專案薪資單 E4:E 過濾："
-            f"{raw_project_count} → {len(project_rows)} 筆",
-        )
     other_rows = (
         _pairs_with_service(other_ss, "PDF產出", drive, include_service=True)
         if other_ss is not None else []
