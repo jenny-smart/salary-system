@@ -25,6 +25,7 @@ from datetime import datetime
 
 import pandas as pd
 import streamlit as st
+from gspread.exceptions import WorksheetNotFound
 
 from modules.auth import get_drive_service, get_credentials
 from modules.period_utils import get_file_name, is_first_half
@@ -1615,6 +1616,63 @@ def mark_reconciliation_accounts(
     for mark, count in sorted(counts.items()):
         log(f"　{mark}：{count} 筆")
     return {"count": marked_count, "counts": counts, "updated": len(updates)}
+
+
+def _revenue_sheet_name(period: str) -> str:
+    """期別 202609-1／202609-2 共用營收總表分頁 202609。"""
+    match = re.match(r"^(\d{6})(?:-[12])?$", str(period or "").strip())
+    if not match:
+        raise ValueError(f"期別格式錯誤：{period}")
+    return match.group(1)
+
+
+def export_reconciliation_to_revenue(
+    root_folder_id: str,
+    revenue_summary_id: str,
+    period: str,
+    region_name: str,
+    log_fn=None,
+) -> dict:
+    """將當期「金流對帳」A1:BJ 以值搬入營收總表的 YYYYMM 分頁。"""
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    revenue_summary_id = str(revenue_summary_id or "").strip()
+    if not revenue_summary_id:
+        raise ValueError("尚未設定營收總表 ID，請先至地區設定填寫")
+
+    reconciliation_id = _get_period_file_id(
+        root_folder_id, period, "金流對帳", region_name
+    )
+    source_ws = open_spreadsheet(reconciliation_id).worksheet(
+        RECONCILIATION_SHEET_NAME
+    )
+    data = source_ws.get("A1:BJ", value_render_option="UNFORMATTED_VALUE") or []
+    if not data:
+        raise ValueError("「金流對帳」A1:BJ 無資料，無法搬入營收總表")
+
+    sheet_name = _revenue_sheet_name(period)
+    revenue_ss = open_spreadsheet(revenue_summary_id)
+    try:
+        target_ws = revenue_ss.worksheet(sheet_name)
+        if target_ws.col_count < 62:
+            target_ws.add_cols(62 - target_ws.col_count)
+        target_ws.batch_clear(["A:BJ"])
+        log(f"🧹 營收總表「{sheet_name}」已存在，已清空 A:BJ")
+    except WorksheetNotFound:
+        target_ws = revenue_ss.add_worksheet(
+            title=sheet_name,
+            rows=max(len(data) + 100, 1000),
+            cols=62,
+        )
+        log(f"➕ 營收總表已新增工作表「{sheet_name}」")
+
+    if target_ws.row_count < len(data):
+        target_ws.add_rows(len(data) - target_ws.row_count + 100)
+    target_ws.update("A1", data, value_input_option="RAW")
+    log(f"✅ 金流對帳 A1:BJ 已搬入「{sheet_name}」：{len(data)} 列")
+    return {"sheet": sheet_name, "count": len(data)}
 
 
 def _clean_order_key(value) -> str:
