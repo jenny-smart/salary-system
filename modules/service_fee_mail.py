@@ -288,6 +288,17 @@ def _write_period_rows(
             value_input_option="USER_ENTERED",
         )
 
+    written_names = period_ws.get(
+        "B2:B", value_render_option="FORMATTED_VALUE"
+    ) or []
+    written_count = sum(
+        1 for row in written_names if row and str(row[0]).strip()
+    )
+    if written_count != len(data):
+        raise RuntimeError(
+            f"通知信數量不符：應為 {len(data)} 筆，實際寫入 {written_count} 筆"
+        )
+
     cleaning_count = len(cleaning_rows)
     project_count = len(project_rows)
     other_count = len(other_rows)
@@ -302,7 +313,7 @@ def _write_period_rows(
 
     _emit(
         log,
-        f"{period} 通知名單完成：清潔 {cleaning_count}、專案 {project_count}、其他 {other_count}，共 {len(data)} 筆",
+        f"{period} 通知名單完成並核對：清潔 {cleaning_count}、專案 {project_count}、其他 {other_count}，共 {written_count} 筆",
     )
     return len(data)
 
