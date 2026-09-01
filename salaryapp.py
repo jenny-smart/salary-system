@@ -505,6 +505,7 @@ FUNCTION_MAP = {
         "⑧ 搬運發票＋藍新",
         "⑨ 搬運ATM",
         "⑩ 金流對帳彙總＋檢核",
+        "⑪ 立帳標記",
     ],
     "🧹 清潔承攬": [
         "① 前置作業",
@@ -1015,6 +1016,16 @@ if run_clicked and execution_engine == "PYTHON":
 
                         append_reconciliation_execution(
                             _name, _period, result["count"], len(issues), total_missing,
+                        )
+
+                    elif "⑪ 立帳標記" in _func:
+                        from modules.payment_reconciliation import mark_reconciliation_accounts
+                        result = mark_reconciliation_accounts(
+                            root_id, _period, _name, add_log
+                        )
+                        add_log(f"立帳標記完成：{result['count']} 筆", "success")
+                        record_execution(
+                            _name, _period, "立帳標記", result["count"]
                         )
 
                 # ───────────────────────────────────────────────
