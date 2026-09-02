@@ -697,7 +697,9 @@ def run_yuanta_fee(
 
         source_range = "N4:Q" if is_first_half else "U4:X"
         other_source_range = "N3:Q" if is_first_half else "U3:X"
-        cleaning_rows = _yuanta_nonempty_rows(
+        # 結算作業已把專案薪資人員追加至場次時數薪資總表；
+        # 此範圍同時包含清潔與專案，不可再讀專案薪資表以免重複。
+        cleaning_project_rows = _yuanta_nonempty_rows(
             ws_summary.get(
                 source_range,
                 value_render_option="UNFORMATTED_VALUE",
@@ -706,11 +708,11 @@ def run_yuanta_fee(
 
         ws_all.batch_clear(["A2:D"])
         next_row = 2
-        if cleaning_rows:
-            end = next_row + len(cleaning_rows) - 1
+        if cleaning_project_rows:
+            end = next_row + len(cleaning_project_rows) - 1
             ws_all.update(
                 f"A{next_row}:D{end}",
-                cleaning_rows,
+                cleaning_project_rows,
                 value_input_option="USER_ENTERED",
             )
             next_row = end + 1
@@ -737,7 +739,12 @@ def run_yuanta_fee(
                 value_input_option="USER_ENTERED",
             )
 
-        all_rows = cleaning_rows + other_rows
+        _log(
+            log,
+            f"  清潔＋專案 {len(cleaning_project_rows)} 筆；"
+            f"其他承攬 {len(other_rows)} 筆",
+        )
+        all_rows = cleaning_project_rows + other_rows
         if all_rows:
             _yuanta_wait_values(
                 ws_all,
