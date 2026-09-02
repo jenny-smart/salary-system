@@ -6,7 +6,8 @@ Lemon Clean 清潔承攬 — 場次時數 / 承攬費申報 / 工具包押金 / 
     run_session_hours()   場次時數（cleaning_file_id 寫入 salary_id「場次和時數」）
     run_contract_report() 承攬費申報（寫入 contract_report_id／contract_report_sheet）
     run_tool_deposit()    工具包押金＋介紹獎金
-    run_yuanta()          元大帳戶 / 元大工具包押金 xlsx
+    run_yuanta_fee()      元大承攬費 xlsx
+    run_yuanta_deposit()  元大工具包押金 xlsx
 
 三者為各自獨立的作業，彼此不再互相呼叫；執行「工具包押金」不會
 連帶執行「場次時數」或「承攬費申報」。
@@ -627,7 +628,39 @@ def _yuanta_export_xlsx(
         _log(log, f"  xlsx 已建立：{output_name}")
 
 
-def run_yuanta(
+def _yuanta_open_context(
+    cleaning_file_id: str,
+    region: str,
+    period: str,
+    region_cfg: dict,
+):
+    cfg = region_cfg or {}
+    root_folder_id = str(cfg.get("root_folder_id", "") or "").strip()
+    if not root_folder_id:
+        raise ValueError("地區設定缺少 root_folder_id")
+
+    gc = get_gspread_client()
+    cleaning_ss = gc.open_by_key(cleaning_file_id)
+    ws_summary = cleaning_ss.worksheet("場次時數薪資總表")
+
+    yuanta_name = f"{period}元大帳戶-{region}"
+    period_folder_id, yuanta_file_id = _yuanta_find_period_file(
+        root_folder_id,
+        period,
+        yuanta_name,
+    )
+    yuanta_ss = gc.open_by_key(yuanta_file_id)
+    return (
+        root_folder_id,
+        period_folder_id,
+        yuanta_file_id,
+        ws_summary,
+        yuanta_ss.worksheet("all"),
+        yuanta_ss.worksheet("元大"),
+    )
+
+
+def run_yuanta_fee(
     cleaning_file_id: str,
     region: str,
     period: str,
@@ -641,37 +674,34 @@ def run_yuanta(
     elif period.endswith("-2"):
         is_first_half = False
     else:
-        _log(log, f"❌ 元大帳戶失敗：期別格式錯誤 {period}")
+        _log(log, f"❌ 元大承攬費失敗：期別格式錯誤 {period}")
         return False
 
     label = "上半月" if is_first_half else "下半月"
-    _log(log, f"▶ 元大帳戶 {label} 開始（{period}）")
+    _log(log, f"▶ 元大承攬費 {label} 開始（{period}）")
 
     try:
-        cfg = region_cfg or {}
-        root_folder_id = str(cfg.get("root_folder_id", "") or "").strip()
-        if not root_folder_id:
-            raise ValueError("地區設定缺少 root_folder_id")
-
-        gc = get_gspread_client()
-        cleaning_ss = gc.open_by_key(cleaning_file_id)
-        ws_summary = cleaning_ss.worksheet("場次時數薪資總表")
-
-        yuanta_name = f"{period}元大帳戶-{region}"
-        period_folder_id, yuanta_file_id = _yuanta_find_period_file(
+        (
             root_folder_id,
+            period_folder_id,
+            yuanta_file_id,
+            ws_summary,
+            ws_all,
+            ws_yuanta,
+        ) = _yuanta_open_context(
+            cleaning_file_id,
+            region,
             period,
-            yuanta_name,
+            region_cfg,
         )
-        yuanta_ss = gc.open_by_key(yuanta_file_id)
-        ws_all = yuanta_ss.worksheet("all")
-        ws_yuanta = yuanta_ss.worksheet("元大")
 
         source_range = "N4:Q" if is_first_half else "U4:X"
         other_source_range = "N3:Q" if is_first_half else "U3:X"
-
         cleaning_rows = _yuanta_nonempty_rows(
-            ws_summary.get(source_range, value_render_option="UNFORMATTED_VALUE") or []
+            ws_summary.get(
+                source_range,
+                value_render_option="UNFORMATTED_VALUE",
+            ) or []
         )
 
         ws_all.batch_clear(["A2:D"])
@@ -690,7 +720,7 @@ def run_yuanta(
             period,
             region,
         )
-        other_ss = gc.open_by_key(other_file_id)
+        other_ss = get_gspread_client().open_by_key(other_file_id)
         other_ws = other_ss.worksheet("薪資總表")
         other_rows = _yuanta_nonempty_rows(
             other_ws.get(
@@ -716,16 +746,19 @@ def run_yuanta(
                 log,
             )
 
-        # 排除 B 空白與現金
         bank_rows = [
-            row for row in all_rows
+            row
+            for row in all_rows
             if str(row[1] if len(row) > 1 else "").strip()
             and str(row[1]).strip() != "現金"
         ]
 
         ws_yuanta.batch_clear(["A3:E"])
-        yyyymm = period[:6]
-        ws_yuanta.update("H2", [[yyyymm]], value_input_option="USER_ENTERED")
+        ws_yuanta.update(
+            "H2",
+            [[period[:6]]],
+            value_input_option="USER_ENTERED",
+        )
 
         if bank_rows:
             target_date = _yuanta_target_date(period, is_first_half)
@@ -739,8 +772,16 @@ def run_yuanta(
                 export_rows,
                 value_input_option="USER_ENTERED",
             )
-            _yuanta_wait_values(ws_yuanta, f"A3:E{end}", export_rows, log)
-            _log(log, f"  承攬費 {len(bank_rows)} 筆；入帳日 {target_date:%Y%m%d}")
+            _yuanta_wait_values(
+                ws_yuanta,
+                f"A3:E{end}",
+                export_rows,
+                log,
+            )
+            _log(
+                log,
+                f"  承攬費 {len(bank_rows)} 筆；入帳日 {target_date:%Y%m%d}",
+            )
 
         fee_name = f"{period}元大承攬費-{region}.xlsx"
         _yuanta_export_xlsx(
@@ -750,52 +791,102 @@ def run_yuanta(
             log,
         )
 
-        # 下半月若 A121 非空，另外輸出工具包押金
-        if not is_first_half:
-            a121 = str(ws_summary.acell("A121").value or "").strip()
-            if a121:
-                deposit_rows = _yuanta_nonempty_rows(
-                    ws_summary.get(
-                        "AB4:AE",
-                        value_render_option="UNFORMATTED_VALUE",
-                    ) or []
-                )
-                if deposit_rows:
-                    ws_yuanta.batch_clear(["A3:E"])
-                    deposit_date = _next_month_tenth(period)
-                    end = 2 + len(deposit_rows)
-                    deposit_export_rows = [
-                        [deposit_date.strftime("%Y%m%d")] + list(row[:4])
-                        for row in deposit_rows
-                    ]
-                    ws_yuanta.update(
-                        f"A3:E{end}",
-                        deposit_export_rows,
-                        value_input_option="USER_ENTERED",
-                    )
-                    _yuanta_wait_values(
-                        ws_yuanta,
-                        f"A3:E{end}",
-                        deposit_export_rows,
-                        log,
-                    )
-                    deposit_name = f"{period}元大工具包押金-{region}.xlsx"
-                    _yuanta_export_xlsx(
-                        yuanta_file_id,
-                        period_folder_id,
-                        deposit_name,
-                        log,
-                    )
-                    _log(
-                        log,
-                        f"  工具包押金 {len(deposit_rows)} 筆；入帳日 {deposit_date:%Y%m%d}",
-                    )
-
-        record_execution(region, period, "元大帳戶", None)
-        _log(log, f"✅ 元大帳戶 {label} 完成｜{_now_ts()}")
+        record_execution(region, period, "元大承攬費", len(bank_rows))
+        _log(log, f"✅ 元大承攬費 {label} 完成｜{_now_ts()}")
         return True
 
     except Exception as e:
         detail = str(e).strip() or repr(e)
-        _log(log, f"❌ 元大帳戶失敗：{detail}")
+        _log(log, f"❌ 元大承攬費失敗：{detail}")
+        return False
+
+
+def run_yuanta_deposit(
+    cleaning_file_id: str,
+    region: str,
+    period: str,
+    is_first_half: bool,
+    log: List[str],
+    region_cfg: dict = None,
+    **kwargs,
+) -> bool:
+    if not period.endswith("-2"):
+        _log(log, "❌ 元大工具包押金僅能執行下半月期別（-2）")
+        return False
+
+    _log(log, f"▶ 元大工具包押金 下半月 開始（{period}）")
+
+    try:
+        (
+            _,
+            period_folder_id,
+            yuanta_file_id,
+            ws_summary,
+            _,
+            ws_yuanta,
+        ) = _yuanta_open_context(
+            cleaning_file_id,
+            region,
+            period,
+            region_cfg,
+        )
+
+        deposit_rows = _yuanta_nonempty_rows(
+            ws_summary.get(
+                "AB4:AE",
+                value_render_option="UNFORMATTED_VALUE",
+            ) or []
+        )
+        if not deposit_rows:
+            raise ValueError("沒有工具包押金資料，請先執行「⑭ 工具包押金」")
+
+        deposit_date = _next_month_tenth(period)
+        deposit_export_rows = [
+            [deposit_date.strftime("%Y%m%d")] + list(row[:4])
+            for row in deposit_rows
+        ]
+
+        ws_yuanta.batch_clear(["A3:E"])
+        ws_yuanta.update(
+            "H2",
+            [[period[:6]]],
+            value_input_option="USER_ENTERED",
+        )
+        end = 2 + len(deposit_export_rows)
+        ws_yuanta.update(
+            f"A3:E{end}",
+            deposit_export_rows,
+            value_input_option="USER_ENTERED",
+        )
+        _yuanta_wait_values(
+            ws_yuanta,
+            f"A3:E{end}",
+            deposit_export_rows,
+            log,
+        )
+
+        deposit_name = f"{period}元大工具包押金-{region}.xlsx"
+        _yuanta_export_xlsx(
+            yuanta_file_id,
+            period_folder_id,
+            deposit_name,
+            log,
+        )
+        _log(
+            log,
+            f"  工具包押金 {len(deposit_rows)} 筆；入帳日 {deposit_date:%Y%m%d}",
+        )
+
+        record_execution(
+            region,
+            period,
+            "元大工具包押金",
+            len(deposit_rows),
+        )
+        _log(log, f"✅ 元大工具包押金 下半月 完成｜{_now_ts()}")
+        return True
+
+    except Exception as e:
+        detail = str(e).strip() or repr(e)
+        _log(log, f"❌ 元大工具包押金失敗：{detail}")
         return False

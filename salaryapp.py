@@ -570,7 +570,8 @@ FUNCTION_MAP = {
     ],
     "📨 承攬作業": [
         "① 承攬費通知信",
-        "② 元大帳戶",
+        "② 元大承攬費",
+        "③ 元大工具包押金",
     ],
 }
 
@@ -1308,9 +1309,12 @@ if run_clicked and execution_engine == "PYTHON":
 
                         add_log(f"承攬費通知信完成：{count} 筆", "success")
 
-                    elif _plain_func == "元大帳戶":
+                    elif _plain_func in ("元大承攬費", "元大工具包押金"):
                         from modules.cleaning_process_1 import find_cleaning_file
-                        from modules.cleaning_process_4 import run_yuanta
+                        from modules.cleaning_process_4 import (
+                            run_yuanta_deposit,
+                            run_yuanta_fee,
+                        )
 
                         cleaning_file_id = find_cleaning_file(
                             root_id,
@@ -1329,7 +1333,12 @@ if run_clicked and execution_engine == "PYTHON":
                                 )
                                 add_log(msg, level)
                                 
-                        success = run_yuanta(
+                        runner = (
+                            run_yuanta_fee
+                            if _plain_func == "元大承攬費"
+                            else run_yuanta_deposit
+                        )
+                        success = runner(
                             cleaning_file_id=cleaning_file_id,
                             region=_name,
                             period=_period,
@@ -1339,7 +1348,7 @@ if run_clicked and execution_engine == "PYTHON":
                         )
 
                         if not success:
-                            raise RuntimeError("元大帳戶執行失敗")
+                            raise RuntimeError(f"{_plain_func}執行失敗")
 
             except Exception as e:
                 import traceback
