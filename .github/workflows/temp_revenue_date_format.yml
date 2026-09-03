@@ -1,0 +1,49 @@
+name: Temporary revenue date format fix
+
+on:
+  push:
+    branches:
+      - fix/revenue-date-format
+    paths:
+      - .github/workflows/temp_revenue_date_format.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/revenue-date-format
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Patch revenue date formatting
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('modules/payment_reconciliation.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    target_ws.update("A1", data, value_input_option="RAW")\n    log(f"✅ 金流對帳 A1:BJ 已搬入「{sheet_name}」：{len(data)} 列")\n'''
+          new = '''    target_ws.update("A1", data, value_input_option="RAW")\n    date_format = {"numberFormat": {"type": "DATE", "pattern": "yyyy/mm/dd"}}\n    for column in ("C", "D", "H"):\n        target_ws.format(f"{column}:{column}", date_format)\n    log(f"📅 營收總表「{sheet_name}」C/D/H 欄已套用日期格式 yyyy/mm/dd")\n    log(f"✅ 金流對帳 A1:BJ 已搬入「{sheet_name}」：{len(data)} 列")\n'''
+          if old not in text:
+              raise SystemExit('target snippet not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          python -m py_compile modules/payment_reconciliation.py
+          rm .github/workflows/temp_revenue_date_format.yml
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add modules/payment_reconciliation.py .github/workflows/temp_revenue_date_format.yml
+          git commit -m "Format revenue date columns"
+          git push origin HEAD:fix/revenue-date-format
