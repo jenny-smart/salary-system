@@ -1673,6 +1673,10 @@ def export_reconciliation_to_revenue(
     if target_ws.row_count < len(data):
         target_ws.add_rows(len(data) - target_ws.row_count + 100)
     target_ws.update("A1", data, value_input_option="RAW")
+    date_format = {"numberFormat": {"type": "DATE", "pattern": "yyyy/mm/dd"}}
+    for column in ("C", "D", "H"):
+        target_ws.format(f"{column}:{column}", date_format)
+    log(f"📅 營收總表「{sheet_name}」C/D/H 欄已套用日期格式 yyyy/mm/dd")
     log(f"✅ 金流對帳 A1:BJ 已搬入「{sheet_name}」：{len(data)} 列")
     return {"sheet": sheet_name, "count": len(data)}
 
