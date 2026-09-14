@@ -270,7 +270,7 @@ def _write_period_rows(
     other_rows,
     log=None,
 ):
-    period_ws.update_cell(1, 4, "")  # D1：D2:D 已是含期別的實際 PDF 檔名
+    period_ws.update_cell(1, 4, "")  # D1：D2:D 已是含期別的檔名（不含 .pdf）
     period_ws.batch_clear(["B2:D", "F2:F"])
 
     data = []
@@ -280,6 +280,10 @@ def _write_period_rows(
         [name, link, file_name]
         for name, link, _service, file_name in other_rows
     ])
+
+    # 通知信 D 欄只顯示檔名，不影響 Drive 上的 PDF 檔案名稱。
+    for row in data:
+        row[2] = re.sub(r"(?i)\.pdf$", "", row[2])
 
     if data:
         period_ws.update(
