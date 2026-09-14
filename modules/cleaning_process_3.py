@@ -27,6 +27,7 @@ from typing import List, Optional
 
 import gspread
 
+from modules.project_salary import project_people, _present
 from modules.auth import get_gspread_client
 from modules.master_sheet import record_execution
 from modules.period_utils import format_taipei_time
@@ -188,40 +189,7 @@ def _append_project_people_to_summary(
         )
         return []
 
-    # 不使用 worksheet.col_count 判斷最後欄，因工作表網格欄數不一定等於
-    # 實際人員名單的最後欄。改以第 1 列最後一個非空白儲存格判斷。
-    header_row = ws_project_salary.row_values(1)
-    last_header_idx = 0
-    for idx, value in enumerate(header_row, start=1):
-        if str(value).strip():
-            last_header_idx = idx
-
-    if last_header_idx < 12:  # L=12
-        _log(log, "    專案薪資表第 1 列 L 欄之後無人員資料")
-        return []
-
-    last_col = _col_letter(last_header_idx)
-    headers = [header_row[11:last_header_idx]]  # L1 到第 1 列最後非空白欄
-    _log(log, f"    專案薪資表人員欄範圍：L1:{last_col}1")
-
-    row_2045 = ws_project_salary.get(
-        f"L2045:{last_col}2045", value_render_option="UNFORMATTED_VALUE"
-    ) or [[]]
-    row_2046 = ws_project_salary.get(
-        f"L2046:{last_col}2046", value_render_option="UNFORMATTED_VALUE"
-    ) or [[]]
-
-    names = []
-    for idx, name in enumerate(headers[0]):
-        name = str(name).strip()
-        v1 = _to_num(row_2045[0][idx] if idx < len(row_2045[0]) else 0)
-        v2 = _to_num(row_2046[0][idx] if idx < len(row_2046[0]) else 0)
-        if name and (v1 != 0 or v2 != 0):
-            names.append(name)
-
-    if not names:
-        _log(log, "    專案薪資表無非零人員")
-        return []
+    names = project_people(ws_project_salary, log)
 
     # 重跑結算時先移除上次追加的專案列，避免重複。
     existing_formulas = ws_summary.get(
@@ -232,20 +200,30 @@ def _append_project_people_to_summary(
         formulas = " ".join(str(cell) for cell in row[3:5])
         if "專案薪資表" in formulas:
             old_project_rows.append(SUMMARY_START + offset)
-    if old_project_rows:
-        ws_summary.batch_clear([f"A{row}:G{row}" for row in old_project_rows])
-
-    existing = ws_summary.get(f"A{SUMMARY_START}:A{SUMMARY_END}") or []
+    # 依 A 欄實際值找最後一位原有人員；0 / 空白不是姓名。
+    existing = ws_summary.get(
+        f"A{SUMMARY_START}:A{SUMMARY_END}", value_render_option="UNFORMATTED_VALUE"
+    ) or []
+    old_project_row_set = set(old_project_rows)
     first_empty = SUMMARY_START
     for offset, row in enumerate(existing):
-        if row and str(row[0]).strip():
-            first_empty = SUMMARY_START + offset + 1
-        else:
-            break
-    if first_empty + len(names) - 1 > SUMMARY_END:
-        raise ValueError("場次時數薪資總表 A 欄空間不足，無法加入專案人員")
+        row_num = SUMMARY_START + offset
+        if row_num not in old_project_row_set and row and _present(row[0]):
+            first_empty = row_num + 1
 
-    project_rows = list(range(first_empty, first_empty + len(names)))
+    last_row = first_empty + len(names) - 1
+    if last_row > SUMMARY_END:
+        raise ValueError(
+            f"場次時數薪資總表 A 欄空間不足：專案 {len(names)} 人，"
+            f"A{first_empty}:A{SUMMARY_END} 可用 {max(0, SUMMARY_END-first_empty+1)} 列"
+        )
+    # 容量確認後才清除舊專案列，避免失敗時先刪除資料。
+    if old_project_rows:
+        ws_summary.batch_clear([f"A{row}:G{row}" for row in old_project_rows])
+    if not names:
+        return []
+
+    project_rows = list(range(first_empty, last_row + 1))
     data = []
     for row_num, name in zip(project_rows, names):
         data.extend([
@@ -265,7 +243,7 @@ def _append_project_people_to_summary(
         "data": data,
     })
     time.sleep(2)
-    _log(log, f"    總表追加專案人員：{len(names)} 人")
+    _log(log, f"    總表追加專案人員：{len(names)} 人（A{first_empty}:A{last_row}）")
     return project_rows
 
 
