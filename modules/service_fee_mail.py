@@ -271,7 +271,7 @@ def _write_period_rows(
     log=None,
 ):
     period_ws.update_cell(1, 4, "")  # D1：D2:D 已是含期別的檔名（不含 .pdf）
-    period_ws.batch_clear(["B2:D", "F2:F"])
+    period_ws.batch_clear(["B2:F"])
 
     data = []
     data.extend([[name, link, file_name] for name, link, file_name in cleaning_rows])
@@ -284,10 +284,11 @@ def _write_period_rows(
     # 通知信 D 欄只顯示檔名，不影響 Drive 上的 PDF 檔案名稱。
     for row in data:
         row[2] = re.sub(r"(?i)\.pdf$", "", row[2])
+        row.append(row[2])  # E 欄與 D 欄使用相同檔名。
 
     if data:
         period_ws.update(
-            f"B2:D{1 + len(data)}",
+            f"B2:E{1 + len(data)}",
             data,
             value_input_option="USER_ENTERED",
         )
@@ -306,15 +307,6 @@ def _write_period_rows(
     cleaning_count = len(cleaning_rows)
     project_count = len(project_rows)
     other_count = len(other_rows)
-    other_start = 2 + cleaning_count + project_count
-    _replace_cleaning_text_for_other_rows(
-        period_ws,
-        other_start,
-        other_rows,
-        period,
-        log=log,
-    )
-
     _emit(
         log,
         f"{period} 通知名單完成並核對：清潔 {cleaning_count}、專案 {project_count}、其他 {other_count}，共 {written_count} 筆",
