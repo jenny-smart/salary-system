@@ -32,6 +32,7 @@ from typing import List, Tuple
 import gspread
 from gspread.utils import rowcol_to_a1
 
+from modules.project_salary import project_people
 from modules.auth import get_gspread_client
 from modules.period_utils import format_taipei_time
 from modules.master_sheet import record_execution
@@ -415,6 +416,9 @@ def run_preparation(
         _log(log, "  步驟5：移除清潔訂單 AH 欄檸檬人")
         lemon_count = _prep_step5_remove_lemon(ws_order, log)
         _log(log, f"  步驟5 完成：處理 {lemon_count} 筆")
+
+        # 訂單搬入後核對專案姓名的同列場次必須為 1。
+        project_people(_ws("專案薪資表"), log)
 
         # ── 打卡 ─────────────────────────────────────────────
         ts = _now_ts()
