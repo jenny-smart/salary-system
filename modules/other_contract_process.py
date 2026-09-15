@@ -492,6 +492,45 @@ def _process_order_data(
 # 📊  結算作業
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _check_salary_quantity_totals(ss, service_type, log):
+    """逐欄核對明細與品項統計；明細終點依 B 欄服務日期判定。"""
+    for svc, (summary_start, summary_end) in {
+        "家電": (200, 212), "水洗": (201, 224),
+    }.items():
+        if service_type and service_type != svc:
+            continue
+        ws = ss.worksheet(SERVICE_CONFIG[svc]["salary_table"])
+        rows = ws.get(f"B2:O{summary_end}", value_render_option="UNFORMATTED_VALUE")
+        detail_rows = rows[:summary_start - 2]
+        last_detail = max(
+            (i + 1 for i, row in enumerate(detail_rows)
+             if row and row[0] is not None and str(row[0]).strip()),
+            default=0,
+        )
+        for col, letter in enumerate("JKLMNO", start=8):
+            def total(selected):
+                result = 0.0
+                for row in selected:
+                    value = row[col] if len(row) > col else ""
+                    if value is None or value == "":
+                        continue
+                    result += float(str(value).replace(",", ""))
+                return result
+
+            try:
+                detail = total(detail_rows[:last_detail])
+                summary = total(rows[summary_start - 2:summary_end - 1])
+            except (TypeError, ValueError):
+                log(f"⚠️ {svc} {letter} 欄核對失敗：含非數字或公式錯誤，請檢查")
+                continue
+            matched = abs(detail - summary) < 1e-9
+            log(
+                f"{'✅' if matched else '⚠️'} {svc} {letter} 欄："
+                f"明細合計={detail:g}，{summary_start}:{summary_end} 合計={summary:g}，"
+                f"{'相符' if matched else '不相符'}"
+            )
+
+
 def run_other_settlement(
     root_folder_id: str,
     region: str,
@@ -536,6 +575,8 @@ def run_other_settlement(
 
     gc = get_gspread_client()
     other = gc.open_by_key(other_file_id)
+
+    _check_salary_quantity_totals(other, service_type, log)
 
     # Step 1：先操作薪資總表，並保留本次篩選結果做 PDF 名單來源。
     try:
