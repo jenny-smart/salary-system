@@ -566,7 +566,7 @@ FUNCTION_MAP = {
     "📦 其他承攬": [
         "① 執行前置作業",
         "② 執行全部結算",
-        "③ 產出全部薪資單",
+        "③ 產出全部PDF",
     ],
     "📨 承攬作業": [
         "① 承攬費通知信",
@@ -1269,7 +1269,7 @@ if run_clicked and execution_engine == "PYTHON":
                             service_type=None, log=other_log,
                         )
                         add_log("其他承攬結算完成", "success")
-                    elif _plain_func == "產出全部薪資單":
+                    elif _plain_func == "產出全部PDF":
                         result = run_other_pdf(
                             root_folder_id=root_id, region=_name, period=_period,
                             service_type=None, log=other_log,

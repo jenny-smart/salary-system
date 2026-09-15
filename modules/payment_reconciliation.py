@@ -435,6 +435,10 @@ def process_template(
         log(f"⚠️ {w}")
     log(f"🔵 拆解完成：新增 {expand_count} 列")
 
+    for row in expanded_new:
+        if row[4] == "4家電洗衣機清潔" and row[5] == "洗衣機-LG雙能洗":
+            row[5] = "洗衣機-特殊款洗衣機"
+
     # ── 加工後主單數 double check ─────────────────────────────
     after_main       = _count_main_by_service(expanded_new)
     after_rows_count = _count_rows_by_service(expanded_new)
