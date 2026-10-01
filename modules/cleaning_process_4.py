@@ -556,11 +556,40 @@ def _yuanta_wait_values(
     raise TimeoutError(f"{ws.title}!{a1_range} 寫入後仍未同步，取消匯出")
 
 
+def _yuanta_split_appliance_rows(other_rows, source_rows, is_first_half):
+    """依原始服務、姓名與當期金額逐筆分流，保留同名的其他服務。"""
+    from collections import Counter
+    from decimal import Decimal
+
+    def key(name, amount):
+        return str(name or "").strip(), Decimal(str(amount).replace(",", "").strip())
+
+    appliance = Counter()
+    for row in source_rows:
+        row = list(row) + [""] * max(0, 6 - len(row))
+        if str(row[0] or "").strip() not in ("冷氣", "家電"):
+            continue
+        amount = row[4 if is_first_half else 5]
+        if row[1] and _to_num(amount) > 0:
+            appliance[key(row[1], amount)] += 1
+
+    regional_rows, appliance_rows = [], []
+    for row in other_rows:
+        row_key = key(row[3], row[2])
+        if appliance[row_key]:
+            appliance_rows.append(row)
+            appliance[row_key] -= 1
+        else:
+            regional_rows.append(row)
+    return regional_rows, appliance_rows
+
+
 def _yuanta_export_xlsx(
     spreadsheet_id: str,
     folder_id: str,
     output_name: str,
     log: List[str],
+    payout_rows: list[list] | None = None,
 ) -> None:
     from googleapiclient.http import MediaIoBaseUpload
     from openpyxl import load_workbook
@@ -582,6 +611,21 @@ def _yuanta_export_xlsx(
         raise RuntimeError("匯出的 xlsx 找不到『元大』工作表")
 
     ws = wb["元大"]
+    if payout_rows is not None:
+        for row in ws.iter_rows(min_row=3, max_row=max(ws.max_row, 3), max_col=5):
+            for cell in row:
+                cell.value = None
+        for row_idx, values in enumerate(payout_rows, start=3):
+            for col_idx, value in enumerate(values, start=1):
+                ws.cell(row_idx, col_idx).value = value
+        if "all" in wb.sheetnames:
+            all_ws = wb["all"]
+            for row in all_ws.iter_rows(min_row=2, max_row=max(all_ws.max_row, 2), max_col=4):
+                for cell in row:
+                    cell.value = None
+            for row_idx, values in enumerate(payout_rows, start=2):
+                for col_idx, value in enumerate(values[1:], start=1):
+                    all_ws.cell(row_idx, col_idx).value = value
     last_row = max(ws.max_row, 3)
     for row_idx in range(3, last_row + 1):
         for col_idx in range(6, 13):  # F:L
@@ -729,6 +773,14 @@ def run_yuanta_fee(
             ) or []
         )
 
+        appliance_rows = []
+        if region == "桃園":
+            other_rows, appliance_rows = _yuanta_split_appliance_rows(
+                other_rows,
+                other_ws.get("A3:F", value_render_option="UNFORMATTED_VALUE") or [],
+                is_first_half,
+            )
+
         if other_rows:
             other_end = next_row + len(other_rows) - 1
             ws_all.update(
@@ -790,6 +842,22 @@ def run_yuanta_fee(
             fee_name,
             log,
         )
+
+        if appliance_rows:
+            target_date = _yuanta_target_date(period, is_first_half)
+            appliance_export_rows = [
+                [target_date.strftime("%Y%m%d")] + list(row[:4])
+                for row in appliance_rows
+                if str(row[1]).strip() and str(row[1]).strip() != "現金"
+            ]
+            _yuanta_export_xlsx(
+                yuanta_file_id,
+                period_folder_id,
+                f"{period}元大承攬費-家電.xlsx",
+                log,
+                payout_rows=appliance_export_rows,
+            )
+            _log(log, f"  家電承攬費另存 {len(appliance_export_rows)} 筆")
 
         record_execution(region, period, "元大承攬費", len(bank_rows))
         _log(log, f"✅ 元大承攬費 {label} 完成｜{_now_ts()}")
