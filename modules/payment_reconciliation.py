@@ -1350,7 +1350,7 @@ def move_invoice_and_bluenew(
 ) -> dict:
     """
     發票 A2:R、藍新收款 A2:U、藍新退款 A2:W
-    每次清空再貼
+    每次先清空再貼，沒有來源檔案也清空。
     """
     def log(msg):
         if log_fn:
@@ -1366,19 +1366,20 @@ def move_invoice_and_bluenew(
         keyword    = target["keyword"]
         range_end  = target["range_end"]
 
-        file_id = _find_sheet_by_keyword(folder_id, keyword)
-        if not file_id:
-            log(f"⚠️ 找不到 {keyword}，略過")
-            counts[keyword] = 0
-            continue
-
-        src_ss    = open_spreadsheet(file_id)
-        src_sheet = src_ss.worksheets()[0]
-        rows      = get_all_data(src_sheet, "A2", range_end)
-
         try:
             target_sheet = ss.worksheet(sheet_name)
             target_sheet.batch_clear([f"A2:{range_end}"])
+            log(f"🔵 已清空 {sheet_name}：A2:{range_end}")
+
+            file_id = _find_sheet_by_keyword(folder_id, keyword)
+            if not file_id:
+                log(f"⚠️ 找不到 {keyword}，目標範圍已清空")
+                counts[keyword] = 0
+                continue
+
+            src_ss    = open_spreadsheet(file_id)
+            src_sheet = src_ss.worksheets()[0]
+            rows      = get_all_data(src_sheet, "A2", range_end)
             if rows:
                 paste_data(target_sheet, 2, rows)
             counts[keyword] = len(rows)
