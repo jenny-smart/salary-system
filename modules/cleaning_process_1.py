@@ -322,6 +322,7 @@ def run_preparation(
     """
     前置作業主函數。
 
+    上半月：先清空 01專員請款～05組長津貼的 A2:AC。
     步驟1：薪資表特定列處理（只清空/貼值，薪資表有自己的公式，不另外寫入資料）
     步驟2：讀取清潔營收明細（B欄非空，筆數參照主控表第25列）
     步驟3：上半月清空清潔訂單/專案訂單；下半月找接續列
@@ -380,6 +381,17 @@ def run_preparation(
                 "請確認金流對帳 ⑤ 分類搬運已完成"
             )
         _log(log, f"    主控表「複製清潔訂單列數」：{period_count} 列")
+
+        if is_first_half:
+            allowance_sheets = [
+                _ws(name) for name in (
+                    "01專員請款", "02儲值獎金", "03新人實境",
+                    "04新人實習", "05組長津貼",
+                )
+            ]
+            for ws in allowance_sheets:
+                ws.batch_clear(["A2:AC"])
+                _log(log, f"    上半月：已清空 {ws.title} A2:AC")
 
         # ── 步驟1：薪資表特定列處理 ──────────────────────────
         _log(log, "  步驟1：薪資表特定列處理")
