@@ -430,7 +430,7 @@ def run_preparation(
         _log(log, f"  步驟5 完成：處理 {lemon_count} 筆")
 
         # 訂單搬入後核對專案姓名的同列場次必須為 1。
-        project_people(_ws("專案薪資表"), log, fill_missing=True)
+        project_people(_ws("專案薪資表"), log)
 
         # ── 打卡 ─────────────────────────────────────────────
         ts = _now_ts()

@@ -34,8 +34,8 @@ def _col(number):
     return result
 
 
-def project_people(ws, log, *, fill_missing=False):
-    """B2 有資料時，驗證 F 姓名對應同列人員欄必須等於 1；前置作業可補值，排除 2001 起統計列。"""
+def project_people(ws, log):
+    """B2 有資料時，只驗證 F 姓名對應同列人員欄的公式結果等於 1，不補值；排除 2001 起統計列。"""
     b2 = ws.get('B2', value_render_option='UNFORMATTED_VALUE') or [[]]
     if not b2[0] or not _present(b2[0][0]):
         log.append('    專案薪資表 B2 為空或 0，無專案人員')
@@ -52,7 +52,6 @@ def project_people(ws, log, *, fill_missing=False):
     rows = ws.get(f'F2:{last_col}2000', value_render_option='UNFORMATTED_VALUE') or []
     eligible = set()
     errors = []
-    updates = []
     for row_num, row in enumerate(rows, 2):
         if not row or not _present(row[0]):
             continue
@@ -67,20 +66,13 @@ def project_people(ws, log, *, fill_missing=False):
                 continue
             col, name = columns[key]
             value = row[col - 6] if col - 6 < len(row) else 0
-            if not _is_one(value) and fill_missing:
-                updates.append({'range': f'{_col(col)}{row_num}', 'values': [[1]]})
-            elif not _is_one(value):
+            if not _is_one(value):
                 errors.append(f'F{row_num}「{name}」對應 {_col(col)}{row_num} 應為 1，實際值：{value!r}')
-            if row_num <= 1000 and (_is_one(value) or fill_missing):
+            if row_num <= 1000 and _is_one(value):
                 eligible.add(key)
     if errors:
         raise ValueError('專案薪資表檢查失敗：' + '；'.join(errors[:10]) +
                          (f'（共 {len(errors)} 處）' if len(errors) > 10 else ''))
-    if updates:
-        for start in range(0, len(updates), 500):
-            ws.batch_update(updates[start:start + 500], value_input_option='RAW')
-        log.append(f'    專案姓名對應欄已填入 1：{len(updates)} 格')
-        return project_people(ws, log)
     names = [name for key, (_, name) in columns.items() if key in eligible]
     log.append(f'    專案姓名對應檢查通過，第 2～1000 列有效人員：{len(names)} 人')
     return names
