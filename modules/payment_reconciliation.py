@@ -1239,7 +1239,7 @@ def move_refund_and_prepaid(
     1. 搬運已退款全部加收
     2. 搬運已退款全部退款
     3. 去重（KEY：A+B+Y欄）
-    4. 搬運預收（不去重）
+    4. 搬運預收（不去重，依 H 欄日期由早到晚排序）
     """
     def log(msg):
         if log_fn:
@@ -1297,10 +1297,12 @@ def move_refund_and_prepaid(
         src_sheet = src_ss.worksheets()[0]
         rows      = get_all_data(src_sheet, "A2", "BJ")
         if rows:
+            # 整列一起排序；空白或無法辨識的日期排最後。
+            rows.sort(key=lambda row: _date_sort_key(row[7] if len(row) > 7 else ""))
             start_row = find_last_non_empty_row(template, 2) + 1
             paste_data(template, start_row, rows)
             counts["預收"] = len(rows)
-            log(f"✅ 預收：{len(rows)} 筆")
+            log(f"✅ 預收：{len(rows)} 筆（已依 H 欄日期由早到晚排序）")
         else:
             counts["預收"] = 0
             log("⚠️ 預收無資料")
