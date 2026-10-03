@@ -357,8 +357,11 @@ def convert_period_order_file(
     folder_id = period_folder["id"]
     src = None
     found_name = None
-    for ext in (".xlsx", ".xls"):
-        candidate = f"{period}訂單-{region_name}{ext}"
+    candidates = [
+        f"{period}{separator}訂單-{region_name}{ext}"
+        for separator in ("-", "") for ext in (".xlsx", ".xls")
+    ]
+    for candidate in candidates:
         log(f"🔍 尋找訂單檔案：{candidate}")
         src = find_file_in_folder(drive, folder_id, candidate)
         if src:
@@ -412,9 +415,16 @@ def convert_payment_files(
     folder_id = period_folder["id"]
     results = {}
     for keyword, ext, is_zip in PAYMENT_FILE_CONFIGS:
-        file_name = f"{period}{keyword}-{region_name}.{ext}"
-        log(f"🔍 尋找：{file_name}")
-        src = find_file_in_folder(drive, folder_id, file_name)
+        candidates = [
+            f"{period}-{keyword}-{region_name}.{ext}",
+            f"{period}{keyword}-{region_name}.{ext}",
+        ]
+        src = None
+        for file_name in candidates:
+            log(f"🔍 尋找：{file_name}")
+            src = find_file_in_folder(drive, folder_id, file_name)
+            if src:
+                break
         if not src:
             log(f"⚠️ 找不到：{file_name}")
             results[keyword] = None
@@ -425,7 +435,7 @@ def convert_payment_files(
                 drive, folder_id, src["id"], period, keyword, region_name, log
             )
         else:
-            sheet_name = file_name.rsplit(".", 1)[0]
+            sheet_name = f"{period}{keyword}-{region_name}"
             log(f"🔄 轉檔：{file_name}")
             results[keyword] = convert_to_google_sheet(
                 drive, folder_id, src["id"], sheet_name
