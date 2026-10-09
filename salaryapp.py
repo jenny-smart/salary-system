@@ -1091,6 +1091,10 @@ if run_clicked and execution_engine == "PYTHON":
                             revenue_summary_id = str(
                                 fresh_region.get("revenue_summary_id", "") or ""
                             ).strip()
+                        # 期別所屬年度的營業額總表（202701 → 2027 檔）
+                        revenue_summary_id = cfg_for_period(
+                            {"revenue_summary_id": revenue_summary_id}, _period
+                        ).get("revenue_summary_id", revenue_summary_id)
                         result = export_reconciliation_to_revenue(
                             root_id, revenue_summary_id, _period, _name, add_log
                         )

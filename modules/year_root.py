@@ -73,7 +73,7 @@ def root_for_period(drive, root_folder_id: str, period: str) -> str:
 # ── 檔案層級：地區設定裡的年度檔 ID 換成期別所屬年度的檔案 ─────────────
 # 例：roster_id 指向「2026專員名冊與時數-台北」，執行 202701 的 00調薪／結算時
 #     改用「2027專員名冊與時數-台北」（{YYYYMM}專員名冊 在新年度檔）。
-YEAR_FILE_KEYS = ("allowance_id", "salary_id", "roster_id", "mail_id")
+YEAR_FILE_KEYS = ("allowance_id", "salary_id", "roster_id", "mail_id", "revenue_summary_id")
 _FILE_CACHE: Dict[Tuple[str, str], str] = {}
 
 
