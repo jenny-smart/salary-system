@@ -15,6 +15,7 @@ from modules.auth import (
     get_jenny_gspread_client,
 )
 from modules.master_sheet import MASTER_SHEET_ID, record_execution
+from modules.year_root import root_for_period
 
 
 PERIOD_RE = re.compile(r"^(\d{6})-([12])$")
@@ -45,6 +46,7 @@ def _region_ids(gc, region: str) -> dict:
 
 def _find_period_file(root_id: str, period: str, label: str, region: str) -> str:
     drive = get_drive_service()
+    root_id = root_for_period(drive, root_id, period)
     folders = drive.files().list(
         q=(
             f"'{root_id}' in parents and name='{period}' "
