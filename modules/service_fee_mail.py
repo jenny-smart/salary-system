@@ -15,7 +15,7 @@ from modules.auth import (
     get_jenny_gspread_client,
 )
 from modules.master_sheet import MASTER_SHEET_ID, record_execution
-from modules.year_root import root_for_period
+from modules.year_root import cfg_for_period, root_for_period
 
 
 PERIOD_RE = re.compile(r"^(\d{6})-([12])$")
@@ -472,7 +472,7 @@ def sync_service_fee_mail(
     # mail_id 試算表可能沒有分享給 Service Account，因此必須用 Jenny 本人權限。
     mail_gc = get_jenny_gspread_client()
 
-    cfg = _region_ids(gc, region)
+    cfg = cfg_for_period(_region_ids(gc, region), period)
 
     mail_id = str(mail_id or cfg.get("mail_id", "") or "").strip()
     roster_id = str(roster_id or cfg.get("roster_id", "") or "").strip()

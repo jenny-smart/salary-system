@@ -23,12 +23,13 @@ class FakeDrive:
 
     def get(self, fileId, **_):
         i = self.items[fileId]
-        return _Req({"id": i["id"], "name": i["name"], "parents": [i["parent"]] if i.get("parent") else []})
+        return _Req({**i, "parents": [i["parent"]] if i.get("parent") else []})
 
     def list(self, q, **_):
-        name = re.search(r"name='(.*?)' and", q).group(1)
+        m = re.search(r"name='(.*?)' and", q)
         parent = re.search(r"'([^']+)' in parents", q).group(1)
-        return _Req({"files": [i for i in self.items.values() if i["name"] == name and i.get("parent") == parent]})
+        return _Req({"files": [i for i in self.items.values()
+                               if i.get("parent") == parent and (not m or i["name"] == m.group(1))]})
 
 
 @pytest.fixture
@@ -55,3 +56,18 @@ def test_next_year_and_previous_year(drive):
 def test_missing_year_folder(drive):
     with pytest.raises(FileNotFoundError):
         root_for_period(drive, "tp26", "202801-1")
+
+
+def test_file_for_period_follows_year_folder(drive):
+    from modules.year_root import _FILE_CACHE, file_for_period
+    _FILE_CACHE.clear()
+    drive.items.update({
+        "r26": {"id": "r26", "name": "2026專員名冊與時數-台北", "parent": "tp26",
+                "mimeType": "application/vnd.google-apps.spreadsheet"},
+        "r27": {"id": "r27", "name": "2027專員名冊與時數-台北", "parent": "tp27",
+                "mimeType": "application/vnd.google-apps.spreadsheet"},
+    })
+    for f in ("top", "y26", "y27", "tp26", "tp27"):
+        drive.items[f]["mimeType"] = "application/vnd.google-apps.folder"
+    assert file_for_period(drive, "r26", "202612-2") == "r26"
+    assert file_for_period(drive, "r26", "202701-1") == "r27"

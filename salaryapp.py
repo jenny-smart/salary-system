@@ -6,6 +6,7 @@ import streamlit as st
 import yaml
 from datetime import datetime
 from modules.period_utils import get_auto_period, is_first_half
+from modules.year_root import cfg_for_period
 
 st.set_page_config(
     page_title="Lemon Clean 薪資系統",
@@ -1146,7 +1147,7 @@ if run_clicked and execution_engine == "PYTHON":
                                 period=_period,
                                 is_first_half=_is_first_half,
                                 log=live,
-                                region_cfg=_region,
+                                region_cfg=cfg_for_period(_region, _period),
                                 **kwargs,
                             )
                             return success
@@ -1219,7 +1220,7 @@ if run_clicked and execution_engine == "PYTHON":
                                 period           = _period,
                                 job_type         = job_type,
                                 log              = live,
-                                region_cfg       = _region,
+                                region_cfg       = cfg_for_period(_region, _period),
                             )
                             # 儲存到 session_state 供 rerun 後顯示下載按鈕
                             if isinstance(pdf_result, dict):
@@ -1344,7 +1345,7 @@ if run_clicked and execution_engine == "PYTHON":
                             period=_period,
                             is_first_half=_is_first_half,
                             log=LiveLog(),
-                            region_cfg=_region,
+                            region_cfg=cfg_for_period(_region, _period),
                         )
 
                         if not success:
