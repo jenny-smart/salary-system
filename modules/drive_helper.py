@@ -13,6 +13,7 @@ import streamlit as st
 from googleapiclient.http import MediaIoBaseUpload
 
 from modules.auth import get_jenny_drive_service
+from modules.year_root import root_for_period
 from modules.period_utils import PERIOD_FILE_LABELS, get_file_name
 
 
@@ -257,22 +258,24 @@ def create_period_folder_and_files(
     results = {}
 
     log(f"🔐 Jenny OAuth：建立期別 {period}")
-    existing = get_folder_by_name(drive, root_folder_id, period)
+    period_root = root_for_period(drive, root_folder_id, period)
+    previous_root = root_for_period(drive, root_folder_id, previous_period)
+    existing = get_folder_by_name(drive, period_root, period)
     if existing:
         period_folder_id = existing["id"]
         folder_created = False
         log(f"📁 {period} 已存在，繼續執行")
     else:
-        period_folder_id = get_or_create_folder(drive, root_folder_id, period)
+        period_folder_id = get_or_create_folder(drive, period_root, period)
         folder_created = True
         log(f"✅ 期別資料夾已建立：{period}")
     results["period_folder_id"] = period_folder_id
     results["folder_created"] = folder_created
 
     log(f"🔍 尋找上一期資料夾：{previous_period}")
-    prev_folder = get_folder_by_name(drive, root_folder_id, previous_period)
+    prev_folder = get_folder_by_name(drive, previous_root, previous_period)
     if not prev_folder:
-        found = list_folder_names(drive, root_folder_id)
+        found = list_folder_names(drive, previous_root)
         raise Exception(
             f"找不到上一期資料夾：{previous_period}，根目錄下找到：{found}"
         )
@@ -350,7 +353,7 @@ def convert_period_order_file(
 
     drive = _drive()
     log("🔐 使用 Jenny OAuth")
-    period_folder = get_folder_by_name(drive, root_folder_id, period)
+    period_folder = get_folder_by_name(drive, root_for_period(drive, root_folder_id, period), period)
     if not period_folder:
         raise Exception(f"找不到期別資料夾：{period}，請先建立期別資料夾")
 
@@ -408,7 +411,7 @@ def convert_payment_files(
 
     drive = _drive()
     log("🔐 使用 Jenny OAuth")
-    period_folder = get_folder_by_name(drive, root_folder_id, period)
+    period_folder = get_folder_by_name(drive, root_for_period(drive, root_folder_id, period), period)
     if not period_folder:
         raise Exception(f"找不到期別資料夾：{period}")
 

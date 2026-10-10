@@ -6,6 +6,7 @@ import streamlit as st
 import yaml
 from datetime import datetime
 from modules.period_utils import get_auto_period, is_first_half
+from modules.year_root import cfg_for_period
 
 st.set_page_config(
     page_title="Lemon Clean 薪資系統",
@@ -963,7 +964,7 @@ if run_clicked and execution_engine == "PYTHON":
 
                     elif "⑨ 搬運ATM" in _func:
                         from modules.payment_reconciliation import move_atm_from_allowance
-                        allowance_id = _region.get("allowance_id", "")
+                        allowance_id = cfg_for_period(_region, _period).get("allowance_id", "")
                         result = move_atm_from_allowance(allowance_id, root_id, _period, _name, add_log)
                         add_log(f"搬運ATM完成：{result['count']} 筆", "success")
 
@@ -1090,6 +1091,10 @@ if run_clicked and execution_engine == "PYTHON":
                             revenue_summary_id = str(
                                 fresh_region.get("revenue_summary_id", "") or ""
                             ).strip()
+                        # 期別所屬年度的營業額總表（202701 → 2027 檔）
+                        revenue_summary_id = cfg_for_period(
+                            {"revenue_summary_id": revenue_summary_id}, _period
+                        ).get("revenue_summary_id", revenue_summary_id)
                         result = export_reconciliation_to_revenue(
                             root_id, revenue_summary_id, _period, _name, add_log
                         )
@@ -1146,7 +1151,7 @@ if run_clicked and execution_engine == "PYTHON":
                                 period=_period,
                                 is_first_half=_is_first_half,
                                 log=live,
-                                region_cfg=_region,
+                                region_cfg=cfg_for_period(_region, _period),
                                 **kwargs,
                             )
                             return success
@@ -1219,7 +1224,7 @@ if run_clicked and execution_engine == "PYTHON":
                                 period           = _period,
                                 job_type         = job_type,
                                 log              = live,
-                                region_cfg       = _region,
+                                region_cfg       = cfg_for_period(_region, _period),
                             )
                             # 儲存到 session_state 供 rerun 後顯示下載按鈕
                             if isinstance(pdf_result, dict):
@@ -1344,7 +1349,7 @@ if run_clicked and execution_engine == "PYTHON":
                             period=_period,
                             is_first_half=_is_first_half,
                             log=LiveLog(),
-                            region_cfg=_region,
+                            region_cfg=cfg_for_period(_region, _period),
                         )
 
                         if not success:

@@ -15,6 +15,7 @@ from modules.auth import (
     get_jenny_gspread_client,
 )
 from modules.master_sheet import MASTER_SHEET_ID, record_execution
+from modules.year_root import cfg_for_period, root_for_period
 
 
 PERIOD_RE = re.compile(r"^(\d{6})-([12])$")
@@ -45,6 +46,7 @@ def _region_ids(gc, region: str) -> dict:
 
 def _find_period_file(root_id: str, period: str, label: str, region: str) -> str:
     drive = get_drive_service()
+    root_id = root_for_period(drive, root_id, period)
     folders = drive.files().list(
         q=(
             f"'{root_id}' in parents and name='{period}' "
@@ -470,10 +472,16 @@ def sync_service_fee_mail(
     # mail_id 試算表可能沒有分享給 Service Account，因此必須用 Jenny 本人權限。
     mail_gc = get_jenny_gspread_client()
 
-    cfg = _region_ids(gc, region)
+    # 呼叫端傳入的 ID 也要依期別年度換檔（避免 2027 期別仍寫入 2026 mail／名冊）
+    cfg = dict(_region_ids(gc, region))
+    if str(mail_id or "").strip():
+        cfg["mail_id"] = str(mail_id).strip()
+    if str(roster_id or "").strip():
+        cfg["roster_id"] = str(roster_id).strip()
+    cfg = cfg_for_period(cfg, period)
 
-    mail_id = str(mail_id or cfg.get("mail_id", "") or "").strip()
-    roster_id = str(roster_id or cfg.get("roster_id", "") or "").strip()
+    mail_id = str(cfg.get("mail_id", "") or "").strip()
+    roster_id = str(cfg.get("roster_id", "") or "").strip()
     if not mail_id:
         raise ValueError(f"【{region}】地區設定 mail_id 為空")
     if not roster_id:

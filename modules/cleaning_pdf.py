@@ -34,6 +34,7 @@ import requests
 
 from modules.auth import get_gspread_client, get_drive_service
 from modules.period_utils import format_taipei_time
+from modules.year_root import root_for_period
 import streamlit as st
 
 
@@ -300,7 +301,7 @@ def _prepare_drive_output(root_folder_id: str, period: str, log: List[str]):
     ]:
         try:
             drive = factory()
-            folder_id = _get_or_create_pdf_folder(root_folder_id, period, drive)
+            folder_id = _get_or_create_pdf_folder(root_for_period(drive, root_folder_id, period), period, drive)
             if errors:
                 _log(log, f"    ⚠️ 使用者 OAuth 失敗，改用（{label}）：{errors[-1]}")
             else:
