@@ -964,7 +964,7 @@ if run_clicked and execution_engine == "PYTHON":
 
                     elif "⑨ 搬運ATM" in _func:
                         from modules.payment_reconciliation import move_atm_from_allowance
-                        allowance_id = _region.get("allowance_id", "")
+                        allowance_id = cfg_for_period(_region, _period).get("allowance_id", "")
                         result = move_atm_from_allowance(allowance_id, root_id, _period, _name, add_log)
                         add_log(f"搬運ATM完成：{result['count']} 筆", "success")
 

@@ -472,10 +472,16 @@ def sync_service_fee_mail(
     # mail_id 試算表可能沒有分享給 Service Account，因此必須用 Jenny 本人權限。
     mail_gc = get_jenny_gspread_client()
 
-    cfg = cfg_for_period(_region_ids(gc, region), period)
+    # 呼叫端傳入的 ID 也要依期別年度換檔（避免 2027 期別仍寫入 2026 mail／名冊）
+    cfg = dict(_region_ids(gc, region))
+    if str(mail_id or "").strip():
+        cfg["mail_id"] = str(mail_id).strip()
+    if str(roster_id or "").strip():
+        cfg["roster_id"] = str(roster_id).strip()
+    cfg = cfg_for_period(cfg, period)
 
-    mail_id = str(mail_id or cfg.get("mail_id", "") or "").strip()
-    roster_id = str(roster_id or cfg.get("roster_id", "") or "").strip()
+    mail_id = str(cfg.get("mail_id", "") or "").strip()
+    roster_id = str(cfg.get("roster_id", "") or "").strip()
     if not mail_id:
         raise ValueError(f"【{region}】地區設定 mail_id 為空")
     if not roster_id:
