@@ -532,7 +532,6 @@ def _render_log(placeholder):
 FUNCTION_MAP = {
     "💰 金流對帳": [
         "① 建立期別資料夾與檔案（手動）",
-        "① 建立期別資料夾與檔案（排程）",
         "② 期別訂單轉檔（xls/xlsx → Google Sheet）",
         "③ 期別訂單搬運",
         "④ 期別訂單加工",
@@ -600,9 +599,19 @@ with c2:
         label_visibility="collapsed", key="system"
     )
 
-st.markdown('<div class="field-label">🎯 執行功能</div>', unsafe_allow_html=True)
-selected_function = st.selectbox(
-    "功能", FUNCTION_MAP[system], label_visibility="collapsed", key="func"
+st.markdown('<div class="field-label">🎯 執行功能（可複選，依序執行）</div>', unsafe_allow_html=True)
+selected_functions = []
+for function_name in FUNCTION_MAP[system]:
+    if st.checkbox(function_name, key=f"func_{system}_{function_name}"):
+        selected_functions.append(function_name)
+
+queued_system = st.session_state.get("execution_queue_system")
+if queued_system and queued_system != system:
+    st.session_state.pop("execution_queue", None)
+    st.session_state.pop("execution_queue_system", None)
+active_queue = list(st.session_state.get("execution_queue", []))
+selected_function = active_queue[0] if active_queue else (
+    selected_functions[0] if len(selected_functions) == 1 else ""
 )
 
 ENGINE_KEYS = {
@@ -613,8 +622,12 @@ ENGINE_KEYS = {
 }
 engine_key = ENGINE_KEYS[system]
 saved_engine = str(config.get("schedule", {}).get(engine_key, "PYTHON")).upper()
-is_yuanta_release = selected_function.endswith("元大銀行-薪資檔上傳待放行")
-engine_options = ["PYTHON"] if is_yuanta_release else ["PYTHON", "GAS"]
+is_yuanta_release = any(
+    item.endswith("元大銀行-薪資檔上傳待放行")
+    for item in selected_functions + active_queue
+)
+requires_python = len(selected_functions) > 1 or is_yuanta_release
+engine_options = ["PYTHON"] if requires_python else ["PYTHON", "GAS"]
 execution_engine = st.selectbox(
     "執行引擎",
     engine_options,
@@ -669,11 +682,22 @@ if is_yuanta_release:
 
 with c4:
     st.markdown('<div class="field-label">&nbsp;</div>', unsafe_allow_html=True)
-    run_clicked = st.button(
+    start_clicked = st.button(
         "▶ 執行",
         use_container_width=True,
-        disabled=is_yuanta_release and salary_release_plan is None,
+        disabled=(
+            not selected_functions
+            or (is_yuanta_release and salary_release_plan is None)
+        ),
     )
+
+if start_clicked:
+    st.session_state["execution_queue"] = list(selected_functions)
+    st.session_state["execution_queue_system"] = system
+    active_queue = list(selected_functions)
+    selected_function = active_queue[0]
+
+run_clicked = bool(active_queue)
 
 st.markdown('</div>', unsafe_allow_html=True)
 
@@ -685,7 +709,10 @@ if st.session_state.get("gas_launch_url"):
     )
 
 if run_clicked:
-    st.info("⏳ 準備執行，請稍候...")
+    st.info(
+        f"⏳ 準備執行：{selected_function}"
+        + (f"（尚有 {len(active_queue)} 項）" if len(active_queue) > 1 else "")
+    )
 
 
 # ═══════════════════════════════════════════════════════════
@@ -778,9 +805,13 @@ if run_clicked and execution_engine == "GAS":
         })
         st.session_state["gas_launch_url"] = f"{gas_url}?{query}"
         add_log(f"已建立中央 GAS 連結：{selected_name} {period}", "success")
+        st.session_state.pop("execution_queue", None)
+        st.session_state.pop("execution_queue_system", None)
         st.rerun()
     except Exception as e:
         add_log(f"中央 GAS 開啟失敗：{e}", "error")
+        st.session_state.pop("execution_queue", None)
+        st.session_state.pop("execution_queue_system", None)
 
 if run_clicked and execution_engine == "PYTHON":
     config.setdefault("schedule", {})[engine_key] = "PYTHON"
@@ -791,15 +822,19 @@ if run_clicked and execution_engine == "PYTHON":
     _plain_func = _func.split(" ", 1)[-1]
     _name   = selected_name
     _region = selected_region
+    _step_failed = False
 
     if not _period:
         add_log("請先輸入期別", "error")
+        _step_failed = True
     elif not _name:
         add_log("請先新增地區設定", "error")
+        _step_failed = True
     else:
         root_id = _region.get("root_folder_id", "")
         if not root_id:
             add_log(f"【{_name}】尚未設定根目錄 ID", "error")
+            _step_failed = True
         else:
             _is_first_half = is_first_half(_period)
             half = "上半月" if _is_first_half else "下半月"
@@ -1278,6 +1313,11 @@ if run_clicked and execution_engine == "PYTHON":
                             add_log(f"{_func} 尚未實作", "warning")
                             success = False
 
+                        if success is False:
+                            raise RuntimeError(f"{_func} 執行失敗，已停止後續功能")
+                    else:
+                        raise RuntimeError("找不到執行所需的清潔承攬或金流對帳檔案")
+
                 # ───────────────────────────────────────────────
                 # █ 區塊8-C：其他承攬執行邏輯
                 # ───────────────────────────────────────────────
@@ -1413,11 +1453,29 @@ if run_clicked and execution_engine == "PYTHON":
 
             except Exception as e:
                 import traceback
+                _step_failed = True
                 st.error(f"❌ {e}")
                 add_log(f"執行失敗：{e}", "error")
                 add_log(traceback.format_exc(), "error")
 
-    # 執行完後 rerun，讓日誌立即顯示
+    queue = list(st.session_state.get("execution_queue", []))
+    if _step_failed:
+        remaining = queue[1:] if queue and queue[0] == _func else queue
+        if remaining:
+            add_log(f"已停止後續 {len(remaining)} 項功能", "warning")
+        st.session_state.pop("execution_queue", None)
+        st.session_state.pop("execution_queue_system", None)
+    else:
+        if queue and queue[0] == _func:
+            queue.pop(0)
+        if queue:
+            st.session_state["execution_queue"] = queue
+            add_log(f"接續執行：{queue[0]}")
+        else:
+            st.session_state.pop("execution_queue", None)
+            st.session_state.pop("execution_queue_system", None)
+
+    # 佇列尚有項目時，下一次 rerun 會接續執行。
     st.rerun()
 
 
