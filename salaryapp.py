@@ -572,6 +572,7 @@ FUNCTION_MAP = {
         "① 承攬費通知信",
         "② 元大承攬費",
         "③ 元大工具包押金",
+        "④ 元大銀行-薪資檔上傳待放行",
     ],
 }
 
@@ -612,10 +613,12 @@ ENGINE_KEYS = {
 }
 engine_key = ENGINE_KEYS[system]
 saved_engine = str(config.get("schedule", {}).get(engine_key, "PYTHON")).upper()
+is_yuanta_release = selected_function.endswith("元大銀行-薪資檔上傳待放行")
+engine_options = ["PYTHON"] if is_yuanta_release else ["PYTHON", "GAS"]
 execution_engine = st.selectbox(
     "執行引擎",
-    ["PYTHON", "GAS"],
-    index=1 if saved_engine == "GAS" else 0,
+    engine_options,
+    index=1 if saved_engine == "GAS" and len(engine_options) > 1 else 0,
     help="尚未完成 Python 驗證的功能可切回 GAS。",
 )
 
@@ -630,9 +633,47 @@ with c3:
         st.caption("尚未設定任何地區")
         selected_name   = None
         selected_region = {}
+include_internal_salary = False
+transfer_fubon_to_yuanta = False
+salary_release_plan = None
+if is_yuanta_release:
+    include_internal_salary = st.checkbox("內勤薪資")
+    transfer_fubon_to_yuanta = st.checkbox("富邦匯款到元大")
+    plan_key = (period, selected_name, include_internal_salary)
+    if st.button("🔎 檢查本次檔案與金額", use_container_width=True):
+        try:
+            from modules.yuanta_salary_release import build_salary_plan
+            salary_release_plan = build_salary_plan(
+                str(selected_region.get("root_folder_id", "") or ""),
+                period,
+                str(selected_name or ""),
+                include_internal_salary,
+            )
+            st.session_state["yuanta_salary_release_plan"] = {
+                "key": plan_key,
+                "files": salary_release_plan,
+            }
+        except Exception as exc:
+            st.session_state.pop("yuanta_salary_release_plan", None)
+            st.error(f"檢查檔案失敗：{exc}")
+
+    saved_plan = st.session_state.get("yuanta_salary_release_plan", {})
+    if saved_plan.get("key") == plan_key:
+        salary_release_plan = saved_plan.get("files") or []
+        from modules.yuanta_salary_release import plan_total
+        for item in salary_release_plan:
+            st.write(f"{item.name}　NT$ {item.amount:,}")
+        st.markdown(f"**合計：NT$ {plan_total(salary_release_plan):,}**")
+    else:
+        st.caption("請先檢查檔案與金額，確認後再執行。")
+
 with c4:
     st.markdown('<div class="field-label">&nbsp;</div>', unsafe_allow_html=True)
-    run_clicked = st.button("▶ 執行", use_container_width=True)
+    run_clicked = st.button(
+        "▶ 執行",
+        use_container_width=True,
+        disabled=is_yuanta_release and salary_release_plan is None,
+    )
 
 st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1349,6 +1390,26 @@ if run_clicked and execution_engine == "PYTHON":
 
                         if not success:
                             raise RuntimeError(f"{_plain_func}執行失敗")
+
+                    elif _plain_func == "元大銀行-薪資檔上傳待放行":
+                        from modules.yuanta_salary_release import (
+                            plan_total,
+                            prepare_fubon_to_yuanta,
+                            upload_yuanta_salary_files,
+                        )
+
+                        files = salary_release_plan or []
+                        if not files:
+                            raise RuntimeError("請先檢查本次檔案與金額")
+
+                        def bank_log(message):
+                            add_log(message, "success" if "已送待放行" in message else "info")
+
+                        total = plan_total(files)
+                        if transfer_fubon_to_yuanta:
+                            prepare_fubon_to_yuanta(_name, total, log=bank_log)
+                        upload_yuanta_salary_files(files, _name, log=bank_log)
+                        add_log(f"元大薪資檔已全部送待放行，合計 NT$ {total:,}", "success")
 
             except Exception as e:
                 import traceback
