@@ -8,3 +8,4 @@ openpyxl>=3.1.2
 pytz>=2024.1
 requests>=2.31.0
 holidays
+playwright>=1.48.0
