@@ -850,6 +850,27 @@ def _get_period_paste_row(sheet, first_half: bool, log_fn=None) -> int:
     return _get_append_row_by_col_b(sheet)
 
 
+def _prepare_classification_targets(ss_clean, ss_other, first_half: bool, log_fn=None) -> dict:
+    """Resolve every revenue-detail sheet before writing and reset all first-half targets."""
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    targets = {
+        label: ss_other.worksheet(sheet_name)
+        for label, sheet_name in OTHER_CONTRACT_MAP.items()
+    }
+    targets["清潔"] = ss_clean.worksheet("清潔營收明細")
+
+    if first_half:
+        log("🔎 上半月：已確認清潔營收明細及其他承攬各服務營收明細工作表")
+        for label, target in targets.items():
+            _clear_a2_bj_contents_and_formats(target, log_fn=log)
+            log(f"🧹 {label}營收明細已自 A2 起清空資料與格式")
+
+    return targets
+
+
 def _color_or_none(c: dict | None) -> dict | None:
     """白色或空值回傳 None，其他回傳 RGB dict。"""
     if not c:
@@ -1140,6 +1161,9 @@ def copy_classified_data(
     template_sheet = ss_rec.worksheet("範本")
     ss_clean       = open_spreadsheet(cleaning_id)
     ss_other       = open_spreadsheet(other_id)
+    target_sheets  = _prepare_classification_targets(
+        ss_clean, ss_other, first_half, log_fn=log,
+    )
     counts         = {}
 
     # ── 共用：計算來源列號 ────────────────────────────────────
@@ -1163,8 +1187,8 @@ def copy_classified_data(
             continue
 
         try:
-            target      = ss_other.worksheet(sheet_name)
-            paste_start = _get_period_paste_row(target, first_half, log_fn=log)
+            target      = target_sheets[label]
+            paste_start = 2 if first_half else _get_append_row_by_col_b(target)
             paste_data(target, paste_start, rows)
             counts[label] = len(rows)
             log(f"✅ {label}：{len(rows)} 筆 → {sheet_name}")
@@ -1193,8 +1217,8 @@ def copy_classified_data(
     # ── 再搬清潔承攬 ──────────────────────────────────────────
     if cleaning_rows:
         try:
-            clean_sheet = ss_clean.worksheet("清潔營收明細")
-            paste_start = _get_period_paste_row(clean_sheet, first_half, log_fn=log)
+            clean_sheet = target_sheets["清潔"]
+            paste_start = 2 if first_half else _get_append_row_by_col_b(clean_sheet)
             paste_data(clean_sheet, paste_start, cleaning_rows)
             counts["清潔"] = len(cleaning_rows)
             log(f"✅ 清潔：{len(cleaning_rows)} 筆 → 清潔營收明細")
