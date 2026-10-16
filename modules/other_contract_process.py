@@ -26,6 +26,7 @@ from modules.auth import (
 )
 from modules.master_sheet import record_execution, record_batch, get_recorded_values
 from modules.period_utils import format_taipei_time
+from modules.year_root import root_for_period
 
 logger = logging.getLogger(__name__)
 
@@ -297,7 +298,7 @@ def _find_other_file(root_folder_id: str, period: str, region: str) -> str:
         files = res.get("files", [])
         return files[0]["id"] if files else None
 
-    period_id = _find_folder(root_folder_id, period)
+    period_id = _find_folder(root_for_period(drive, root_folder_id, period), period)
     if not period_id:
         raise FileNotFoundError(f"找不到期別資料夾：{period}")
 
@@ -1004,7 +1005,7 @@ def _prepare_drive_output(root_folder_id: str, period: str, log: Callable):
     """使用 Jenny OAuth 準備 PDF 輸出資料夾。"""
     try:
         drive = get_jenny_drive_service()
-        folder_id = _get_or_create_pdf_folder(root_folder_id, period, drive)
+        folder_id = _get_or_create_pdf_folder(root_for_period(drive, root_folder_id, period), period, drive)
         log("  Drive 資料夾準備完成（Jenny OAuth）")
         return drive, folder_id
     except Exception as e:

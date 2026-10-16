@@ -29,6 +29,7 @@ from gspread.exceptions import WorksheetNotFound
 
 from modules.auth import get_drive_service, get_credentials, open_jenny_spreadsheet
 from modules.period_utils import get_file_name, is_first_half
+from modules.year_root import root_for_period
 from modules.drive_helper import (
     get_folder_by_name,
     find_file_in_folder,
@@ -52,7 +53,7 @@ from modules.sheet_helper import (
 
 def _get_period_folder_id(root_folder_id: str, period: str) -> str:
     drive = get_drive_service()
-    folder = get_folder_by_name(drive, root_folder_id, period)
+    folder = get_folder_by_name(drive, root_for_period(drive, root_folder_id, period), period)
     if not folder:
         raise Exception(f"找不到期別資料夾：{period}，請先執行「建立期別資料夾」")
     return folder["id"]
