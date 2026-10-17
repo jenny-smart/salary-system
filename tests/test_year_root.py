@@ -75,7 +75,14 @@ def test_file_for_period_follows_year_folder(drive):
 
 def test_service_fee_mail_resolves_passed_ids_by_period(drive, monkeypatch):
     """salaryapp 傳入 2026 mail_id／roster_id，期別 202701 時仍要開 2027 檔。"""
-    from modules import auth, service_fee_mail
+    import importlib
+    import sys
+
+    # 其他測試（test_payment_classification_reset）在 sys.modules 放了假模組，這裡改載入真的
+    for name in ("modules.auth", "modules.drive_helper", "modules.sheet_helper", "modules.service_fee_mail"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    auth = importlib.import_module("modules.auth")
+    service_fee_mail = importlib.import_module("modules.service_fee_mail")
     from modules.year_root import _FILE_CACHE
     _FILE_CACHE.clear()
     for f in ("top", "y26", "y27", "tp26", "tp27"):
