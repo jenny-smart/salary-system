@@ -45,6 +45,7 @@ class Rule:
     file_names: List[str]
     since_year: int
     mode: str
+    results: Dict[str, str] = None  # L 欄：{「地區 年度」: 該行文字}，每個地區一行
 
 
 def taipei_year() -> int:
@@ -85,8 +86,32 @@ def parse_rules(values: List[List[str]]) -> List[Rule]:
             [n for n in (s.strip() for s in _clean(cell(6)).split("；")) if n],
             since_year=since,
             mode=cell(10) or MODE_ORIGINAL,
+            results=_parse_results(cell(11)),
         ))
     return rules
+
+
+def _parse_results(text: str) -> Dict[str, str]:
+    """L 欄每行格式：「YYYY/MM/DD HH:MM 地區 年度 結果…」，以「地區 年度」為鍵。"""
+    results: Dict[str, str] = {}
+    for line in str(text or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 4:
+            results[f"{parts[2]} {parts[3]}"] = line
+    return results
+
+
+def row_status(rule: Rule) -> str:
+    """整列比對狀態：全部一致／有不一致／尚未比對。"""
+    lines = list((rule.results or {}).values())
+    if not lines:
+        return "尚未比對"
+    bad = ("不一致", "找不到", "空白", "改用原設定")
+    if any(any(b in line for b in bad) for line in lines):
+        return "有不一致"
+    if all(line.endswith("一致") or "使用根目錄" in line for line in lines):
+        return "全部一致"
+    return "有不一致"
 
 
 def find_rule(rules: List[Rule], category: str, area: str) -> Optional[Rule]:
@@ -174,13 +199,18 @@ class YearRoots:
         return self._drive
 
     def _report(self, rule: Rule, text: str) -> None:
+        """text 以「地區 年度」開頭；同一列每個地區保留一行，寫回 L 欄。"""
         key = (rule.row, text)
         if self._writer is None or key in self._written:
             return
         self._written.add(key)
         stamp = datetime.now(TZ).strftime("%Y/%m/%d %H:%M")
+        parts = text.split()
+        if rule.results is None:
+            rule.results = {}
+        rule.results[" ".join(parts[:2])] = f"{stamp} {text}"
         try:
-            self._writer(rule.row, f"{stamp} {text}")
+            self._writer(rule.row, "\n".join(rule.results[k] for k in sorted(rule.results)))
         except Exception as exc:  # 寫不回去不影響主流程
             self._log(f"⚠ 年度根目錄設定 L{rule.row} 寫入失敗：{exc}")
 
