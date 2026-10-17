@@ -73,6 +73,7 @@ def root_for_period(drive, root_folder_id: str, period: str) -> str:
 # ── 檔案層級：地區設定裡的年度檔 ID 換成期別所屬年度的檔案 ─────────────
 # 例：roster_id 指向「2026專員名冊與時數-台北」，執行 202701 的 00調薪／結算時
 #     改用「2027專員名冊與時數-台北」（{YYYYMM}專員名冊 在新年度檔）。
+SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
 YEAR_FILE_KEYS = ("allowance_id", "salary_id", "roster_id", "mail_id", "revenue_summary_id")
 _FILE_CACHE: Dict[Tuple[str, str], str] = {}
 
@@ -86,7 +87,7 @@ def _children(drive, parent_id: str) -> list:
     while True:
         res = drive.files().list(
             q=f"'{parent_id}' in parents and trashed=false",
-            fields="nextPageToken,files(id,name,mimeType)", pageSize=1000, pageToken=token,
+            fields="nextPageToken,files(id,name,mimeType,shortcutDetails)", pageSize=1000, pageToken=token,
             supportsAllDrives=True, includeItemsFromAllDrives=True,
         ).execute()
         items.extend(res.get("files", []))
@@ -95,9 +96,17 @@ def _children(drive, parent_id: str) -> list:
             return items
 
 
+def _resolve_shortcut(item: dict) -> dict:
+    """捷徑（例如財務資料夾裡的「2027台北營業額總表」）回傳它指向的檔案。"""
+    details = item.get("shortcutDetails") or {}
+    if item.get("mimeType") == SHORTCUT_MIME and details.get("targetId"):
+        return {**item, "id": details["targetId"], "mimeType": details.get("targetMimeType", "")}
+    return item
+
+
 def _find(drive, parent_id: str, name: str, folder: bool):
     target = _norm(name)
-    hits = [f for f in _children(drive, parent_id)
+    hits = [_resolve_shortcut(f) for f in _children(drive, parent_id)
             if _norm(f.get("name")) == target
             and (f.get("mimeType") == FOLDER_MIME) == folder]
     return hits[0] if len(hits) == 1 else None
@@ -155,11 +164,58 @@ def cfg_for_period(cfg: dict | None, period: str, drive=None) -> dict:
                 try:
                     cfg[k] = file_for_period(drive, str(cfg[k]).strip(), period)
                 except FileNotFoundError:
-                    raise
+                    # 檔名格式改了（例如營業額總表、桃竹 2027 起改名）：改用年度根目錄設定找
+                    found = _root_lookup(k, cfg.get("name", ""), period)
+                    if not found:
+                        raise
+                    cfg[k] = found
                 except Exception:
                     pass
+                cfg[k] = _root_choose(k, cfg.get("name", ""), period, cfg[k])
     except FileNotFoundError:
         raise
     except Exception:
         pass
     return cfg
+
+
+# 地區設定欄位 → 「年度根目錄設定」的類別與檔名序號
+_TAOZHU = {"桃園", "新竹"}
+
+
+def _root_category(key: str, region: str):
+    taozhu = region in _TAOZHU
+    return {
+        "allowance_id": ("名冊薪資", 0) if taozhu else ("內勤工作表單", 0),
+        "salary_id": ("名冊薪資", 0) if taozhu else ("名冊薪資", 1),
+        "roster_id": ("名冊薪資", 0),
+        "mail_id": ("承攬費mail", 0),
+        "revenue_summary_id": ("營業額總表", 0),
+    }.get(key)
+
+
+def _root_lookup(key: str, region: str, period: str):
+    try:
+        from modules.year_roots import get_year_roots
+
+        roots = get_year_roots()
+        mapping = _root_category(key, region)
+        if roots is None or not mapping:
+            return None
+        return roots.lookup(mapping[0], region, int(str(period)[:4]), mapping[1])
+    except Exception:
+        return None
+
+
+def _root_choose(key: str, region: str, period: str, configured: str) -> str:
+    """依 K 欄模式切換（原設定／比對時回傳 configured）。"""
+    try:
+        from modules.year_roots import get_year_roots
+
+        roots = get_year_roots()
+        mapping = _root_category(key, region)
+        if roots is None or not mapping:
+            return configured
+        return roots.choose(mapping[0], region, int(str(period)[:4]), configured, mapping[1])
+    except Exception:
+        return configured
