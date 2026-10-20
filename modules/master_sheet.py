@@ -242,6 +242,11 @@ def record_execution(
     task_key：作業名稱（直接對應 A 欄）
     count：ID 或筆數（None 只記時間）
     """
+    from modules import unified_log
+
+    # 另同步一份到主控表「salary-system執行Log-年度」（各系統統一格式）
+    unified_log.write(function=task_key, area=region_name, period=period,
+                      message="" if count is None else f"ID／筆數：{count}")
     try:
         ss    = open_spreadsheet(MASTER_SHEET_ID)
         sheet = ss.worksheet(region_name)
@@ -283,6 +288,12 @@ def record_batch(region_name: str, period: str, records: list) -> None:
     records = [{"task_key": "複製清潔訂單列數", "count": 153}, ...]
     count 可省略（None = 只記完成時間）
     """
+    from modules import unified_log
+
+    for record in records:
+        count = record.get("count")
+        unified_log.write(function=record.get("task_key", ""), area=region_name, period=period,
+                          message="" if count is None else f"ID／筆數：{count}")
     try:
         ss    = open_spreadsheet(MASTER_SHEET_ID)
         sheet = ss.worksheet(region_name)
