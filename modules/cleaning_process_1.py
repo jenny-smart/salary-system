@@ -729,6 +729,7 @@ def run_adjustment(
         # ── 步驟8：設定場次時數薪資總表 B-G 欄公式 ──────────
         _log(log, "  步驟8：設定場次時數薪資總表 B-G 公式")
         _adj_set_summary_b_to_g(ws_summary, num_rows, log)
+        _adj_clear_summary_b_to_e_if_a_blank(ws_summary, log)
 
         # ── 步驟9：設定場次時數薪資總表 H-K 欄 ──────────────
         _log(log, "  步驟9：設定場次時數薪資總表 H-K 欄")
@@ -1075,6 +1076,37 @@ def _adj_set_summary_b_to_g(
     _log(log, f"    B-G 公式設定完成（{num_rows} 列）")
 
 
+def _adj_clear_summary_b_to_e_if_a_blank(
+    ws_summary: gspread.Worksheet,
+    log: List[str],
+):
+    """A 欄空白的列（SUMMARY_START～SUMMARY_END）清空 B:E，避免上期公式殘留。"""
+    a_vals = ws_summary.get(f"A{SUMMARY_START}:A{SUMMARY_END}") or []
+    blank_rows = [
+        r for r in range(SUMMARY_START, SUMMARY_END + 1)
+        if not (
+            r - SUMMARY_START < len(a_vals)
+            and a_vals[r - SUMMARY_START]
+            and str(a_vals[r - SUMMARY_START][0]).strip()
+        )
+    ]
+    if not blank_rows:
+        return
+
+    # 連續列合併成一段範圍，減少 API 呼叫
+    ranges = []
+    start = prev = blank_rows[0]
+    for r in blank_rows[1:] + [None]:
+        if r is not None and r == prev + 1:
+            prev = r
+            continue
+        ranges.append(f"B{start}:E{prev}")
+        if r is not None:
+            start = prev = r
+    ws_summary.batch_clear(ranges)
+    _log(log, f"    A 欄空白列 B:E 已清空（{len(blank_rows)} 列）")
+
+
 # ── 步驟9：設定場次時數薪資總表 H-K 欄 ──────────────────────
 
 def _adj_set_summary_h_to_k(
@@ -1254,9 +1286,13 @@ def _adj_update_salary_l1(
         _log(log, "    ⚠️ S 欄無有效姓名，跳過 L1:1 更新")
         return 0
 
-    # 目前 L1:1 員工數（L = col 12, index 11）
+    # 目前 L1:1 最後一個有姓名的欄位數（L = col 12, index 11）
+    # 用位置而非非空白數量，L1:1 中間有空白時新增欄才不會蓋到既有欄位
     l1_row   = ws_salary.row_values(1)
-    old_count = sum(1 for v in l1_row[11:] if v and str(v).strip())
+    old_count = max(
+        (i for i, v in enumerate(l1_row[11:], start=1) if v and str(v).strip()),
+        default=0,
+    )
     diff      = new_count - old_count
 
     # 清空舊的 L1:1
@@ -1268,6 +1304,9 @@ def _adj_update_salary_l1(
     end_ltr = _col_letter(11 + new_count)
     ws_salary.update(f"L1:{end_ltr}1", [names], value_input_option="USER_ENTERED")
     _log(log, f"    L1:1 更新：{old_count} → {new_count} 人（diff={diff}）")
+
+    # 清空超出新名單的舊欄位（整欄），讓欄數與 L1:1 人數一致
+    _clear_salary_extra_cols(ws_salary, new_count, old_count, log)
 
     # 若有新增員工，複製 L 欄樣板公式到新欄
     if diff > 0:
@@ -1315,6 +1354,39 @@ def _adj_sync_project_salary_l1(
             f"L1:{end_letter}1", [names], value_input_option="USER_ENTERED"
         )
     _log(log, f"    專案薪資表 L1:1 已同步（{len(names)} 人）")
+
+
+def _clear_salary_extra_cols(
+    ws_salary: gspread.Worksheet,
+    new_count: int,
+    old_count: int,
+    log: List[str],
+) -> None:
+    """
+    清空 L1:1 新名單之後的舊欄位（整欄）。
+    結尾取「原 L1:1 最後姓名欄」與「1996:2048 最後有資料欄」較大者，
+    以前人數變少時沒清掉的殘留欄位也一併清掉。
+    """
+    first_col = 12 + new_count          # 新名單後的第一欄（L=12）
+    last_col  = ws_salary.col_count
+    if first_col > last_col:
+        return
+
+    block = ws_salary.get(
+        f"{_col_letter(first_col)}1996:{_col_letter(last_col)}2048",
+        value_render_option="FORMULA",
+    ) or []
+    used = max(
+        (i for row in block for i, v in enumerate(row, start=1) if str(v).strip()),
+        default=0,
+    )
+    end_col = max(11 + old_count, first_col - 1 + used)
+    if end_col < first_col:
+        return
+
+    rng = f"{_col_letter(first_col)}:{_col_letter(end_col)}"
+    ws_salary.batch_clear([rng])
+    _log(log, f"    已清空多餘欄位 {rng}（{end_col - first_col + 1} 欄）")
 
 
 def _copy_salary_formulas(
