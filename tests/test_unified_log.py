@@ -21,3 +21,19 @@ def test_creates_year_sheet_when_missing_and_never_raises():
     broken.add_worksheet.side_effect = RuntimeError("no access")
     unified_log._ensured.clear()
     unified_log.write(spreadsheet=broken, function="測試")  # 不拋例外
+
+
+def test_button_hook_logs_clicks_once_installed():
+    import types
+    from unittest.mock import patch
+
+    st = types.SimpleNamespace(session_state={}, button=lambda label, **kw: label == "▶ 執行")
+    with patch.object(unified_log, "write") as write:
+        unified_log.install_button_hook(st, system="🧹 清潔承攬", function="執行功能", period="202610",
+                                        message="① 建立期別")
+        unified_log.install_button_hook(st, area="台北")
+        assert st.button("🔎 檢查本次檔案與金額") is False
+        assert st.button("▶ 執行") is True
+    kwargs = write.call_args.kwargs
+    assert write.call_count == 1 and kwargs["status"] == "執行" and kwargs["area"] == "台北"
+    assert kwargs["function"] == "執行功能／▶ 執行" and kwargs["message"] == "① 建立期別"
