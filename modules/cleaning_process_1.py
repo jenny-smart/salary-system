@@ -729,6 +729,7 @@ def run_adjustment(
         # ── 步驟8：設定場次時數薪資總表 B-G 欄公式 ──────────
         _log(log, "  步驟8：設定場次時數薪資總表 B-G 公式")
         _adj_set_summary_b_to_g(ws_summary, num_rows, log)
+        _adj_clear_summary_b_to_e_if_a_blank(ws_summary, log)
 
         # ── 步驟9：設定場次時數薪資總表 H-K 欄 ──────────────
         _log(log, "  步驟9：設定場次時數薪資總表 H-K 欄")
@@ -1073,6 +1074,37 @@ def _adj_set_summary_b_to_g(
             "data": batch[i:i + 500],
         })
     _log(log, f"    B-G 公式設定完成（{num_rows} 列）")
+
+
+def _adj_clear_summary_b_to_e_if_a_blank(
+    ws_summary: gspread.Worksheet,
+    log: List[str],
+):
+    """A 欄空白的列（SUMMARY_START～SUMMARY_END）清空 B:E，避免上期公式殘留。"""
+    a_vals = ws_summary.get(f"A{SUMMARY_START}:A{SUMMARY_END}") or []
+    blank_rows = [
+        r for r in range(SUMMARY_START, SUMMARY_END + 1)
+        if not (
+            r - SUMMARY_START < len(a_vals)
+            and a_vals[r - SUMMARY_START]
+            and str(a_vals[r - SUMMARY_START][0]).strip()
+        )
+    ]
+    if not blank_rows:
+        return
+
+    # 連續列合併成一段範圍，減少 API 呼叫
+    ranges = []
+    start = prev = blank_rows[0]
+    for r in blank_rows[1:] + [None]:
+        if r is not None and r == prev + 1:
+            prev = r
+            continue
+        ranges.append(f"B{start}:E{prev}")
+        if r is not None:
+            start = prev = r
+    ws_summary.batch_clear(ranges)
+    _log(log, f"    A 欄空白列 B:E 已清空（{len(blank_rows)} 列）")
 
 
 # ── 步驟9：設定場次時數薪資總表 H-K 欄 ──────────────────────
