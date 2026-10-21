@@ -629,6 +629,15 @@ is_yuanta_release = any(
 )
 requires_python = len(selected_functions) > 1 or is_yuanta_release
 engine_options = ["PYTHON"] if requires_python else ["PYTHON", "GAS"]
+# 網頁上按下的按鈕都記一筆到主控表「salary-system執行Log-年度」；各功能執行結果另記
+from modules import unified_log as _unified_log
+
+_unified_log.install_button_hook(
+    st, system=system, function="執行功能", period=period,
+    message="、".join(selected_functions),
+    operator=str(st.session_state.get("username", "") or ""),
+)
+
 execution_engine = st.selectbox(
     "執行引擎",
     engine_options,
@@ -642,6 +651,7 @@ with c3:
     region_names = [r["name"] for r in regions]
     if region_names:
         selected_name   = st.selectbox("地區", region_names, label_visibility="collapsed", key="region")
+        _unified_log.install_button_hook(st, area=selected_name)
         selected_region = next((r for r in regions if r["name"] == selected_name), {})
     else:
         st.caption("尚未設定任何地區")
@@ -806,11 +816,18 @@ if run_clicked and execution_engine == "GAS":
         })
         st.session_state["gas_launch_url"] = f"{gas_url}?{query}"
         add_log(f"已建立中央 GAS 連結：{selected_name} {period}", "success")
+        _unified_log.write(system=system, function=selected_function or "、".join(selected_functions),
+                           run_type="手動（GAS）", area=selected_name or "", period=period, status="成功",
+                           message="已建立中央 GAS 連結",
+                           operator=str(st.session_state.get("username", "") or ""))
         st.session_state.pop("execution_queue", None)
         st.session_state.pop("execution_queue_system", None)
         st.rerun()
     except Exception as e:
         add_log(f"中央 GAS 開啟失敗：{e}", "error")
+        _unified_log.write(system=system, function=selected_function or "、".join(selected_functions),
+                           run_type="手動（GAS）", area=selected_name or "", period=period, status="失敗",
+                           message=str(e), operator=str(st.session_state.get("username", "") or ""))
         st.session_state.pop("execution_queue", None)
         st.session_state.pop("execution_queue_system", None)
 
@@ -824,18 +841,19 @@ if run_clicked and execution_engine == "PYTHON":
     _name   = selected_name
     _region = selected_region
     _step_failed = False
+    _step_error = ""
 
     if not _period:
         add_log("請先輸入期別", "error")
-        _step_failed = True
+        _step_failed, _step_error = True, "請先輸入期別"
     elif not _name:
         add_log("請先新增地區設定", "error")
-        _step_failed = True
+        _step_failed, _step_error = True, "請先新增地區設定"
     else:
         root_id = _region.get("root_folder_id", "")
         if not root_id:
             add_log(f"【{_name}】尚未設定根目錄 ID", "error")
-            _step_failed = True
+            _step_failed, _step_error = True, f"【{_name}】尚未設定根目錄 ID"
         else:
             _is_first_half = is_first_half(_period)
             half = "上半月" if _is_first_half else "下半月"
@@ -1458,10 +1476,15 @@ if run_clicked and execution_engine == "PYTHON":
 
             except Exception as e:
                 import traceback
-                _step_failed = True
+                _step_failed, _step_error = True, str(e)
                 st.error(f"❌ {e}")
                 add_log(f"執行失敗：{e}", "error")
                 add_log(traceback.format_exc(), "error")
+
+    # 每執行完一項功能記一筆：何時、哪個地區期別、什麼功能、成功或失敗
+    _unified_log.write(system=_system, function=_func, run_type="手動（Python）", area=_name or "",
+                       period=_period, status="失敗" if _step_failed else "成功", message=_step_error,
+                       operator=str(st.session_state.get("username", "") or ""))
 
     queue = list(st.session_state.get("execution_queue", []))
     if _step_failed:

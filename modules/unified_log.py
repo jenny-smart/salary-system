@@ -57,3 +57,34 @@ def write(spreadsheet=None, **fields: Any) -> None:
                                             insert_data_option="INSERT_ROWS")
     except Exception as exc:
         print(f"[unified_log] 寫入統一執行 Log 失敗（不影響主流程）：{exc}", flush=True)
+
+
+def _ctx(st) -> dict:
+    state = st.session_state
+    if "_unified_log_ctx" not in state:
+        state["_unified_log_ctx"] = {}
+    return state["_unified_log_ctx"]
+
+
+def install_button_hook(st, **fields: Any) -> None:
+    """每次頁面重跑呼叫一次：網頁上按下任何按鈕時記一筆「執行」（功能＝目前畫面／按鈕文字）。
+    各功能的成功／失敗由 salaryapp 執行完每一項時另外記錄。"""
+    try:
+        _ctx(st).update({k: v for k, v in fields.items() if v is not None})
+    except Exception:
+        return
+    if getattr(st.button, "_unified_log", False):
+        return
+    original_button = st.button
+
+    def button(label, *args, **kwargs):
+        clicked = original_button(label, *args, **kwargs)
+        if clicked:
+            ctx = _ctx(st)
+            write(system=ctx.get("system", "薪資系統"), function=f"{ctx.get('function', '')}／{str(label).strip()}",
+                  run_type="手動", area=ctx.get("area", ""), period=ctx.get("period", ""), status="執行",
+                  message=ctx.get("message", ""), operator=ctx.get("operator", ""))
+        return clicked
+
+    button._unified_log = True
+    st.button = button
