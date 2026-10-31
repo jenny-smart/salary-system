@@ -62,23 +62,22 @@ def build_mail_html(period: str, region: str, deadline: dt.datetime) -> str:
     region_name = html.escape(_region_key(region))
     deadline_s = html.escape(_deadline_text(deadline))
     lines = [
-        "&lt;&lt; Name &gt;&gt;&nbsp;&nbsp;&nbsp;您好！",
+        "&lt;&lt; Name &gt;&gt;&nbsp;&nbsp;&nbsp;您好！😊",
         "<br>",
-        "這是您",
-        f"{start.year}年{rng} 的承攬服務費，",
-        "感謝您這個月的努力及付出，辛苦了",
+        f"這是您 {start.year}年{rng} 的承攬服務費 💰",
+        "感謝您這個月的努力及付出，辛苦了 🙏✨",
         "<br>",
-        "承攬服務費連結：&lt;&lt; link &gt;&gt;",
+        "📄 承攬服務費連結：&lt;&lt; link &gt;&gt;",
         "<br>",
-        "有無問題，都麻煩回信告知喔，",
-        f'<b><span style="color:#ff0000">回覆期限{deadline_s}前</span></b>',
-        "如果未在時間內確認我們會依照薪資單上的金額發放薪資，謝謝～",
+        "有無問題，都麻煩回信告知喔 📩",
+        f'<b><span style="color:#ff0000">⏰ 回覆期限 {deadline_s}前</span></b>',
+        "如果未在時間內確認，我們會依照薪資單上的金額發放薪資，謝謝～",
         "<br>",
-        "《貼心小提醒》",
-        "<b>場次到達門檻的工具包押金會另行通知發放</b>",
-        "<b>因為它不是薪資，因此是另行發放。</b>",
+        "💡《貼心小提醒》",
+        "<b>🧰 場次到達門檻的工具包押金會另行通知發放</b>",
+        "<b>因為它不是承攬費，因此是另行發放</b>",
         "<br>",
-        f"檸檬家事-{region_name}",
+        f"🍋 檸檬家事-{region_name}",
     ]
     body = "".join(
         line if line == "<br>" else f"<div>{line}</div>" for line in lines
@@ -102,18 +101,18 @@ def build_announcement(
         f"{deadline:%H:%M}"
     )
     return "\n".join([
-        f"{announce_date:%Y/%m/%d}  📢{start.year}/{rng}承攬服務費確認",
+        f"{announce_date:%Y/%m/%d}  📢 {start.year}/{rng} 承攬服務費確認",
         "",
-        f"{rng}承攬服務費已經寄出囉～",
-        f"請大家在{when} 以前回覆。",
+        f"💌 {rng} 承攬服務費已經寄出囉～",
+        f"⏰ 請大家在{when} 以前回覆。",
         "❌ 有問題請直接回信，勿再回報專區以免重工",
         "",
-        "✅未在時間內回覆，會依承攬服務費上面金額發放",
-        "✅沒有收到信件，先找找垃圾信箱",
-        f"(主旨：{period} 檸檬家事｜清潔承攬服務費_姓名)，都沒有找到請至『專區』告知",
-        "✅如計算有疑問，請一律『回覆信件說明問題』，我們將統一信件回覆處理🙏",
-        "@All ",
-        "再麻煩大家確認後回覆喔，謝謝大家",
+        "✅ 未在時間內回覆，會依承攬服務費上面金額發放",
+        "✅ 沒有收到信件，先找找垃圾信箱 🔍",
+        f"   (主旨：{period} 檸檬家事｜清潔承攬服務費_姓名)，都沒有找到請至『專區』告知",
+        "✅ 如計算有疑問，請一律『回覆信件說明問題』，我們將統一信件回覆處理 🙏",
+        "@All",
+        "再麻煩大家確認後回覆喔，謝謝大家 💛",
     ])
 
 
