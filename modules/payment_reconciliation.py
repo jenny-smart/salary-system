@@ -840,6 +840,30 @@ def _get_append_row_by_col_b(sheet) -> int:
     return 2 if last_offset < 0 else 2 + last_offset + 1
 
 
+def _classified_paste_start(sheet, rows: list, first_half: bool, label: str, log) -> int:
+    """
+    分類貼入起始列。
+    上半月：已清空，從第 2 列貼入。
+    下半月：B 欄尾端若已是本次同一批資料（重跑），覆寫原位置，不重複追加；
+            否則接在 B 欄最後一筆之後。
+    """
+    if first_half:
+        return 2
+    append_row = _get_append_row_by_col_b(sheet)
+    existing_start = append_row - len(rows)
+    if rows and existing_start >= 2:
+        existing = sheet.get(
+            f"B{existing_start}:B{append_row - 1}",
+            value_render_option="UNFORMATTED_VALUE",
+        ) or []
+        existing_ids = [str(r[0]).strip() if r else "" for r in existing]
+        source_ids = [str(r[1]).strip() if len(r) > 1 else "" for r in rows]
+        if existing_ids == source_ids:
+            log(f"🔁 {label}：偵測到本期資料已存在，覆寫第 {existing_start} 列起，不重複追加")
+            return existing_start
+    return append_row
+
+
 def _get_period_paste_row(sheet, first_half: bool, log_fn=None) -> int:
     """
     上半月：清空 A2:BJ 內容與格式後，從第 2 列貼入。
@@ -852,19 +876,23 @@ def _get_period_paste_row(sheet, first_half: bool, log_fn=None) -> int:
 
 
 def _prepare_classification_targets(ss_clean, ss_other, first_half: bool, log_fn=None) -> dict:
-    """Resolve every revenue-detail sheet before writing and reset all first-half targets."""
+    """Resolve every revenue-detail sheet before writing and reset all first-half targets.
+    ss_clean／ss_other 傳 None 代表本次不分該邊（只重新分類另一邊）。"""
     def log(msg):
         if log_fn:
             log_fn(msg)
 
-    targets = {
-        label: ss_other.worksheet(sheet_name)
-        for label, sheet_name in OTHER_CONTRACT_MAP.items()
-    }
-    targets["清潔"] = ss_clean.worksheet("清潔營收明細")
+    targets = {}
+    if ss_other is not None:
+        targets.update({
+            label: ss_other.worksheet(sheet_name)
+            for label, sheet_name in OTHER_CONTRACT_MAP.items()
+        })
+    if ss_clean is not None:
+        targets["清潔"] = ss_clean.worksheet("清潔營收明細")
 
     if first_half:
-        log("🔎 上半月：已確認清潔營收明細及其他承攬各服務營收明細工作表")
+        log("🔎 上半月：已確認本次分類對象的營收明細工作表")
         for label, target in targets.items():
             _clear_a2_bj_contents_and_formats(target, log_fn=log)
             log(f"🧹 {label}營收明細已自 A2 起清空資料與格式")
@@ -1062,7 +1090,8 @@ def copy_classified_data(
     root_folder_id: str, period: str, region_name: str,
     template_start_row: int = None,
     category_counts: dict = None,
-    log_fn=None
+    log_fn=None,
+    scope: str = "all",
 ) -> dict:
     """
     分類搬運：只分類 template_start_row 起的新資料。
@@ -1070,14 +1099,28 @@ def copy_classified_data(
     1. 先分其他承攬（水洗/收納/家電/座椅/地毯）
     2. 再分清潔承攬
     3. 無法分類的資料跳出警告
+
+    scope：
+        "all"      → 清潔承攬＋其他承攬（預設）
+        "cleaning" → 只重新分類清潔承攬（其他承攬不動）
+        "other"    → 只重新分類其他承攬（清潔承攬不動）
+    回傳的 counts 只包含本次有分類的服務（加「無法分類」）。
+    下半月重跑時，若目標尾端已是同一批資料則覆寫，不重複追加。
     """
+    if scope not in ("all", "cleaning", "other"):
+        raise ValueError(f"不支援的分類對象：{scope}")
+    do_cleaning = scope in ("all", "cleaning")
+    do_other    = scope in ("all", "other")
     def log(msg):
         if log_fn:
             log_fn(msg)
 
     reconciliation_id = _get_period_file_id(root_folder_id, period, "金流對帳", region_name)
-    cleaning_id       = _get_period_file_id(root_folder_id, period, "清潔承攬", region_name)
-    other_id          = _get_period_file_id(root_folder_id, period, "其他承攬", region_name)
+    cleaning_id       = _get_period_file_id(root_folder_id, period, "清潔承攬", region_name) if do_cleaning else None
+    other_id          = _get_period_file_id(root_folder_id, period, "其他承攬", region_name) if do_other else None
+    log({"all": "🎯 分類對象：清潔承攬＋其他承攬",
+         "cleaning": "🎯 分類對象：只分清潔承攬",
+         "other": "🎯 分類對象：只分其他承攬"}[scope])
 
     ss_rec   = open_spreadsheet(reconciliation_id)
     template = ss_rec.worksheet("範本")
@@ -1147,6 +1190,8 @@ def copy_classified_data(
 
     if category_counts:
         for cat, expected in category_counts.items():
+            if (cat == "清潔" and not do_cleaning) or (cat in other_buckets and not do_other):
+                continue
             if cat == "清潔":
                 actual = len(cleaning_rows)
             elif cat in other_buckets:
@@ -1160,8 +1205,8 @@ def copy_classified_data(
 
     first_half     = is_first_half(period)
     template_sheet = ss_rec.worksheet("範本")
-    ss_clean       = open_spreadsheet(cleaning_id)
-    ss_other       = open_spreadsheet(other_id)
+    ss_clean       = open_spreadsheet(cleaning_id) if do_cleaning else None
+    ss_other       = open_spreadsheet(other_id) if do_other else None
     target_sheets  = _prepare_classification_targets(
         ss_clean, ss_other, first_half, log_fn=log,
     )
@@ -1179,7 +1224,7 @@ def copy_classified_data(
         return 2 + orig_idx
 
     # ── 先搬其他承攬 ──────────────────────────────────────────
-    for label, sheet_name in OTHER_CONTRACT_MAP.items():
+    for label, sheet_name in (OTHER_CONTRACT_MAP.items() if do_other else []):
         rows        = other_buckets[label]
         row_indices = other_row_indices[label]
 
@@ -1189,7 +1234,7 @@ def copy_classified_data(
 
         try:
             target      = target_sheets[label]
-            paste_start = 2 if first_half else _get_append_row_by_col_b(target)
+            paste_start = _classified_paste_start(target, rows, first_half, label, log)
             paste_data(target, paste_start, rows)
             counts[label] = len(rows)
             log(f"✅ {label}：{len(rows)} 筆 → {sheet_name}")
@@ -1216,10 +1261,12 @@ def copy_classified_data(
             counts[label] = 0
 
     # ── 再搬清潔承攬 ──────────────────────────────────────────
-    if cleaning_rows:
+    if not do_cleaning:
+        pass
+    elif cleaning_rows:
         try:
             clean_sheet = target_sheets["清潔"]
-            paste_start = 2 if first_half else _get_append_row_by_col_b(clean_sheet)
+            paste_start = _classified_paste_start(clean_sheet, cleaning_rows, first_half, "清潔", log)
             paste_data(clean_sheet, paste_start, cleaning_rows)
             counts["清潔"] = len(cleaning_rows)
             log(f"✅ 清潔：{len(cleaning_rows)} 筆 → 清潔營收明細")
