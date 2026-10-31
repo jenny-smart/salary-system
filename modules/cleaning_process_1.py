@@ -1312,6 +1312,9 @@ def _adj_update_salary_l1(
     if diff > 0:
         _copy_salary_formulas(ws_salary, old_count, diff, is_first_half, log)
 
+    # 2016:2017（實境／實習承攬費）既有人員欄若空白，依 L 欄補齊
+    _fill_blank_template_rows(ws_salary, new_count, log)
+
     # 下半月有新增時，清空特定列
     if not is_first_half and diff > 0:
         s_col   = 12 + old_count       # 新增欄起始（L=12）
@@ -1389,6 +1392,55 @@ def _clear_salary_extra_cols(
     _log(log, f"    已清空多餘欄位 {rng}（{end_col - first_col + 1} 欄）")
 
 
+# 薪資表中 L 欄為「全員共用費率」的列：固定數值也要複製到新人員欄，
+# 調薪時並補齊既有人員欄的空白格。
+TEMPLATE_VALUE_ROWS = (2016, 2017)   # 實境承攬費、實習承攬費
+
+
+def _fill_blank_template_rows(
+    ws_salary: gspread.Worksheet,
+    person_count: int,
+    log: List[str],
+) -> None:
+    """
+    既有人員欄（M 起）在 TEMPLATE_VALUE_ROWS 若為空白，依 L 欄樣板補上
+    （公式替換欄字母；固定數值照抄）。已有內容的格子不動。
+    """
+    if person_count <= 1:
+        return
+    first, last = min(TEMPLATE_VALUE_ROWS), max(TEMPLATE_VALUE_ROWS)
+    end_ltr = _col_letter(11 + person_count)
+    block = ws_salary.get(
+        f"L{first}:{end_ltr}{last}", value_render_option="FORMULA"
+    ) or []
+    sheet_title = ws_salary.title
+    batch, filled = [], []
+    for row_num in TEMPLATE_VALUE_ROWS:
+        row = block[row_num - first] if row_num - first < len(block) else []
+        template = row[0] if row else ""
+        if str(template).strip() == "":
+            continue
+        for c_idx in range(1, person_count):          # 0 = L 欄本身
+            current = row[c_idx] if c_idx < len(row) else ""
+            if str(current).strip() != "":
+                continue
+            tgt_ltr = _col_letter(12 + c_idx)
+            value = template
+            if str(template).startswith("="):
+                value = re.sub(r'(?<!\$)L(?=\$?\d)', tgt_ltr, str(template))
+            batch.append({
+                "range": f"'{sheet_title}'!{tgt_ltr}{row_num}",
+                "values": [[value]],
+            })
+            filled.append(f"{tgt_ltr}{row_num}")
+    if batch:
+        ws_salary.spreadsheet.values_batch_update({
+            "valueInputOption": "USER_ENTERED",
+            "data": batch,
+        })
+        _log(log, f"    已補齊 2016:2017 空白格：{len(filled)} 格（{'、'.join(filled[:10])}）")
+
+
 def _copy_salary_formulas(
     ws_salary: gspread.Worksheet,
     old_count: int,
@@ -1402,6 +1454,9 @@ def _copy_salary_formulas(
     - L$1 是混合參照（列固定），需連同 L$數字 一起替換欄字母
     - $L1 是欄固定，不需替換
     複製範圍固定為 L2:L2048。
+    TEMPLATE_VALUE_ROWS（2016 實境承攬費、2017 實習承攬費）L 欄若是固定數值
+    （例如 200，而非 =200），也一併複製；其他列只複製公式，
+    避免把 L 欄人員個別輸入的數值（如 2041、2045）帶到新人員。
     """
     SRC_COL   = 12    # L = col 12
     START_ROW = 2
@@ -1425,6 +1480,13 @@ def _copy_salary_formulas(
         for i, row_f in enumerate(src_formulas):
             actual_row = START_ROW + i
             formula = row_f[0] if row_f else ""
+            if actual_row in TEMPLATE_VALUE_ROWS and str(formula).strip() != "":
+                if not str(formula).startswith("="):
+                    batch.append({
+                        "range": f"'{sheet_title}'!{tgt_ltr}{actual_row}",
+                        "values": [[formula]],
+                    })
+                    continue
             if not formula or not str(formula).startswith("="):
                 continue
 
