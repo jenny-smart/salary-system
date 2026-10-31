@@ -613,7 +613,7 @@ for function_name in FUNCTION_MAP[system]:
                 st.date_input("回覆期限日期", value=_tomorrow, key="fee_reply_date")
             with _dc2:
                 st.time_input("回覆期限時間", value=dt_time(14, 0), key="fee_reply_time", step=1800)
-            st.caption("執行後會更新該區 Gmail「<<memo>>」範本草稿，並產生群組公告文字。")
+            st.caption("執行後會產生本期範本草稿內文與群組公告文字，供複製貼上。")
 
 queued_system = st.session_state.get("execution_queue_system")
 if queued_system and queued_system != system:
@@ -750,8 +750,21 @@ with col_clear:
 
 # ── 承攬服務費公告 ────────────────────────────────────────────
 if st.session_state.get("fee_announcement"):
-    st.markdown('<div class="card"><div class="card-title">📢 承攬服務費公告</div>', unsafe_allow_html=True)
-    st.code(st.session_state["fee_announcement"], language=None)
+    _fee = st.session_state["fee_announcement"]
+    st.markdown('<div class="card"><div class="card-title">📢 承攬服務費草稿／公告</div>', unsafe_allow_html=True)
+    st.markdown(
+        f"**① 範本草稿內文**（{_fee.get('region', '')}"
+        f"{'：' + _fee['mailbox'] if _fee.get('mailbox') else ''}，主旨「&lt;&lt;memo&gt;&gt;」的草稿）",
+        unsafe_allow_html=True,
+    )
+    st.caption("用滑鼠選取下方框內全部文字複製，貼到 Gmail 草稿可保留紅字與粗體。")
+    st.markdown(
+        '<div style="border:1px solid #ddd;border-radius:6px;padding:12px;background:#fff;color:#222">'
+        + _fee.get("mail_html", "") + "</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("**② 群組公告**（右上角按鈕可一鍵複製）")
+    st.code(_fee.get("announcement", ""), language=None)
     if st.button("🗑️ 清除公告"):
         del st.session_state["fee_announcement"]
         st.rerun()
@@ -1431,27 +1444,27 @@ if run_clicked and execution_engine == "PYTHON":
 
                         add_log(f"承攬費通知信完成：{count} 筆", "success")
 
-                        # 範本草稿＋公告（服務期間依期別自動帶入，回覆期限取畫面輸入）
+                        # 範本草稿內文＋公告（服務期間依期別自動帶入，回覆期限取畫面輸入）
                         from modules.service_fee_draft import (
                             build_announcement,
-                            update_template_draft,
+                            build_mail_html,
+                            region_mailbox,
                         )
                         _reply_deadline = datetime.combine(
                             st.session_state.get("fee_reply_date")
                             or (datetime.now(ZoneInfo("Asia/Taipei")) + timedelta(days=1)).date(),
                             st.session_state.get("fee_reply_time") or dt_time(14, 0),
                         )
-                        try:
-                            update_template_draft(
-                                _period, _name, _reply_deadline, log=contract_log,
-                            )
-                        except Exception as draft_err:
-                            add_log(f"⚠️ 範本草稿未更新：{draft_err}", "warning")
-                        st.session_state["fee_announcement"] = build_announcement(
-                            _period, _reply_deadline,
-                            datetime.now(ZoneInfo("Asia/Taipei")).date(),
-                        )
-                        add_log("公告文字已產生，請至下方「📢 承攬服務費公告」複製", "success")
+                        st.session_state["fee_announcement"] = {
+                            "region": _name,
+                            "mailbox": region_mailbox(_name),
+                            "mail_html": build_mail_html(_period, _name, _reply_deadline),
+                            "announcement": build_announcement(
+                                _period, _reply_deadline,
+                                datetime.now(ZoneInfo("Asia/Taipei")).date(),
+                            ),
+                        }
+                        add_log("草稿內文與公告已產生，請至下方「📢 承攬服務費草稿／公告」複製", "success")
 
                     elif _plain_func in ("元大承攬費", "元大工具包押金"):
                         from modules.cleaning_process_1 import find_cleaning_file
