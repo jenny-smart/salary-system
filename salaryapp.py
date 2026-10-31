@@ -602,22 +602,9 @@ with c2:
 
 st.markdown('<div class="field-label">🎯 執行功能（可複選，依序執行）</div>', unsafe_allow_html=True)
 selected_functions = []
-CLASSIFY_SCOPE_OPTIONS = {
-    "全部（清潔＋其他承攬）": "all",
-    "只分清潔承攬": "cleaning",
-    "只分其他承攬": "other",
-}
 for function_name in FUNCTION_MAP[system]:
     if st.checkbox(function_name, key=f"func_{system}_{function_name}"):
         selected_functions.append(function_name)
-        if system == "💰 金流對帳" and function_name == "⑤ 期別訂單分類":
-            st.radio(
-                "分類對象",
-                list(CLASSIFY_SCOPE_OPTIONS),
-                horizontal=True,
-                key="classify_scope",
-                help="只有其中一邊失敗時，可只重新分類那一邊；另一邊不會被清空或重複貼入。",
-            )
 
 queued_system = st.session_state.get("execution_queue_system")
 if queued_system and queued_system != system:
@@ -994,13 +981,7 @@ if run_clicked and execution_engine == "PYTHON":
                                 add_log(f"🔵 Double check：起始列={start_row}，③筆數={recorded_count} ✅")
                         except Exception as e:
                             add_log(f"⚠️ Double check 失敗：{e}", "warning")
-                        classify_scope = CLASSIFY_SCOPE_OPTIONS.get(
-                            st.session_state.get("classify_scope", ""), "all"
-                        )
-                        counts = copy_classified_data(
-                            root_id, _period, _name, start_row, category_counts, add_log,
-                            scope=classify_scope,
-                        )
+                        counts = copy_classified_data(root_id, _period, _name, start_row, category_counts, add_log)
                         add_log("分類搬運完成", "success")
                         for k, v in counts.items():
                             if v > 0:
@@ -1015,8 +996,6 @@ if run_clicked and execution_engine == "PYTHON":
                         }
                         batch = []
                         for label, task_key in svc_task_map.items():
-                            if label not in counts:
-                                continue   # 本次未分類的一邊，不覆寫原打卡
                             batch.append({"task_key": task_key, "count": counts.get(label, 0)})
                         record_batch(_name, _period, batch)
 
