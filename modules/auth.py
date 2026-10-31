@@ -168,13 +168,13 @@ def get_sheets_service():
 
 
 def get_gspread_client():
-    """Service Account gspread client。"""
-    return gspread.authorize(get_credentials())
+    """Service Account gspread client（遇 429／5xx 自動退避重試）。"""
+    return gspread.authorize(get_credentials(), http_client=gspread.BackOffHTTPClient)
 
 
 def get_jenny_gspread_client():
-    """Jenny OAuth gspread client。"""
-    return gspread.authorize(get_jenny_credentials())
+    """Jenny OAuth gspread client（遇 429／5xx 自動退避重試）。"""
+    return gspread.authorize(get_jenny_credentials(), http_client=gspread.BackOffHTTPClient)
 
 
 def open_spreadsheet(spreadsheet_id: str):

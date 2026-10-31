@@ -208,7 +208,7 @@ def _read_income_rows_and_backgrounds(
         fields="sheets.data.rowData.values.effectiveFormat.backgroundColor",
     )
     request.headers["Accept-Encoding"] = "identity"
-    payload = request.execute()
+    payload = request.execute(num_retries=6)   # 429／5xx 自動退避重試
     try:
         grid_rows = payload["sheets"][0]["data"][0].get("rowData", [])
     except (KeyError, IndexError):
