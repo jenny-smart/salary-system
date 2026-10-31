@@ -43,18 +43,25 @@ scheduleName = B1（YYYYMM）+ "-1"（上半月）/ "-2"（下半月）
         QRS : Q=I, R=H/G（G<2以2計，四捨五入）, S=TEXT(C,"MM/DD")&E
 
     03新人實境
-        來源 ID : exec C3
+        來源 ID : exec C3（salary_id；台北/台中「YYYY專員薪資相關-地區」，
+                  桃園/新竹「YYYY桃園專員薪資(外場)」）
+        匯入前標記期別：
+            來源「新人實境」A欄空白 且 E欄有日期 且 C欄姓名在
+            本清潔承攬檔「薪資表」第1列 → 來源 A欄寫入 scheduleName（如 202610-2）
         公式    : FILTER(IMPORTRANGE(C3,"新人實境!A2:L500"), A=scheduleName)
         QRS     : Q=C, R=200*K, S=TEXT(E,"MM/DD")&G
 
     04新人實習
         來源 ID : exec C3
+        匯入前標記期別：同 03，來源工作表為「新人實習」
         公式    : FILTER(IMPORTRANGE(C3,"新人實習!A2:L500"), A=scheduleName)
         QRS     : Q=C, R=200*K, S=TEXT(E,"MM/DD")&G
 
     05組長津貼
         來源 ID : exec C3
-        公式    : FILTER(IMPORTRANGE(C3,"新人實習!A2:L500"), A=scheduleName)
+        不標記期別（沿用 04 已標記的期別）
+        公式    : FILTER(IMPORTRANGE(C3,"新人實習!A2:L500"),
+                         A=scheduleName 且 E欄有日期 且 C欄姓名在「薪資表」第1列)
                   ※ 來源工作表名稱同 04
         QRS     : Q=H, R=J*K, S=TEXT(E,"MM/DD")&G
 
@@ -730,6 +737,83 @@ def run_newcomer_label(
 # 03 新人實境 / 04 新人實習 / 05 組長津貼（共用框架）
 # ──────────────────────────────────────────────────────────────
 
+def _salary_names(ss: gspread.Spreadsheet) -> set:
+    """本清潔承攬檔「薪資表」第 1 列的姓名集合。"""
+    row1 = ss.worksheet("薪資表").row_values(1)
+    return {str(v).strip() for v in row1 if v and str(v).strip()}
+
+
+def _has_date(val) -> bool:
+    """判斷儲存格（UNFORMATTED_VALUE）是否為日期。"""
+    if isinstance(val, bool):
+        return False
+    if isinstance(val, (int, float)):
+        return 20000 < val < 80000          # Sheets 日期序號（約 1954~2119 年）
+    s = str(val or "").strip()
+    if not s:
+        return False
+    for fmt in ("%Y/%m/%d", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%m/%d"):
+        try:
+            datetime.datetime.strptime(s, fmt)
+            return True
+        except ValueError:
+            pass
+    return False
+
+
+def _label_source_period(
+    gc,
+    src_id: str,
+    src_sheet: str,
+    last_row: int,
+    schedule: str,
+    names: set,
+    log: List[str],
+) -> int:
+    """
+    在年度薪資來源檔（salary_id）的工作表（新人實境 / 新人實習）標記期別：
+        台北／台中：「YYYY專員薪資相關-地區」
+        桃園／新竹：「YYYY桃園專員薪資(外場)」（year_root 依地區自動切換）
+    規則：A欄空白 且 E欄有日期 且 C欄姓名在薪資表第1列 → A欄寫入 schedule
+    回傳標記筆數。
+    """
+    try:
+        ws_src = gc.open_by_key(src_id).worksheet(src_sheet)
+    except gspread.exceptions.WorksheetNotFound:
+        _log(log, f"    ⚠️ 來源檔無「{src_sheet}」工作表，略過期別標記")
+        return 0
+    rows = ws_src.get(
+        f"A2:E{last_row}", value_render_option="UNFORMATTED_VALUE",
+    ) or []
+
+    updates = []
+    marked_names = []
+    for i, row in enumerate(rows):
+        row = list(row) + [""] * (5 - len(row))
+        a_val, c_val, e_val = row[0], row[2], row[4]
+        name = str(c_val or "").strip()
+        if str(a_val or "").strip() or not name:
+            continue
+        if not _has_date(e_val) or name not in names:
+            continue
+        r = i + 2
+        updates.append({"range": f"'{src_sheet}'!A{r}", "values": [[schedule]]})
+        marked_names.append(name)
+
+    if updates:
+        ws_src.spreadsheet.values_batch_update({
+            "valueInputOption": "RAW",
+            "data": updates,
+        })
+        time.sleep(3)   # 等待寫入反映到 IMPORTRANGE
+    _log(
+        log,
+        f"    {src_sheet} 期別標記 {schedule}：{len(updates)} 筆"
+        + (f"（{'、'.join(marked_names)}）" if marked_names else ""),
+    )
+    return len(updates)
+
+
 def run_newcomer(
     cleaning_file_id: str, region: str, period: str,
     is_first_half: bool, log: List[str],
@@ -746,6 +830,7 @@ def run_newcomer(
         q_idx     = 2,
         r_expr    = "200*K",
         region_cfg= region_cfg,
+        label_period = True,
     )
 
 
@@ -765,6 +850,7 @@ def run_intern(
         q_idx     = 2,
         r_expr    = "200*K",
         region_cfg= region_cfg,
+        label_period = True,
     )
 
 
@@ -784,6 +870,7 @@ def run_leader(
         q_idx     = 7,
         r_expr    = "J*K",
         region_cfg= region_cfg,
+        match_salary_names = True,
     )
 
 
@@ -801,6 +888,8 @@ def _run_salary_module(
     q_idx: int,
     r_expr: str,
     region_cfg: dict = None,
+    label_period: bool = False,
+    match_salary_names: bool = False,
     **kwargs,
 ) -> bool:
     """
@@ -808,6 +897,8 @@ def _run_salary_module(
     q_idx  : Q 來源欄的 0-based index（對應 A:L 讀取後的位置）
     r_expr : "200*K" 或 "J*K"
     S 欄   : TEXT(E,"MM/DD") & G（固定）
+    label_period       : True → 匯入前先在來源工作表 A 欄標記期別（03/04）
+    match_salary_names : True → 匯入條件另加「E欄有日期 且 C欄姓名在薪資表第1列」（05）
     """
     label = "上半月" if is_first_half else "下半月"
     _log(log, f"▶ {task_key} {label} 開始")
@@ -832,6 +923,12 @@ def _run_salary_module(
         filter_last_row = ''.join(c for c in filter_end if c.isdigit())  # 500
         filter_col = src_range[0]             # 篩選欄字母（"A"）
 
+        if label_period:
+            names = _salary_names(ss)
+            _label_source_period(
+                gc, src_id, src_sheet, int(filter_last_row), schedule, names, log,
+            )
+
         if is_first_half:
             _clear_first_half(ws, log)
             target_row = 2
@@ -839,11 +936,19 @@ def _run_salary_module(
             target_row = _first_empty_row_col_a(ws)
             _log(log, f"    下半月接續列：{target_row}")
 
+        def _imp(col: str) -> str:
+            return f'IMPORTRANGE("{src_id}","{src_sheet}!{col}2:{col}{filter_last_row}")'
+
+        conditions = [f'{_imp(filter_col)}="{schedule}"']
+        if match_salary_names:
+            conditions.append(f'ISNUMBER({_imp("E")})')
+            conditions.append(f"ISNUMBER(MATCH(TRIM({_imp('C')}),'薪資表'!1:1,0))")
+
         formula = (
-            f'=FILTER('
+            '=FILTER('
             f'IMPORTRANGE("{src_id}","{src_sheet}!{src_range}"),'
-            f'IMPORTRANGE("{src_id}","{src_sheet}!{filter_col}2:{filter_col}{filter_last_row}")="{schedule}"'
-            f')'
+            + ",".join(conditions) +
+            ')'
         )
         ws.update_cell(target_row, 1, formula)
         _log(log, f"    IMPORTRANGE 已寫入 A{target_row}")
