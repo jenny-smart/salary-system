@@ -4,7 +4,8 @@ Lemon Clean 薪資系統主控
 
 import streamlit as st
 import yaml
-from datetime import datetime
+from datetime import datetime, timedelta, time as dt_time
+from zoneinfo import ZoneInfo
 from modules.period_utils import get_auto_period, is_first_half
 from modules.year_root import cfg_for_period
 
@@ -605,6 +606,14 @@ selected_functions = []
 for function_name in FUNCTION_MAP[system]:
     if st.checkbox(function_name, key=f"func_{system}_{function_name}"):
         selected_functions.append(function_name)
+        if system == "📨 承攬作業" and function_name == "① 承攬費通知信":
+            _tomorrow = (datetime.now(ZoneInfo("Asia/Taipei")) + timedelta(days=1)).date()
+            _dc1, _dc2 = st.columns(2)
+            with _dc1:
+                st.date_input("回覆期限日期", value=_tomorrow, key="fee_reply_date")
+            with _dc2:
+                st.time_input("回覆期限時間", value=dt_time(14, 0), key="fee_reply_time", step=1800)
+            st.caption("執行後會更新該區 Gmail「<<memo>>」範本草稿，並產生群組公告文字。")
 
 queued_system = st.session_state.get("execution_queue_system")
 if queued_system and queued_system != system:
@@ -738,6 +747,15 @@ with col_clear:
     if st.button("🗑️ 清除日誌"):
         st.session_state.logs = ["[--:--:--] 日誌已清除"]
         _render_log(log_placeholder)
+
+# ── 承攬服務費公告 ────────────────────────────────────────────
+if st.session_state.get("fee_announcement"):
+    st.markdown('<div class="card"><div class="card-title">📢 承攬服務費公告</div>', unsafe_allow_html=True)
+    st.code(st.session_state["fee_announcement"], language=None)
+    if st.button("🗑️ 清除公告"):
+        del st.session_state["fee_announcement"]
+        st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # ── PDF 下載區塊 ──────────────────────────────────────────────
 if st.session_state.get("pdf_result"):
@@ -1412,6 +1430,28 @@ if run_clicked and execution_engine == "PYTHON":
                         )
 
                         add_log(f"承攬費通知信完成：{count} 筆", "success")
+
+                        # 範本草稿＋公告（服務期間依期別自動帶入，回覆期限取畫面輸入）
+                        from modules.service_fee_draft import (
+                            build_announcement,
+                            update_template_draft,
+                        )
+                        _reply_deadline = datetime.combine(
+                            st.session_state.get("fee_reply_date")
+                            or (datetime.now(ZoneInfo("Asia/Taipei")) + timedelta(days=1)).date(),
+                            st.session_state.get("fee_reply_time") or dt_time(14, 0),
+                        )
+                        try:
+                            update_template_draft(
+                                _period, _name, _reply_deadline, log=contract_log,
+                            )
+                        except Exception as draft_err:
+                            add_log(f"⚠️ 範本草稿未更新：{draft_err}", "warning")
+                        st.session_state["fee_announcement"] = build_announcement(
+                            _period, _reply_deadline,
+                            datetime.now(ZoneInfo("Asia/Taipei")).date(),
+                        )
+                        add_log("公告文字已產生，請至下方「📢 承攬服務費公告」複製", "success")
 
                     elif _plain_func in ("元大承攬費", "元大工具包押金"):
                         from modules.cleaning_process_1 import find_cleaning_file
