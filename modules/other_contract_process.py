@@ -546,7 +546,7 @@ def run_other_settlement(
 
     固定順序：
     1. 先操作「薪資總表」
-       - 上半月：E > 0 → E→P、B→Q；Q 比對 H → I→N、J→O
+       - 上半月：先清空 N3:X；E > 0 → E→P、B→Q；Q 比對 H → I→N、J→O
        - 下半月：F > 0 → F→W、B→X；X 比對 H → I→U、J→V
        - A 欄服務名稱保留，並直接作為本次 PDF 名單的服務名稱來源
     2. 再清空「PDF產出」B2:I
@@ -707,7 +707,8 @@ def _prepare_salary_summary_settlement(
         records.append({"service": service, "name": name})
 
     if is_first_half:
-        clear_range = f"N3:Q{last_row}"
+        # 上半月連同 U:X 一起清空，避免上個月下半月的結算結果殘留。
+        clear_range = f"N3:X{last_row}"
         start_col = "N"
         end_col = "Q"
     else:
