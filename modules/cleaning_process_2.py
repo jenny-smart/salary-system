@@ -61,7 +61,7 @@ scheduleName = B1（YYYYMM）+ "-1"（上半月）/ "-2"（下半月）
         來源 ID : exec C3
         不標記期別（沿用 04 已標記的期別）
         公式    : FILTER(IMPORTRANGE(C3,"新人實習!A2:L500"),
-                         A=scheduleName 且 E欄有日期 且 C欄姓名在「薪資表」第1列)
+                         A=scheduleName 且 E欄有日期（含文字日期） 且 C欄姓名在「薪資表」第1列)
                   ※ 來源工作表名稱同 04
         QRS     : Q=H, R=J*K, S=TEXT(E,"MM/DD")&G
 
@@ -941,7 +941,10 @@ def _run_salary_module(
 
         conditions = [f'{_imp(filter_col)}="{schedule}"']
         if match_salary_names:
-            conditions.append(f'ISNUMBER({_imp("E")})')
+            # E欄為日期：日期值，或可被 DATEVALUE 解析的文字日期
+            conditions.append(
+                f'(ISNUMBER({_imp("E")})+ISNUMBER(IFERROR(DATEVALUE({_imp("E")}))))>0'
+            )
             conditions.append(f"ISNUMBER(MATCH(TRIM({_imp('C')}),'薪資表'!1:1,0))")
 
         formula = (
