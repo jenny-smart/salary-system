@@ -16,6 +16,12 @@ Lemon Clean 清潔承攬 — 06季獎金 / 結算作業
     步驟3：
         上半月：場次時數薪資總表 Q4:Q → PDF產出 B2:B，B欄非空的 H欄=Y
         下半月：場次時數薪資總表 X4:X → PDF產出 B2:B，B欄非空的 H欄=Y
+
+專案人員列（場次時數薪資總表 A 欄尾端）：
+    上半月：D/E 皆寫入參照專案薪資表的公式
+    下半月：上半月的專案列不重算——從同月上半月清潔承攬檔讀取專案列的
+            姓名與 D 值，依原順序寫回（D 為靜態值），E 寫公式；
+            下半月新增的專案人員接在後面（D=0）
 """
 
 from __future__ import annotations
@@ -147,8 +153,16 @@ def run_settlement(
         _step1_copy_salary_row(ws_salary, log)
 
         # 專案人員另列於總表，D/E 改查專案薪資表。
+        # 下半月：上半月的專案列沿用上半月檔案的姓名與 D 欄金額，不重算。
+        first_half_rows = None
+        if not is_first_half:
+            first_half_rows = _first_half_project_rows(
+                gc, region_cfg, region, period, log
+            )
         project_rows = _append_project_people_to_summary(
-            ws_summary, ws_proj_salary, log
+            ws_summary, ws_proj_salary, log,
+            is_first_half=is_first_half,
+            first_half_rows=first_half_rows,
         )
 
         # ── 步驟2：場次時數薪資總表 ───────────────────────────
@@ -171,15 +185,68 @@ def run_settlement(
         return False
 
 
+def _project_rows_in_summary(ws_summary: gspread.Worksheet) -> list[tuple[int, str, object]]:
+    """總表中的專案列（D/E 公式參照專案薪資表）：[(列號, 姓名, D值), ...]。"""
+    formulas = ws_summary.get(
+        f"A{SUMMARY_START}:E{SUMMARY_END}", value_render_option="FORMULA"
+    ) or []
+    values = ws_summary.get(
+        f"A{SUMMARY_START}:E{SUMMARY_END}", value_render_option="UNFORMATTED_VALUE"
+    ) or []
+    result = []
+    for offset, row in enumerate(formulas):
+        if "專案薪資表" not in " ".join(str(cell) for cell in row[3:5]):
+            continue
+        vals = values[offset] if offset < len(values) else []
+        vals = list(vals) + [""] * (5 - len(vals))
+        name = str(vals[0] or "").strip()
+        result.append((SUMMARY_START + offset, name, vals[3]))
+    return result
+
+
+def _first_half_project_rows(
+    gc: gspread.Client,
+    region_cfg: dict | None,
+    region: str,
+    period: str,
+    log: List[str],
+) -> list[tuple[str, object]] | None:
+    """
+    讀取同月上半月清潔承攬檔「場次時數薪資總表」的專案列（姓名, D值）。
+    找不到上半月檔案時回傳 None（改沿用本檔現有專案列）。
+    """
+    first_period = f"{str(period)[:6]}-1"
+    root_id = str((region_cfg or {}).get("root_folder_id", "") or "").strip()
+    try:
+        if not root_id:
+            raise ValueError("地區設定缺少 root_folder_id")
+        from modules.cleaning_process_1 import find_cleaning_file
+        file_id = find_cleaning_file(root_id, first_period, region)
+        ws = gc.open_by_key(file_id).worksheet("場次時數薪資總表")
+        rows = [(name, d) for _, name, d in _project_rows_in_summary(ws) if name]
+        _log(log, f"    上半月（{first_period}）專案列：{len(rows)} 人，沿用其 D 欄金額")
+        return rows
+    except Exception as e:
+        _log(log, f"    ⚠️ 讀取上半月（{first_period}）專案列失敗：{e}；改沿用本檔現有專案列")
+        return None
+
+
 def _append_project_people_to_summary(
     ws_summary: gspread.Worksheet,
     ws_project_salary: gspread.Worksheet,
     log: List[str],
+    is_first_half: bool = True,
+    first_half_rows: list[tuple[str, object]] | None = None,
 ) -> list[int]:
     """把專案薪資表有金額的人員追加到總表 A 欄，並寫入專案 D/E 公式。
 
     專案薪資表若尚未建立到第 2046 列，代表目前沒有可供結算的
     2045/2046 薪資結果列；此時直接略過專案人員，不讓整個結算失敗。
+
+    下半月：上半月的專案列不重算——
+        依上半月檔案的順序寫回姓名，D 欄寫入上半月金額（靜態值），E 欄寫公式；
+        下半月才新增的專案人員接在後面，D=0、E 寫公式。
+        讀不到上半月檔案時，沿用本檔現有專案列的姓名與 D 值。
     """
     if ws_project_salary.row_count < 2046:
         _log(
@@ -192,14 +259,22 @@ def _append_project_people_to_summary(
     names = project_people(ws_project_salary, log)
 
     # 重跑結算時先移除上次追加的專案列，避免重複。
-    existing_formulas = ws_summary.get(
-        f"A{SUMMARY_START}:E{SUMMARY_END}", value_render_option="FORMULA"
-    ) or []
-    old_project_rows = []
-    for offset, row in enumerate(existing_formulas):
-        formulas = " ".join(str(cell) for cell in row[3:5])
-        if "專案薪資表" in formulas:
-            old_project_rows.append(SUMMARY_START + offset)
+    existing_project = _project_rows_in_summary(ws_summary)
+    old_project_rows = [row for row, _, _ in existing_project]
+
+    # 下半月：先排入上半月專案列（姓名＋D 靜態值），再接下半月新增人員。
+    fixed_rows: list[tuple[str, object]] = []
+    if not is_first_half:
+        if first_half_rows is None:
+            fixed_rows = [(name, d) for _, name, d in existing_project if name]
+        else:
+            fixed_rows = list(first_half_rows)
+        fixed_keys = {_name_key(name) for name, _ in fixed_rows}
+        new_names = [n for n in names if _name_key(n) not in fixed_keys]
+        names = [name for name, _ in fixed_rows] + new_names
+        if fixed_rows:
+            _log(log, f"    上半月專案列保留：{len(fixed_rows)} 人；下半月新增：{len(new_names)} 人")
+    fixed_d = [d for _, d in fixed_rows]
     # 依 A 欄實際值找最後一位原有人員；0 / 空白不是姓名。
     existing = ws_summary.get(
         f"A{SUMMARY_START}:A{SUMMARY_END}", value_render_option="UNFORMATTED_VALUE"
@@ -225,14 +300,21 @@ def _append_project_people_to_summary(
 
     project_rows = list(range(first_empty, last_row + 1))
     data = []
-    for row_num, name in zip(project_rows, names):
-        data.extend([
-            {"range": f"'{ws_summary.title}'!A{row_num}", "values": [[name]]},
-            {"range": f"'{ws_summary.title}'!D{row_num}", "values": [[
+    for idx, (row_num, name) in enumerate(zip(project_rows, names)):
+        if is_first_half:
+            d_value = (
                 f"=IF(AND(E{row_num}=0,'專案薪資單'!$AD$1=$D$1),"
                 f"HLOOKUP($A{row_num},'專案薪資表'!$1:$2046,2046,FALSE),"
                 f"HLOOKUP($A{row_num},'專案薪資表'!$1:$2046,2045,FALSE))"
-            ]]},
+            )
+        else:
+            # 下半月不重算上半月金額：上半月專案列沿用原 D 值，新增人員 D=0。
+            d_value = fixed_d[idx] if idx < len(fixed_d) else 0
+            if d_value in (None, ""):
+                d_value = 0
+        data.extend([
+            {"range": f"'{ws_summary.title}'!A{row_num}", "values": [[name]]},
+            {"range": f"'{ws_summary.title}'!D{row_num}", "values": [[d_value]]},
             {"range": f"'{ws_summary.title}'!E{row_num}", "values": [[
                 f"=IF('專案薪資單'!$AD$1=$E$1,"
                 f"HLOOKUP($A{row_num},'專案薪資表'!$1:$2046,2046,FALSE),0)"
