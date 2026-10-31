@@ -737,6 +737,24 @@ def run_newcomer_label(
 # 03 新人實境 / 04 新人實習 / 05 組長津貼（共用框架）
 # ──────────────────────────────────────────────────────────────
 
+DATE_FORMAT = {"numberFormat": {"type": "DATE", "pattern": "yyyy/m/d"}}
+
+
+def _apply_date_format(
+    ws: gspread.Worksheet,
+    cols,
+    start_row: int,
+    end_row: int,
+    log: List[str],
+) -> None:
+    """轉靜態值後日期會變成序號（如 46299），將指定欄位套用日期格式。"""
+    ws.batch_format([
+        {"range": f"{c}{start_row}:{c}{end_row}", "format": DATE_FORMAT}
+        for c in cols
+    ])
+    _log(log, f"    日期格式已套用：{'/'.join(cols)} 欄（{start_row}~{end_row} 列）")
+
+
 def _salary_names(ss: gspread.Spreadsheet) -> set:
     """本清潔承攬檔「薪資表」第 1 列的姓名集合。"""
     row1 = ss.worksheet("薪資表").row_values(1)
@@ -831,6 +849,7 @@ def run_newcomer(
         r_expr    = "200*K",
         region_cfg= region_cfg,
         label_period = True,
+        date_cols = ("B", "E"),
     )
 
 
@@ -851,6 +870,7 @@ def run_intern(
         r_expr    = "200*K",
         region_cfg= region_cfg,
         label_period = True,
+        date_cols = ("B", "D", "E"),
     )
 
 
@@ -871,6 +891,7 @@ def run_leader(
         r_expr    = "J*K",
         region_cfg= region_cfg,
         match_salary_names = True,
+        date_cols = ("B", "D", "E"),
     )
 
 
@@ -890,6 +911,7 @@ def _run_salary_module(
     region_cfg: dict = None,
     label_period: bool = False,
     match_salary_names: bool = False,
+    date_cols: tuple = (),
     **kwargs,
 ) -> bool:
     """
@@ -899,6 +921,7 @@ def _run_salary_module(
     S 欄   : TEXT(E,"MM/DD") & G（固定）
     label_period       : True → 匯入前先在來源工作表 A 欄標記期別（03/04）
     match_salary_names : True → 匯入條件另加「E欄有日期 且 C欄姓名在薪資表第1列」（05）
+    date_cols          : 轉靜態值後要套用日期格式的欄位（03：B/E；04/05：B/D/E）
     """
     label = "上半月" if is_first_half else "下半月"
     _log(log, f"▶ {task_key} {label} 開始")
@@ -963,6 +986,9 @@ def _run_salary_module(
             _log(log, f"✅ {task_key} {label} 完成（無資料）｜{ts}")
             return True
         _log(log, f"    匯入完成：{num_rows} 筆")
+
+        if date_cols:
+            _apply_date_format(ws, date_cols, target_row, target_row + num_rows - 1, log)
 
         _calc_qrs_salary(ws, target_row, num_rows, q_idx, r_expr, log)
         _run_common_process(ws, log)
