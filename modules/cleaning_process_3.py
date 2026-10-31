@@ -173,7 +173,7 @@ def run_settlement(
         _log(log, f"  步驟3：PDF產出（{label}）")
         _step3_pdf_output(
             ws_summary, ws_pdf, ws_proj_pdf, ws_proj_salary, ws_proj_slip,
-            is_first_half, log
+            is_first_half, log, project_rows=project_rows,
         )
 
         ts = _punch("結算作業", region, period)
@@ -486,6 +486,46 @@ def _fill_account_cols(
 # 步驟3：PDF產出
 # ──────────────────────────────────────────────────────────────
 
+def _project_names_with_amount(
+    ws_summary: gspread.Worksheet,
+    project_rows: list[int],
+    candidates: List[str],
+    is_first_half: bool,
+    log: List[str],
+) -> List[str]:
+    """
+    專案 PDF 只產出本期金額 > 0 的人：
+    依總表專案列（不含一般人員列，避免同名）的 D（上半月）／E（下半月）判斷。
+    """
+    col_label = "D" if is_first_half else "E"
+    amounts: dict = {}
+    if project_rows:
+        first, last = min(project_rows), max(project_rows)
+        rows = ws_summary.get(
+            f"A{first}:E{last}", value_render_option="UNFORMATTED_VALUE"
+        ) or []
+        for row_num in project_rows:
+            row = rows[row_num - first] if row_num - first < len(rows) else []
+            row = list(row) + [""] * (5 - len(row))
+            key = _name_key(row[0])
+            if key:
+                amounts[key] = _to_num(row[3] if is_first_half else row[4])
+
+    kept, skipped, seen = [], [], set()
+    for name in candidates:
+        key = _name_key(name)
+        if key in seen:
+            continue
+        seen.add(key)
+        (kept if amounts.get(key, 0) > 0 else skipped).append(name)
+    _log(
+        log,
+        f"    專案PDF：本期（{col_label}欄）金額 > 0 共 {len(kept)} 人"
+        + (f"；略過 {len(skipped)} 人（{'、'.join(skipped)}）" if skipped else ""),
+    )
+    return kept
+
+
 def _step3_pdf_output(
     ws_summary: gspread.Worksheet,
     ws_pdf: gspread.Worksheet,
@@ -494,11 +534,14 @@ def _step3_pdf_output(
     ws_project_slip: gspread.Worksheet,
     is_first_half: bool,
     log: List[str],
+    project_rows: Optional[list[int]] = None,
 ) -> None:
     """
     貼入前先清空 PDF產出 和 專案PDF產出 的 B2:H。
     上半月：Q4:Q → PDF產出 B2:B，B非空的 H欄=Y
     下半月：X4:X → PDF產出 B2:B，B非空的 H欄=Y
+    專案PDF產出：專案薪資表 F2:F 名單中，只列總表專案列本期金額 > 0 者
+        （上半月看 D、下半月看 E）
     """
     # 先清空兩個工作表的 B2:H
     ws_pdf.batch_clear(["B2:H"])
@@ -530,6 +573,10 @@ def _step3_pdf_output(
             [[name] for name in project_pdf_names],
             value_input_option="USER_ENTERED",
         )
+
+    project_pdf_names = _project_names_with_amount(
+        ws_summary, project_rows or [], project_pdf_names, is_first_half, log
+    )
 
     # 一般與專案 PDF 名單彼此獨立；同名人員必須在兩邊各產一份。
     normal_names = list(names)
