@@ -967,7 +967,7 @@ def _fetch_row_fmts(spreadsheet_id: str, sheet_title: str,
             includeGridData=True,
         )
         request.headers["Accept-Encoding"] = "identity"
-        result = request.execute()
+        result = request.execute(num_retries=6)   # 429／5xx 自動退避重試
 
         try:
             all_row_data = result["sheets"][0]["data"][0].get("rowData", [])

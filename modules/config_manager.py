@@ -45,7 +45,7 @@ class RegionSetting:
 
 def _open_gspread_client():
     creds = get_credentials()
-    return gspread.authorize(creds)
+    return gspread.authorize(creds, http_client=gspread.BackOffHTTPClient)
 
 
 def _read_from_google_sheet(config_sheet_id: str, tab_name: str = DEFAULT_CONFIG_SHEET_TAB) -> Dict[str, RegionSetting]:
