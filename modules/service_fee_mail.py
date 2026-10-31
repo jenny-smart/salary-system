@@ -172,6 +172,26 @@ def _pairs_with_service(
     return out
 
 
+def _only_current_period(rows, period: str, label: str, log=None):
+    """
+    只保留 PDF 檔名以本期期別開頭的列（檔名為每列最後一欄）。
+    PDF產出若還留著上一期的連結（例如下半月檔案沿用上半月內容、
+    本期尚未結算或產出 PDF），不會被寄出。
+    """
+    kept, skipped = [], []
+    for row in rows:
+        file_name = str(row[-1] or "").strip()
+        (kept if file_name.startswith(f"{period} ") else skipped).append(row)
+    if skipped:
+        _emit(
+            log,
+            f"⚠️ {label} 有 {len(skipped)} 筆不是 {period} 的檔案，已排除："
+            + "、".join(f"{r[0]}（{r[-1]}）" for r in skipped[:10])
+            + "；請確認本期是否已完成結算與 PDF 產出",
+        )
+    return kept
+
+
 def _contiguous_names(ws: gspread.Worksheet, range_name: str) -> list[str]:
     """由起始列往下取連續姓名，遇第一個空白即停止。"""
     rows = ws.get(range_name, value_render_option="UNFORMATTED_VALUE") or []
@@ -515,6 +535,10 @@ def sync_service_fee_mail(
         _pairs_with_service(other_ss, "PDF產出", drive, include_service=True)
         if other_ss is not None else []
     )
+
+    cleaning_rows = _only_current_period(cleaning_rows, period, "清潔PDF", log)
+    project_rows = _only_current_period(project_rows, period, "專案PDF", log)
+    other_rows = _only_current_period(other_rows, period, "其他承攬PDF", log)
 
     period_ws = _copy_period_sheet(mail_ss, period, log=log)
     total = _write_period_rows(
