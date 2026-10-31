@@ -538,8 +538,9 @@ def _step3_pdf_output(
 ) -> None:
     """
     貼入前先清空 PDF產出 和 專案PDF產出 的 B2:H。
-    上半月：Q4:Q → PDF產出 B2:B，B非空的 H欄=Y
-    下半月：X4:X → PDF產出 B2:B，B非空的 H欄=Y
+    上半月：D > 0 的人員 → PDF產出 B2:B，B非空的 H欄=Y
+    下半月：E > 0 的人員 → PDF產出 B2:B，B非空的 H欄=Y
+    （與 Q4:Q／X4:X 同條件，但不含總表尾端的專案人員列）
     專案PDF產出：專案薪資表 F2:F 名單中，只列總表專案列本期金額 > 0 者
         （上半月看 D、下半月看 E）
     """
@@ -550,11 +551,26 @@ def _step3_pdf_output(
 
     src_col = "Q" if is_first_half else "X"
 
-    src_vals = ws_summary.get(
-        f"{src_col}4:{src_col}",
-        value_render_option="UNFORMATTED_VALUE"
+    # 一般 PDF 名單：與步驟2 相同條件（D/E > 0），但排除總表尾端的專案人員列。
+    # 專案列仍保留在 P~Q／W~X（元大匯款需要），專案 PDF 另由專案PDF產出處理，
+    # 避免同一人產出兩份一般 PDF。
+    project_row_set = set(project_rows or [])
+    summary_rows = ws_summary.get(
+        f"A{SUMMARY_START}:E{SUMMARY_END}",
+        value_render_option="UNFORMATTED_VALUE",
     ) or []
-    names = [str(r[0]).strip() for r in src_vals if r and str(r[0]).strip()]
+    names, seen = [], set()
+    for offset, row in enumerate(summary_rows):
+        if SUMMARY_START + offset in project_row_set:
+            continue
+        row = list(row) + [""] * (5 - len(row))
+        name = str(row[0]).strip()
+        amount = _to_num(row[3] if is_first_half else row[4])
+        key = _name_key(name)
+        if not name or amount <= 0 or key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
 
     project_values = ws_project_salary.get(
         "F2:F", value_render_option="UNFORMATTED_VALUE"
