@@ -840,6 +840,30 @@ def _get_append_row_by_col_b(sheet) -> int:
     return 2 if last_offset < 0 else 2 + last_offset + 1
 
 
+def _classified_paste_start(sheet, rows: list, first_half: bool, label: str, log) -> int:
+    """
+    分類貼入起始列。
+    上半月：已清空，從第 2 列貼入。
+    下半月：B 欄尾端若已是本次同一批資料（重跑），覆寫原位置，不重複追加；
+            否則接在 B 欄最後一筆之後。
+    """
+    if first_half:
+        return 2
+    append_row = _get_append_row_by_col_b(sheet)
+    existing_start = append_row - len(rows)
+    if rows and existing_start >= 2:
+        existing = sheet.get(
+            f"B{existing_start}:B{append_row - 1}",
+            value_render_option="UNFORMATTED_VALUE",
+        ) or []
+        existing_ids = [str(r[0]).strip() if r else "" for r in existing]
+        source_ids = [str(r[1]).strip() if len(r) > 1 else "" for r in rows]
+        if existing_ids == source_ids:
+            log(f"🔁 {label}：偵測到本期資料已存在，覆寫第 {existing_start} 列起，不重複追加")
+            return existing_start
+    return append_row
+
+
 def _get_period_paste_row(sheet, first_half: bool, log_fn=None) -> int:
     """
     上半月：清空 A2:BJ 內容與格式後，從第 2 列貼入。
@@ -967,7 +991,7 @@ def _fetch_row_fmts(spreadsheet_id: str, sheet_title: str,
             includeGridData=True,
         )
         request.headers["Accept-Encoding"] = "identity"
-        result = request.execute()
+        result = request.execute(num_retries=6)   # 429／5xx 自動退避重試
 
         try:
             all_row_data = result["sheets"][0]["data"][0].get("rowData", [])
@@ -1070,6 +1094,9 @@ def copy_classified_data(
     1. 先分其他承攬（水洗/收納/家電/座椅/地毯）
     2. 再分清潔承攬
     3. 無法分類的資料跳出警告
+
+    下半月重跑時，若目標尾端已是同一批資料則覆寫，不重複追加
+    （只有一邊失敗時，直接整個重跑即可）。
     """
     def log(msg):
         if log_fn:
@@ -1189,7 +1216,7 @@ def copy_classified_data(
 
         try:
             target      = target_sheets[label]
-            paste_start = 2 if first_half else _get_append_row_by_col_b(target)
+            paste_start = _classified_paste_start(target, rows, first_half, label, log)
             paste_data(target, paste_start, rows)
             counts[label] = len(rows)
             log(f"✅ {label}：{len(rows)} 筆 → {sheet_name}")
@@ -1219,7 +1246,7 @@ def copy_classified_data(
     if cleaning_rows:
         try:
             clean_sheet = target_sheets["清潔"]
-            paste_start = 2 if first_half else _get_append_row_by_col_b(clean_sheet)
+            paste_start = _classified_paste_start(clean_sheet, cleaning_rows, first_half, "清潔", log)
             paste_data(clean_sheet, paste_start, cleaning_rows)
             counts["清潔"] = len(cleaning_rows)
             log(f"✅ 清潔：{len(cleaning_rows)} 筆 → 清潔營收明細")
