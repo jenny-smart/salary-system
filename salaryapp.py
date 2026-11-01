@@ -528,6 +528,17 @@ def _render_log(placeholder):
     placeholder.markdown(html, unsafe_allow_html=True)
 
 
+def _store_pdf_result(result):
+    """累加 PDF 下載清單：多地區／多項功能連續執行時不互相覆蓋（每次按▶執行時清空）。"""
+    if not isinstance(result, dict) or not (result.get("pdfs") or result.get("failed")):
+        return
+    merged = st.session_state.get("pdf_result") or {"pdfs": {}, "failed": []}
+    merged = {"pdfs": dict(merged.get("pdfs", {})), "failed": list(merged.get("failed", []))}
+    merged["pdfs"].update(result.get("pdfs") or {})
+    merged["failed"].extend(result.get("failed") or [])
+    st.session_state["pdf_result"] = merged
+
+
 # ═══════════════════════════════════════════════════════════
 # █ 區塊4：執行功能選單設定
 # ═══════════════════════════════════════════════════════════
@@ -615,12 +626,13 @@ for function_name in FUNCTION_MAP[system]:
                 st.time_input("回覆期限時間", value=dt_time(14, 0), key="fee_reply_time", step=1800)
             st.caption("執行後會產生本期範本草稿內文與群組公告文字，供複製貼上。")
 
-queued_system = st.session_state.get("execution_queue_system")
-if queued_system and queued_system != system:
-    st.session_state.pop("execution_queue", None)
-    st.session_state.pop("execution_queue_system", None)
-active_queue = list(st.session_state.get("execution_queue", []))
-selected_function = active_queue[0] if active_queue else (
+# ── 執行佇列：每項為 {area, system, function, engine}，可跨地區、跨系統 ──
+active_queue = [
+    item for item in st.session_state.get("execution_queue", [])
+    if isinstance(item, dict)
+]
+current_item = active_queue[0] if active_queue else {}
+selected_function = current_item.get("function", "") or (
     selected_functions[0] if len(selected_functions) == 1 else ""
 )
 
@@ -632,11 +644,38 @@ ENGINE_KEYS = {
 }
 engine_key = ENGINE_KEYS[system]
 saved_engine = str(config.get("schedule", {}).get(engine_key, "PYTHON")).upper()
+
+# ── 執行地區（可複選） ──
+st.markdown('<div class="field-label">🗺️ 執行地區（可複選，依地區依序執行）</div>', unsafe_allow_html=True)
+region_names = [r["name"] for r in regions]
+selected_names: list[str] = []
+if region_names:
+    if "region_init" not in st.session_state:
+        st.session_state["region_init"] = True
+        st.session_state[f"region_pick_{region_names[0]}"] = True
+
+    def _toggle_all_regions():
+        value = st.session_state.get("region_pick_all", False)
+        for _n in region_names:
+            st.session_state[f"region_pick_{_n}"] = value
+
+    st.checkbox("全選地區", key="region_pick_all", on_change=_toggle_all_regions)
+    _region_cols = st.columns(min(len(region_names), 4))
+    for _idx, _n in enumerate(region_names):
+        with _region_cols[_idx % len(_region_cols)]:
+            if st.checkbox(_n, key=f"region_pick_{_n}"):
+                selected_names.append(_n)
+else:
+    st.caption("尚未設定任何地區")
+
+# 單一地區時沿用原本的變數（GAS 面板、元大放行檢查用）
+selected_name = selected_names[0] if len(selected_names) == 1 else None
+selected_region = next((r for r in regions if r["name"] == selected_name), {}) if selected_name else {}
+
 is_yuanta_release = any(
-    item.endswith("元大銀行-薪資檔上傳待放行")
-    for item in selected_functions + active_queue
-)
-requires_python = len(selected_functions) > 1 or is_yuanta_release
+    item.endswith("元大銀行-薪資檔上傳待放行") for item in selected_functions
+) or str(current_item.get("function", "")).endswith("元大銀行-薪資檔上傳待放行")
+requires_python = len(selected_functions) > 1 or len(selected_names) > 1 or is_yuanta_release
 engine_options = ["PYTHON"] if requires_python else ["PYTHON", "GAS"]
 # 網頁上按下的按鈕都記一筆到主控表「salary-system執行Log-年度」；各功能執行結果另記
 from modules import unified_log as _unified_log
@@ -645,31 +684,22 @@ _unified_log.install_button_hook(
     st, system=system, function="執行功能", period=period,
     message="、".join(selected_functions),
     operator=str(st.session_state.get("username", "") or ""),
+    area="、".join(selected_names),
 )
 
 execution_engine = st.selectbox(
     "執行引擎",
     engine_options,
     index=1 if saved_engine == "GAS" and len(engine_options) > 1 else 0,
-    help="尚未完成 Python 驗證的功能可切回 GAS。",
+    help="尚未完成 Python 驗證的功能可切回 GAS；複選功能或地區時僅能使用 PYTHON。",
 )
 
-c3, c4 = st.columns([2, 1])
-with c3:
-    st.markdown('<div class="field-label">🗺️ 執行地區</div>', unsafe_allow_html=True)
-    region_names = [r["name"] for r in regions]
-    if region_names:
-        selected_name   = st.selectbox("地區", region_names, label_visibility="collapsed", key="region")
-        _unified_log.install_button_hook(st, area=selected_name)
-        selected_region = next((r for r in regions if r["name"] == selected_name), {})
-    else:
-        st.caption("尚未設定任何地區")
-        selected_name   = None
-        selected_region = {}
 include_internal_salary = False
 transfer_fubon_to_yuanta = False
 salary_release_plan = None
-if is_yuanta_release:
+if is_yuanta_release and len(selected_names) > 1:
+    st.warning("元大銀行-薪資檔上傳待放行一次只能選一個地區。")
+elif is_yuanta_release and selected_name:
     include_internal_salary = st.checkbox("內勤薪資")
     transfer_fubon_to_yuanta = st.checkbox("富邦匯款到元大")
     plan_key = (period, selected_name, include_internal_salary)
@@ -700,22 +730,36 @@ if is_yuanta_release:
     else:
         st.caption("請先檢查檔案與金額，確認後再執行。")
 
-with c4:
-    st.markdown('<div class="field-label">&nbsp;</div>', unsafe_allow_html=True)
-    start_clicked = st.button(
-        "▶ 執行",
-        use_container_width=True,
-        disabled=(
-            not selected_functions
-            or (is_yuanta_release and salary_release_plan is None)
-        ),
-    )
+start_clicked = st.button(
+    "▶ 執行"
+    + (f"（{len(selected_names)} 區 × {len(selected_functions)} 項）"
+       if len(selected_names) > 1 and selected_functions else ""),
+    use_container_width=True,
+    disabled=(
+        not selected_functions
+        or not selected_names
+        or bool(active_queue)
+        or (is_yuanta_release and (len(selected_names) != 1 or salary_release_plan is None))
+    ),
+)
 
 if start_clicked:
-    st.session_state["execution_queue"] = list(selected_functions)
-    st.session_state["execution_queue_system"] = system
-    active_queue = list(selected_functions)
-    selected_function = active_queue[0]
+    from modules.period_inventory import build_queue
+    active_queue = build_queue(
+        [(a, system, f) for a in selected_names for f in selected_functions],
+        region_names, {system: FUNCTION_MAP[system]}, engine=execution_engine, period=period,
+    )
+    st.session_state["execution_queue"] = active_queue
+    st.session_state.pop("pdf_result", None)
+    current_item = active_queue[0] if active_queue else {}
+    selected_function = current_item.get("function", "")
+    if len(active_queue) > 1:
+        add_log(f"已排入 {len(active_queue)} 項：{'、'.join(selected_names)} × {'、'.join(selected_functions)}")
+
+if active_queue and st.button("⏹ 取消後續佇列", use_container_width=True):
+    st.session_state.pop("execution_queue", None)
+    add_log(f"已取消佇列（{len(active_queue)} 項未執行）", "warning")
+    st.rerun()
 
 run_clicked = bool(active_queue)
 
@@ -730,9 +774,136 @@ if st.session_state.get("gas_launch_url"):
 
 if run_clicked:
     st.info(
-        f"⏳ 準備執行：{selected_function}"
+        f"⏳ 準備執行：【{current_item.get('area', '')}】{current_item.get('system', '')} {selected_function}"
         + (f"（尚有 {len(active_queue)} 項）" if len(active_queue) > 1 else "")
     )
+
+
+# ═══════════════════════════════════════════════════════════
+# █ 區塊6-B：UI — 期別作業盤點（多地區 × 四大系統）
+# ═══════════════════════════════════════════════════════════
+st.markdown('<div class="card"><div class="card-title">📋 期別作業盤點</div>', unsafe_allow_html=True)
+from modules import period_inventory as _inv
+
+st.caption(
+    "依期別列出金流對帳／清潔承攬／其他承攬／承攬作業每個功能在各地區的狀態："
+    "✅ 完成　❌ 沒完成／失敗　— 不批次執行。全部勾選的地區都完成會在「完成」欄打 ✅。"
+    "沒完成的功能預設打勾，按「執行」只補做沒完成的地區（依地區 → 系統 → 功能順序，某地區失敗只停該地區）。"
+)
+_inv_areas = st.multiselect(
+    "盤點／執行地區", region_names,
+    default=[a for a in (st.session_state.get("inventory_areas") or region_names) if a in region_names],
+    key="inventory_area_pick",
+)
+if st.button("🔍 盤點", key="inventory_load", disabled=not _inv_areas or not period):
+    try:
+        with st.spinner("讀取主控表執行 Log 中…"):
+            _rows = _inv.load_log_rows(period, datetime.now(ZoneInfo("Asia/Taipei")).year)
+        st.session_state["inventory"] = {
+            "period": period,
+            "areas": list(_inv_areas),
+            "status": _inv.build_inventory(_rows, period, list(_inv_areas), FUNCTION_MAP),
+        }
+        st.session_state["inventory_areas"] = list(_inv_areas)
+        st.session_state.pop("inventory_select_all", None)
+        st.session_state["inventory_select_version"] = st.session_state.get("inventory_select_version", 0) + 1
+    except Exception as exc:
+        st.error(f"盤點失敗：{exc}")
+
+_inventory = st.session_state.get("inventory")
+if _inventory and _inventory.get("period") != period:
+    st.info(f"目前盤點結果是期別 {_inventory.get('period')}，請按「🔍 盤點」更新為 {period}。")
+elif _inventory:
+    import pandas as pd
+
+    _inv_status = _inventory["status"]
+    _areas = _inventory["areas"]
+    _inv_rows = []
+    for _sys, _funcs in FUNCTION_MAP.items():
+        for _f in _funcs:
+            _cells = {_a: _inv_status[(_a, _sys, _f)] for _a in _areas}
+            _todo = [_a for _a in _areas if _cells[_a].state != _inv.DONE]
+            _runnable = bool(_todo) and _f not in _inv.NOT_BATCHABLE
+            if _f in _inv.NOT_BATCHABLE:
+                _note = f"{_inv.NOT_BATCHABLE[_f]}，請在上方單獨執行"
+            elif _todo:
+                _note = "補做：" + "、".join(_todo)
+            else:
+                _note = ""
+            _inv_rows.append({"system": _sys, "func": _f, "cells": _cells, "todo": _todo,
+                              "done": not _todo, "runnable": _runnable, "note": _note})
+
+    _inv_todo = [r for r in _inv_rows if not r["done"]]
+    if not _inv_todo:
+        st.success(f"✅ 期別 {period} 勾選地區的作業全部完成")
+    else:
+        st.warning(f"期別 {period}：{len(_inv_rows)} 個功能，✅ 完成 {len(_inv_rows) - len(_inv_todo)} 個、"
+                   f"還有 **{len(_inv_todo)}** 個沒完成（可補做的已預設打勾）。")
+
+    _col_all, _col_none, _ = st.columns([1, 1, 4])
+    if _col_all.button("☑️ 全選", key="inventory_select_all_btn"):
+        st.session_state["inventory_select_all"] = True
+        st.session_state["inventory_select_version"] = st.session_state.get("inventory_select_version", 0) + 1
+    if _col_none.button("⬜ 全不選", key="inventory_select_none_btn"):
+        st.session_state["inventory_select_all"] = False
+        st.session_state["inventory_select_version"] = st.session_state.get("inventory_select_version", 0) + 1
+    _override = st.session_state.get("inventory_select_all")
+
+    def _icon(stt):
+        return "✅" if stt.state == _inv.DONE else "❌"
+
+    _table = pd.DataFrame([{
+        "執行": bool(r["runnable"] and (True if _override is None else _override)),
+        "系統": r["system"],
+        "功能": r["func"],
+        "完成": "✅ 完成" if r["done"] else "❌ 未完成",
+        **{_a: ("—" if r["func"] in _inv.NOT_BATCHABLE and r["cells"][_a].state != _inv.DONE
+                else _icon(r["cells"][_a])) for _a in _areas},
+        "說明": r["note"],
+    } for r in _inv_rows])
+    _edited = st.data_editor(
+        _table, hide_index=True, use_container_width=True,
+        key=f"inventory_editor_{st.session_state.get('inventory_select_version', 0)}",
+        disabled=[c for c in _table.columns if c != "執行"],
+    )
+
+    with st.expander("各地區明細（執行時間、錯誤訊息）"):
+        def _detail(stt):
+            if stt.state == _inv.NONE:
+                return "未執行"
+            text = f"{_icon(stt)} {stt.time}"
+            return f"{text} {stt.message}".strip()
+
+        st.dataframe(pd.DataFrame([{
+            "系統": r["system"], "功能": r["func"],
+            **{_a: _detail(r["cells"][_a]) for _a in _areas},
+        } for r in _inv_rows]), hide_index=True, use_container_width=True)
+
+    _flags = list(_edited["執行"])
+    _selected_rows = [r for r, flag in zip(_inv_rows, _flags) if flag and r["runnable"]]
+    for r in (r for r, flag in zip(_inv_rows, _flags) if flag and not r["runnable"]):
+        st.caption(f"「{r['system']} {r['func']}」{'已完成' if r['done'] else '不能批次執行'}，不會執行。")
+    _picked = [(_a, r["system"], r["func"]) for r in _selected_rows for _a in r["todo"]]
+    if any(r["func"] == "① 承攬費通知信" for r in _selected_rows):
+        st.caption("承攬費通知信的回覆期限沿用上方設定（未設定則為明天 14:00）。")
+
+    if st.button(
+        f"▶️ 執行勾選的 {len(_selected_rows)} 個功能（共 {len(_picked)} 項）",
+        key="inventory_run",
+        use_container_width=True,
+        disabled=not _picked or bool(active_queue),
+    ):
+        _queue = _inv.build_queue(_picked, _areas, FUNCTION_MAP, engine="PYTHON", period=period)
+        st.session_state["execution_queue"] = _queue
+        st.session_state.pop("pdf_result", None)
+        st.session_state.pop("inventory", None)  # 執行後需重新盤點
+        add_log(
+            f"盤點補做：共 {len(_queue)} 項，地區："
+            + "、".join(dict.fromkeys(item["area"] for item in _queue))
+        )
+        st.rerun()
+
+st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -748,25 +919,29 @@ with col_clear:
         st.session_state.logs = ["[--:--:--] 日誌已清除"]
         _render_log(log_placeholder)
 
-# ── 承攬服務費公告 ────────────────────────────────────────────
-if st.session_state.get("fee_announcement"):
-    _fee = st.session_state["fee_announcement"]
+# ── 承攬服務費公告（多地區時每區一份） ─────────────────────
+_fee_map = st.session_state.get("fee_announcements") or {}
+if _fee_map:
     st.markdown('<div class="card"><div class="card-title">📢 承攬服務費草稿／公告</div>', unsafe_allow_html=True)
-    st.markdown(
-        f"**① 範本草稿內文**（{_fee.get('region', '')}"
-        f"{'：' + _fee['mailbox'] if _fee.get('mailbox') else ''}，主旨「&lt;&lt;memo&gt;&gt;」的草稿）",
-        unsafe_allow_html=True,
-    )
-    st.caption("用滑鼠選取下方框內全部文字複製，貼到 Gmail 草稿可保留紅字與粗體。")
-    st.markdown(
-        '<div style="border:1px solid #ddd;border-radius:6px;padding:12px;background:#fff;color:#222">'
-        + _fee.get("mail_html", "") + "</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("**② 群組公告**（右上角按鈕可一鍵複製）")
-    st.code(_fee.get("announcement", ""), language=None)
+    for _fee_idx, (_fee_region, _fee) in enumerate(_fee_map.items()):
+        if len(_fee_map) > 1:
+            st.markdown(f"#### 🗺️ {_fee_region}")
+        st.markdown(
+            f"**① 範本草稿內文**（{_fee.get('region', '')}"
+            f"{'：' + _fee['mailbox'] if _fee.get('mailbox') else ''}，主旨「&lt;&lt;memo&gt;&gt;」的草稿）",
+            unsafe_allow_html=True,
+        )
+        st.caption("用滑鼠選取下方框內全部文字複製，貼到 Gmail 草稿可保留紅字與粗體。")
+        st.markdown(
+            '<div style="border:1px solid #ddd;border-radius:6px;padding:12px;background:#fff;color:#222">'
+            + _fee.get("mail_html", "") + "</div>",
+            unsafe_allow_html=True,
+        )
+        if _fee_idx == len(_fee_map) - 1:
+            st.markdown("**② 群組公告**（右上角按鈕可一鍵複製）")
+            st.code(_fee.get("announcement", ""), language=None)
     if st.button("🗑️ 清除公告"):
-        del st.session_state["fee_announcement"]
+        st.session_state.pop("fee_announcements", None)
         st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -800,12 +975,29 @@ if st.session_state.get("pdf_result"):
 # ═══════════════════════════════════════════════════════════
 # █ 區塊8：執行邏輯 — 共用前置檢查
 # ═══════════════════════════════════════════════════════════
-if run_clicked and execution_engine == "GAS":
+_run_engine = str(current_item.get("engine", "PYTHON")).upper()
+_run_system = current_item.get("system", system)
+_run_period = current_item.get("period", period)
+_run_area = current_item.get("area", "")
+_run_region = next((r for r in regions if r["name"] == _run_area), {})
+_run_engine_key = ENGINE_KEYS.get(_run_system, engine_key)
+
+
+def _remember_engine(value: str):
+    """記住各系統上次使用的引擎；沒變就不寫回設定表（避免佇列每步都寫 Google Sheet）。"""
+    schedule_cfg = config.setdefault("schedule", {})
+    if str(schedule_cfg.get(_run_engine_key, "")).upper() != value:
+        schedule_cfg[_run_engine_key] = value
+        save_config(config)
+
+
+if run_clicked and _run_engine == "GAS":
     import os
     from urllib.parse import urlencode
 
-    config.setdefault("schedule", {})[engine_key] = "GAS"
-    save_config(config)
+    _remember_engine("GAS")
+    system, period = _run_system, _run_period
+    selected_name, selected_region = _run_area, _run_region
 
     gas_url = str(
         _safe_secret("GAS_SCHEDULER_WEB_APP_URL", "")
@@ -852,7 +1044,6 @@ if run_clicked and execution_engine == "GAS":
                            message="已建立中央 GAS 連結",
                            operator=str(st.session_state.get("username", "") or ""))
         st.session_state.pop("execution_queue", None)
-        st.session_state.pop("execution_queue_system", None)
         st.rerun()
     except Exception as e:
         add_log(f"中央 GAS 開啟失敗：{e}", "error")
@@ -860,26 +1051,24 @@ if run_clicked and execution_engine == "GAS":
                            run_type="手動（GAS）", area=selected_name or "", period=period, status="失敗",
                            message=str(e), operator=str(st.session_state.get("username", "") or ""))
         st.session_state.pop("execution_queue", None)
-        st.session_state.pop("execution_queue_system", None)
 
-if run_clicked and execution_engine == "PYTHON":
-    config.setdefault("schedule", {})[engine_key] = "PYTHON"
-    save_config(config)
-    _period = period
-    _system = system
+if run_clicked and _run_engine == "PYTHON":
+    _remember_engine("PYTHON")
+    _period = _run_period
+    _system = _run_system
     _func   = selected_function
     _plain_func = _func.split(" ", 1)[-1]
-    _name   = selected_name
-    _region = selected_region
+    _name   = _run_area
+    _region = _run_region
     _step_failed = False
     _step_error = ""
 
     if not _period:
         add_log("請先輸入期別", "error")
         _step_failed, _step_error = True, "請先輸入期別"
-    elif not _name:
-        add_log("請先新增地區設定", "error")
-        _step_failed, _step_error = True, "請先新增地區設定"
+    elif not _name or not _region:
+        add_log("請先選擇已設定的地區", "error")
+        _step_failed, _step_error = True, "請先選擇已設定的地區"
     else:
         root_id = _region.get("root_folder_id", "")
         if not root_id:
@@ -888,7 +1077,7 @@ if run_clicked and execution_engine == "PYTHON":
         else:
             _is_first_half = is_first_half(_period)
             half = "上半月" if _is_first_half else "下半月"
-            add_log(f"執行【{_name}】{half} {_func}，期別：{_period}")
+            add_log(f"執行【{_name}】{half} {_system} {_func}，期別：{_period}")
             _render_log(log_placeholder)
 
             try:
@@ -1353,10 +1542,7 @@ if run_clicked and execution_engine == "PYTHON":
                             )
                             # 儲存到 session_state 供 rerun 後顯示下載按鈕
                             if isinstance(pdf_result, dict):
-                                if pdf_result.get("pdfs") or pdf_result.get("failed"):
-                                    st.session_state["pdf_result"] = pdf_result
-                                else:
-                                    st.session_state.pop("pdf_result", None)
+                                _store_pdf_result(pdf_result)
                                 success = int(pdf_result.get("success_count") or len(pdf_result.get("pdfs", {}))) > 0
                             else:
                                 # 舊版 run_pdf 回傳 bool，GitHub 尚未更新
@@ -1409,8 +1595,7 @@ if run_clicked and execution_engine == "PYTHON":
                             root_folder_id=root_id, region=_name, period=_period,
                             service_type=None, log=other_log,
                         )
-                        if result.get("pdfs") or result.get("failed"):
-                            st.session_state["pdf_result"] = result
+                        _store_pdf_result(result)
                         add_log(
                             f"其他承攬 PDF：成功 {result.get('success_count', 0)}，"
                             f"失敗 {len(result.get('failed', []))}",
@@ -1455,7 +1640,7 @@ if run_clicked and execution_engine == "PYTHON":
                             or (datetime.now(ZoneInfo("Asia/Taipei")) + timedelta(days=1)).date(),
                             st.session_state.get("fee_reply_time") or dt_time(14, 0),
                         )
-                        st.session_state["fee_announcement"] = {
+                        st.session_state.setdefault("fee_announcements", {})[_name] = {
                             "region": _name,
                             "mailbox": region_mailbox(_name),
                             "mail_html": build_mail_html(_period, _name, _reply_deadline),
@@ -1539,22 +1724,22 @@ if run_clicked and execution_engine == "PYTHON":
                        period=_period, status="失敗" if _step_failed else "成功", message=_step_error,
                        operator=str(st.session_state.get("username", "") or ""))
 
-    queue = list(st.session_state.get("execution_queue", []))
+    from modules.period_inventory import drop_area
+
+    queue = [item for item in st.session_state.get("execution_queue", []) if isinstance(item, dict)]
+    if queue and queue[0] == current_item:
+        queue.pop(0)
     if _step_failed:
-        remaining = queue[1:] if queue and queue[0] == _func else queue
-        if remaining:
-            add_log(f"已停止後續 {len(remaining)} 項功能", "warning")
-        st.session_state.pop("execution_queue", None)
-        st.session_state.pop("execution_queue_system", None)
+        # 同一地區後續功能有前後相依，失敗就停；其他地區照常執行
+        queue, dropped = drop_area(queue, _name)
+        if dropped:
+            add_log(f"【{_name}】已停止後續 {dropped} 項功能", "warning")
+    if queue:
+        st.session_state["execution_queue"] = queue
+        _next = queue[0]
+        add_log(f"接續執行：【{_next['area']}】{_next['system']} {_next['function']}（剩 {len(queue)} 項）")
     else:
-        if queue and queue[0] == _func:
-            queue.pop(0)
-        if queue:
-            st.session_state["execution_queue"] = queue
-            add_log(f"接續執行：{queue[0]}")
-        else:
-            st.session_state.pop("execution_queue", None)
-            st.session_state.pop("execution_queue_system", None)
+        st.session_state.pop("execution_queue", None)
 
     # 佇列尚有項目時，下一次 rerun 會接續執行。
     st.rerun()
