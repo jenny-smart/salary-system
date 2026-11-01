@@ -2486,3 +2486,99 @@ def setup_reconciliation_marks(
     _add_service_date_order_links(ss, log_fn=log)
 
     log("===== 比對前清空、異常標註與篩選設定完成 =====")
+
+
+# ═══════════════════════════════════════════════════════════════
+# 發票核對 #N/A → 查後台待退狀態，已全額退款就在 BK 標示
+#
+# 「金流對帳」BR（發票核對）出現 #N/A，代表 00發票 查不到這張發票，
+# 常見原因是訂單已全額退款、發票已作廢。逐筆以 BM 訂單編號（去掉
+# -1/-2 子單後綴）查檸檬後台，待退狀態＝已全額退款（isRefund=3）時，
+# 在 BK 人工確認欄填「已全額退款」；BK 有值後條件式格式會自動消色。
+# 只處理 BL 付款日期屬於 BK1 月份、且 BK 仍空白的列。
+# ═══════════════════════════════════════════════════════════════
+
+FULL_REFUND_MARK = "已全額退款"
+
+
+def _is_na(value) -> bool:
+    return str(value or "").strip().upper().startswith("#N/A")
+
+
+def _full_refund_candidates(rows: list[list], month_text: str) -> dict[str, list[int]]:
+    """
+    rows 為「金流對帳」BK1:BR 的值（第 0 筆＝第 1 列）。回傳
+    {LC訂單編號: [列號, ...]}，只收 BR=#N/A、BK 空白、BL 在本期月份的列。
+    BK=0 BL=1 BM=2 … BR=7（相對索引）。
+    """
+    candidates: dict[str, list[int]] = {}
+    for offset, row in enumerate(rows[1:], start=2):
+        cell = lambda i: row[i] if len(row) > i else ""
+        if not _is_na(cell(7)):
+            continue
+        if str(cell(0) or "").strip():
+            continue
+        if month_text and _extract_year_month(cell(1)) != month_text:
+            continue
+        base_order = _base_purchase_order_no(cell(2))
+        if base_order:
+            candidates.setdefault(base_order, []).append(offset)
+    return candidates
+
+
+def mark_full_refund_for_invoice_na(
+    root_folder_id: str, period: str, region_name: str, log_fn=None
+) -> dict:
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    from modules.lemon_backend import login_region, logout, get_refund_status
+
+    reconciliation_id = _get_period_file_id(root_folder_id, period, "金流對帳", region_name)
+    ss = open_spreadsheet(reconciliation_id)
+    ws = ss.worksheet(RECONCILIATION_SHEET_NAME)
+
+    rows = ws.get(f"BK1:BR{max(ws.row_count, 2)}") or []
+    month_text = str(rows[0][0]).strip() if rows and rows[0] else ""
+    month_text = month_text or _month_text(period)
+    candidates = _full_refund_candidates(rows, month_text)
+
+    result = {"checked": len(candidates), "marked": [], "not_full": [], "not_found": [], "errors": []}
+    if not candidates:
+        log(f"🔵 「{RECONCILIATION_SHEET_NAME}」BR 發票核對沒有 #N/A 待查訂單")
+        return result
+
+    log(f"🔍 BR 發票核對 #N/A 共 {len(candidates)} 張訂單，開始查詢後台待退狀態…")
+    session = login_region(region_name)
+    updates: list[dict] = []
+    try:
+        for order_no, row_nums in candidates.items():
+            try:
+                status = get_refund_status(session, order_no)
+            except Exception as exc:
+                result["errors"].append(order_no)
+                log(f"⚠️ {order_no} 查詢後台失敗：{exc}")
+                continue
+            if not status["found"]:
+                result["not_found"].append(order_no)
+                log(f"⚠️ {order_no} 後台查無訂單")
+            elif status["full_refund"]:
+                result["marked"].append(order_no)
+                for row_num in row_nums:
+                    updates.append({"range": f"BK{row_num}", "values": [[FULL_REFUND_MARK]]})
+            else:
+                result["not_full"].append(order_no)
+    finally:
+        logout(session)
+
+    if updates:
+        ws.batch_update(updates, value_input_option="USER_ENTERED")
+    log(
+        f"🔵 BR #N/A 待退狀態查詢完成：{len(result['marked'])} 張已全額退款"
+        f"（BK 標示 {len(updates)} 列），{len(result['not_full'])} 張非全額退款，"
+        f"{len(result['not_found'])} 張查無訂單"
+    )
+    if result["not_full"]:
+        log(f"⚠️ 非全額退款，需人工確認：{'、'.join(result['not_full'])}")
+    return result
