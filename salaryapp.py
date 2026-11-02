@@ -584,7 +584,6 @@ FUNCTION_MAP = {
         "① 承攬費通知信",
         "② 元大承攬費",
         "③ 元大工具包押金",
-        "④ 元大銀行-薪資檔上傳待放行",
     ],
 }
 
@@ -672,10 +671,7 @@ else:
 selected_name = selected_names[0] if len(selected_names) == 1 else None
 selected_region = next((r for r in regions if r["name"] == selected_name), {}) if selected_name else {}
 
-is_yuanta_release = any(
-    item.endswith("元大銀行-薪資檔上傳待放行") for item in selected_functions
-) or str(current_item.get("function", "")).endswith("元大銀行-薪資檔上傳待放行")
-requires_python = len(selected_functions) > 1 or len(selected_names) > 1 or is_yuanta_release
+requires_python = len(selected_functions) > 1 or len(selected_names) > 1
 engine_options = ["PYTHON"] if requires_python else ["PYTHON", "GAS"]
 # 網頁上按下的按鈕都記一筆到主控表「salary-system執行Log-年度」；各功能執行結果另記
 from modules import unified_log as _unified_log
@@ -694,42 +690,6 @@ execution_engine = st.selectbox(
     help="尚未完成 Python 驗證的功能可切回 GAS；複選功能或地區時僅能使用 PYTHON。",
 )
 
-include_internal_salary = False
-transfer_fubon_to_yuanta = False
-salary_release_plan = None
-if is_yuanta_release and len(selected_names) > 1:
-    st.warning("元大銀行-薪資檔上傳待放行一次只能選一個地區。")
-elif is_yuanta_release and selected_name:
-    include_internal_salary = st.checkbox("內勤薪資")
-    transfer_fubon_to_yuanta = st.checkbox("富邦匯款到元大")
-    plan_key = (period, selected_name, include_internal_salary)
-    if st.button("🔎 檢查本次檔案與金額", use_container_width=True):
-        try:
-            from modules.yuanta_salary_release import build_salary_plan
-            salary_release_plan = build_salary_plan(
-                str(selected_region.get("root_folder_id", "") or ""),
-                period,
-                str(selected_name or ""),
-                include_internal_salary,
-            )
-            st.session_state["yuanta_salary_release_plan"] = {
-                "key": plan_key,
-                "files": salary_release_plan,
-            }
-        except Exception as exc:
-            st.session_state.pop("yuanta_salary_release_plan", None)
-            st.error(f"檢查檔案失敗：{exc}")
-
-    saved_plan = st.session_state.get("yuanta_salary_release_plan", {})
-    if saved_plan.get("key") == plan_key:
-        salary_release_plan = saved_plan.get("files") or []
-        from modules.yuanta_salary_release import plan_total
-        for item in salary_release_plan:
-            st.write(f"{item.name}　NT$ {item.amount:,}")
-        st.markdown(f"**合計：NT$ {plan_total(salary_release_plan):,}**")
-    else:
-        st.caption("請先檢查檔案與金額，確認後再執行。")
-
 start_clicked = st.button(
     "▶ 執行"
     + (f"（{len(selected_names)} 區 × {len(selected_functions)} 項）"
@@ -739,7 +699,6 @@ start_clicked = st.button(
         not selected_functions
         or not selected_names
         or bool(active_queue)
-        or (is_yuanta_release and (len(selected_names) != 1 or salary_release_plan is None))
     ),
 )
 
@@ -1691,26 +1650,6 @@ if run_clicked and _run_engine == "PYTHON":
 
                         if not success:
                             raise RuntimeError(f"{_plain_func}執行失敗")
-
-                    elif _plain_func == "元大銀行-薪資檔上傳待放行":
-                        from modules.yuanta_salary_release import (
-                            plan_total,
-                            prepare_fubon_to_yuanta,
-                            upload_yuanta_salary_files,
-                        )
-
-                        files = salary_release_plan or []
-                        if not files:
-                            raise RuntimeError("請先檢查本次檔案與金額")
-
-                        def bank_log(message):
-                            add_log(message, "success" if "已送待放行" in message else "info")
-
-                        total = plan_total(files)
-                        if transfer_fubon_to_yuanta:
-                            prepare_fubon_to_yuanta(_name, total, log=bank_log)
-                        upload_yuanta_salary_files(files, _name, log=bank_log)
-                        add_log(f"元大薪資檔已全部送待放行，合計 NT$ {total:,}", "success")
 
             except Exception as e:
                 import traceback
