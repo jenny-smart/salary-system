@@ -13,7 +13,6 @@ from dataclasses import dataclass
 # 不適合批次執行的功能：仍會顯示在盤點表，但不能勾選一併執行
 NOT_BATCHABLE = {
     "⑩ 一鍵執行": "尚未實作",
-    "④ 元大銀行-薪資檔上傳待放行": "需先逐區檢查檔案與金額",
 }
 
 # 功能完成的替代判斷：功能 → 打卡（record_execution）作業名稱
