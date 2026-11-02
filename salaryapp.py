@@ -1255,6 +1255,15 @@ if run_clicked and _run_engine == "PYTHON":
                         # 搬運完成後，才清空核對欄/底色、標記異常並設定篩選。
                         setup_reconciliation_marks(root_id, _period, _name, add_log)
 
+                        # BR 發票核對為 #N/A → 查後台待退狀態，已全額退款就在 BK 標示。
+                        try:
+                            from modules.payment_reconciliation import mark_full_refund_for_invoice_na
+                            refund_result = mark_full_refund_for_invoice_na(root_id, _period, _name, add_log)
+                            if refund_result["marked"]:
+                                add_log(f"BK 已標示已全額退款：{len(refund_result['marked'])} 張訂單", "success")
+                        except Exception as refund_exc:
+                            add_log(f"⚠️ 發票核對 #N/A 查詢待退狀態失敗：{refund_exc}", "warning")
+
                         check_result = check_reconciliation(root_id, _period, _name, add_log)
                         issues = check_result.get("issues", [])
                         if issues:
