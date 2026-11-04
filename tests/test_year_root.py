@@ -116,3 +116,35 @@ def test_service_fee_mail_resolves_passed_ids_by_period(drive, monkeypatch):
             mail_id="m26", roster_id="r26", cleaning_file_id="c", other_file_id="o",
             log=lambda *_: None)
     assert opened[0] == "m27"
+
+
+@pytest.fixture
+def report_drive():
+    year_root._FILE_CACHE.clear()
+    return FakeDrive([
+        {"id": "top", "name": "專員承攬服務費", "mimeType": year_root.FOLDER_MIME},
+        {"id": "y26", "name": "2026專員承攬服務費", "parent": "top", "mimeType": year_root.FOLDER_MIME},
+        {"id": "y27", "name": "2027專員承攬服務費", "parent": "top", "mimeType": year_root.FOLDER_MIME},
+        {"id": "tp26", "name": "01.台北專員", "parent": "y26", "mimeType": year_root.FOLDER_MIME},
+        {"id": "tp27", "name": "01.台北專員", "parent": "y27", "mimeType": year_root.FOLDER_MIME},
+        {"id": "rep26", "name": "承攬費申報", "parent": "tp26"},
+        {"id": "rep27", "name": "承攬費申報", "parent": "tp27"},
+        {"id": "plain", "name": "設定檔", "parent": "top"},
+    ])
+
+
+def test_contract_report_follows_year_folder(report_drive):
+    """承攬費申報檔名沒年份：202701-2 要寫 2027 年資料夾的那份，不能蓋掉 2026 年 1 月。"""
+    assert "contract_report_id" in year_root.YEAR_FILE_KEYS
+    assert year_root.file_for_period(report_drive, "rep26", "202612-2") == "rep26"
+    assert year_root.file_for_period(report_drive, "rep26", "202701-2") == "rep27"
+    assert year_root.file_for_period(report_drive, "rep27", "202612-2") == "rep26"
+
+
+def test_contract_report_missing_next_year_raises(report_drive):
+    with pytest.raises(FileNotFoundError):
+        year_root.file_for_period(report_drive, "rep26", "202801-2")
+
+
+def test_file_without_year_anywhere_keeps_id(report_drive):
+    assert year_root.file_for_period(report_drive, "plain", "202701-1") == "plain"
