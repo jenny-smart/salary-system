@@ -74,7 +74,9 @@ def root_for_period(drive, root_folder_id: str, period: str) -> str:
 # 例：roster_id 指向「2026專員名冊與時數-台北」，執行 202701 的 00調薪／結算時
 #     改用「2027專員名冊與時數-台北」（{YYYYMM}專員名冊 在新年度檔）。
 SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
-YEAR_FILE_KEYS = ("allowance_id", "salary_id", "roster_id", "mail_id", "revenue_summary_id")
+# contract_report_id：「YYYY專員承攬服務費/0X.地區專員/承攬費申報」，檔名沒有年份，靠上層年度資料夾換年。
+YEAR_FILE_KEYS = ("allowance_id", "salary_id", "roster_id", "mail_id", "revenue_summary_id",
+                  "contract_report_id")
 _FILE_CACHE: Dict[Tuple[str, str], str] = {}
 
 
@@ -113,7 +115,9 @@ def _find(drive, parent_id: str, name: str, folder: bool):
 
 
 def file_for_period(drive, file_id: str, period: str) -> str:
-    """回傳 file_id 在期別年度的同名檔（檔名年份替換）；同年度回傳原 ID，找不到 raise。"""
+    """回傳 file_id 在期別年度的同名檔（檔名年份替換）；同年度回傳原 ID，找不到 raise。
+    檔名沒有年份（例如「承攬費申報」）時，看上層資料夾的年份：同年度回傳原 ID，
+    不同年度就到該年度資料夾、依相同子路徑找同名檔。"""
     year = str(period or "")[:4]
     if not file_id or not re.fullmatch(r"20\d{2}", year):
         return file_id
@@ -123,20 +127,24 @@ def file_for_period(drive, file_id: str, period: str) -> str:
     meta = drive.files().get(fileId=file_id, fields="id,name,parents",
                              supportsAllDrives=True).execute()
     m = _YEAR.search(meta.get("name", ""))
-    if not m or m.group(1) == year:
+    if m and m.group(1) == year:
         _FILE_CACHE[key] = file_id
         return file_id
-    target = meta["name"].replace(m.group(1), year, 1)
+    target = meta["name"].replace(m.group(1), year, 1) if m else meta["name"]
     parent_id = (meta.get("parents") or [""])[0]
-    hit = _find(drive, parent_id, target, False) if parent_id else None
-    path, folder_id = [], parent_id
+    hit = _find(drive, parent_id, target, False) if (m and parent_id) else None
+    path, folder_id, year_folder_seen = [], parent_id, False
     for _ in range(4):  # 往上找含年份的資料夾，換年度後依相同子路徑往下找
         if hit or not folder_id:
             break
         folder = _get(drive, folder_id)
         fm = _YEAR.search(folder.get("name", ""))
         grand_id = (folder.get("parents") or [""])[0]
+        if fm and not m and fm.group(1) == year:
+            _FILE_CACHE[key] = file_id  # 檔名沒年份、所在年度資料夾就是期別年度
+            return file_id
         if fm and grand_id:
+            year_folder_seen = True
             node = _find(drive, grand_id, folder["name"].replace(fm.group(1), year, 1), True)
             for sub in reversed(path):
                 node = node and _find(drive, node["id"], sub, True)
@@ -144,6 +152,10 @@ def file_for_period(drive, file_id: str, period: str) -> str:
             break
         path.append(folder.get("name", ""))
         folder_id = grand_id
+    if not hit and not m and not year_folder_seen:
+        # 檔名沒年份、上層也找不到年度資料夾：不是年度檔，維持原 ID（舊行為）
+        _FILE_CACHE[key] = file_id
+        return file_id
     if not hit:
         raise FileNotFoundError(f"找不到 {year} 年度檔案「{target}」；請先執行「生成新年度」")
     _FILE_CACHE[key] = hit["id"]
