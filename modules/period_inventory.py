@@ -15,7 +15,7 @@ from dataclasses import dataclass
 # 不適合批次執行的功能：仍會顯示在盤點表，但不能勾選一併執行
 NOT_BATCHABLE = {
     "⑩ 一鍵執行": "尚未實作",
-    "④ 寄出承攬費通知信": "寄信需確認後單獨執行",
+    "② 寄出承攬費通知信": "寄信需確認後單獨執行",
     "⑥ 寄出工具包押金通知信": "寄信需確認後單獨執行",
 }
 
@@ -82,6 +82,8 @@ def build_inventory(rows: list[list[str]], period: str, areas: list[str],
     """
     period = str(period or "").strip()
     wanted_areas = set(areas)
+    renamed = {(system, func.split(" ", 1)[-1].strip()): func
+               for system, funcs in function_map.items() for func in funcs}
     alias_index = {}
     for system, funcs in function_map.items():
         for func in funcs:
@@ -103,6 +105,10 @@ def build_inventory(rows: list[list[str]], period: str, areas: list[str],
         if row_period != period or area not in wanted_areas:
             continue
         key = (area, system, func)
+        if key not in result:  # 功能重新編號（例如 ② 元大承攬費 → ④ 元大承攬費）：依去掉編號的名稱對應
+            new_func = renamed.get((system, func.split(" ", 1)[-1].strip()))
+            if new_func:
+                key = (area, system, new_func)
         if key in result and "Python" in run_type and status in ("成功", "失敗"):
             result[key] = Status(DONE if status == "成功" else FAILED, ts, message)
             continue

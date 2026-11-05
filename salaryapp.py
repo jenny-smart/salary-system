@@ -582,10 +582,10 @@ FUNCTION_MAP = {
     ],
     "📨 承攬作業": [
         "① 承攬費通知信",
-        "② 元大承攬費",
-        "③ 元大工具包押金",
-        "④ 寄出承攬費通知信",
-        "⑤ 更新寄信狀態",
+        "② 寄出承攬費通知信",
+        "③ 更新寄信狀態",
+        "④ 元大承攬費",
+        "⑤ 元大工具包押金",
         "⑥ 寄出工具包押金通知信",
     ],
 }
@@ -620,7 +620,7 @@ _deadline_shown = False
 for function_name in FUNCTION_MAP[system]:
     if st.checkbox(function_name, key=f"func_{system}_{function_name}"):
         selected_functions.append(function_name)
-        if system == "📨 承攬作業" and function_name in ("① 承攬費通知信", "④ 寄出承攬費通知信") \
+        if system == "📨 承攬作業" and function_name in ("① 承攬費通知信", "② 寄出承攬費通知信") \
                 and not _deadline_shown:
             _deadline_shown = True
             _tomorrow = (datetime.now(ZoneInfo("Asia/Taipei")) + timedelta(days=1)).date()
@@ -631,13 +631,13 @@ for function_name in FUNCTION_MAP[system]:
                 st.time_input("回覆期限時間", value=dt_time(14, 0), key="fee_reply_time", step=1800)
         if system == "📨 承攬作業" and function_name == "① 承攬費通知信":
             st.caption("執行後會產生本期範本草稿內文與群組公告文字，供複製貼上。")
-        if system == "📨 承攬作業" and function_name == "④ 寄出承攬費通知信":
+        if system == "📨 承攬作業" and function_name == "② 寄出承攬費通知信":
             st.caption("用各區寄件 Gmail 寄出本期工作表中 F 欄（發送時間）空白的列；已寄過的不會重寄。"
                        "信件內文同「① 範本草稿內文」，回覆期限取上方設定。")
         if system == "📨 承攬作業" and function_name == "⑥ 寄出工具包押金通知信":
             st.caption("寄出「期別工具包押金」工作表中 G 欄（發送時間）空白的列，內容同「<<MEMO>>」押金草稿。")
 if system == "📨 承攬作業" and any(f in selected_functions
-                                   for f in ("④ 寄出承攬費通知信", "⑥ 寄出工具包押金通知信")):
+                                   for f in ("② 寄出承攬費通知信", "⑥ 寄出工具包押金通知信")):
     st.caption("寄出前會逐列核對：主旨、D 欄檔名、連結的實際檔名都要是 B 欄同一人，有任何一列不符就整批不寄。")
     st.text_input("測試收件信箱（填了只寄第一封測試信到這裡，不寄給專員）", key="fee_send_test_to")
     st.checkbox("✅ 我已確認名單與內容，要正式寄出", key="fee_send_confirm")

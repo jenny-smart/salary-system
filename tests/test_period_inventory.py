@@ -84,3 +84,12 @@ def test_load_punch_times_reads_period_time_column():
     ss = MagicMock()
     ss.worksheet.side_effect = lambda name: ws if name == "台北" else (_ for _ in ()).throw(Exception("x"))
     assert inv.load_punch_times("202610-2", ["台北", "新北"], ss) == {"台北": {"前置作業": "2026/11/01 10:00:00"}}
+
+
+def test_renumbered_function_still_matches_old_log_name():
+    fmap = {"📨 承攬作業": ["① 承攬費通知信", "② 寄出承攬費通知信", "④ 元大承攬費"]}
+    rows = [_row("2026-11-01 09:00:00", "📨 承攬作業", "② 元大承攬費", "台北", "202610-2"),
+            _row("2026-11-01 10:00:00", "📨 承攬作業", "④ 寄出承攬費通知信", "台北", "202610-2")]
+    status = inv.build_inventory(rows, "202610-2", ["台北"], fmap)
+    assert status[("台北", "📨 承攬作業", "④ 元大承攬費")].state == inv.DONE
+    assert status[("台北", "📨 承攬作業", "② 寄出承攬費通知信")].state == inv.DONE
