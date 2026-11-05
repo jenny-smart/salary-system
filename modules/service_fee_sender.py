@@ -174,10 +174,10 @@ def send_service_fee_mails(
     if test_to:
         if not todo and not rows:
             raise RuntimeError("工作表沒有可寄送的資料")
-        r = dict((todo or rows)[0], token="test")
+        r = (todo or rows)[0]  # 測試信直接放原連結，避免點擊被記到專員那一列
         gmail.users().messages().send(userId="me", body=build_message(
             mailbox, sender_name, test_to, "【測試】" + r["subject"],
-            _row_body(template_html, r, track))).execute()
+            _row_body(template_html, r, None))).execute()
         _emit(log, f"✅ 測試信已寄到 {test_to}（內容為 {r['name']}）")
         return result
 
