@@ -756,7 +756,8 @@ st.markdown('<div class="card"><div class="card-title">📋 期別作業盤點</
 from modules import period_inventory as _inv
 
 st.caption(
-    "依期別列出金流對帳／清潔承攬／其他承攬／承攬作業每個功能在各地區的狀態："
+    "依期別列出金流對帳／清潔承攬／其他承攬／承攬作業每個功能在各地區的狀態"
+    "（Python 執行紀錄＋主控表打卡，GAS 跑過的也算）："
     "✅ 完成　❌ 沒完成／失敗　— 不批次執行。全部勾選的地區都完成會在「完成」欄打 ✅。"
     "沒完成的功能預設打勾，按「執行」只補做沒完成的地區（依地區 → 系統 → 功能順序，某地區失敗只停該地區）。"
 )
@@ -769,10 +770,11 @@ if st.button("🔍 盤點", key="inventory_load", disabled=not _inv_areas or not
     try:
         with st.spinner("讀取主控表執行 Log 中…"):
             _rows = _inv.load_log_rows(period, datetime.now(ZoneInfo("Asia/Taipei")).year)
+            _punches = _inv.load_punch_times(period, list(_inv_areas))
         st.session_state["inventory"] = {
             "period": period,
             "areas": list(_inv_areas),
-            "status": _inv.build_inventory(_rows, period, list(_inv_areas), FUNCTION_MAP),
+            "status": _inv.build_inventory(_rows, period, list(_inv_areas), FUNCTION_MAP, _punches),
         }
         st.session_state["inventory_areas"] = list(_inv_areas)
         st.session_state.pop("inventory_select_all", None)

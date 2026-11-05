@@ -51,3 +51,36 @@ def test_load_log_rows_reads_period_year_and_current_year():
     ss.worksheet.side_effect = lambda title: ws if title.endswith("2026") else (_ for _ in ()).throw(Exception())
     assert inv.load_log_rows("202612-2", 2027, spreadsheet=ss) == [["a"]]
     assert inv.log_years("202612-2", 2027) == [2026, 2027]
+
+
+def test_punch_sheet_marks_done_including_gas_runs():
+    fmap = {"🧹 清潔承攬": ["① 前置作業", "② 00調薪", "⑮ 產生PDF"],
+            "📦 其他承攬": ["① 執行前置作業"]}
+    rows = [_row("2026-11-01 09:00:00", "🧹 清潔承攬", "② 00調薪", "台北", "202610-2", "失敗", msg="x")]
+    punches = {"台北": {"前置作業": "2026/11/01 08:00:00", "00調薪": "2026/11/01 10:00:00",
+                       "家電前置": "2026/11/01 11:00:00", "產生PDF": "2026/11/01 12:00:00"},
+               "台中": {"00調薪": "2026/10/31 10:00:00"}}
+    status = inv.build_inventory(rows, "202610-2", ["台北", "台中"], fmap, punches)
+    assert status[("台北", "🧹 清潔承攬", "① 前置作業")].message == "打卡：前置作業"
+    assert status[("台北", "🧹 清潔承攬", "② 00調薪")].state == inv.DONE  # 打卡晚於失敗
+    assert status[("台北", "📦 其他承攬", "① 執行前置作業")].state == inv.DONE
+    assert status[("台北", "🧹 清潔承攬", "⑮ 產生PDF")].state == inv.NONE  # 沒有打卡的功能不採計
+    assert status[("台中", "🧹 清潔承攬", "② 00調薪")].state == inv.DONE
+
+
+def test_punch_older_than_failure_keeps_failed():
+    rows = [_row("2026-11-02 09:00:00", "🧹 清潔承攬", "② 00調薪", "台北", "202610-2", "失敗", msg="x")]
+    status = inv.build_inventory(rows, "202610-2", ["台北"], FMAP, {"台北": {"00調薪": "2026/11/01 10:00:00"}})
+    assert status[("台北", "🧹 清潔承攬", "② 00調薪")].state == inv.FAILED
+
+
+def test_load_punch_times_reads_period_time_column():
+    ws = MagicMock()
+    ws.get_all_values.return_value = [
+        ["作業", "202610-1", "", "202610-2", ""],
+        ["前置作業", "", "2026/10/20 10:00:00", "", "2026/11/01 10:00:00"],
+        ["00調薪", "153", "2026/10/20 11:00:00", "", ""],
+    ]
+    ss = MagicMock()
+    ss.worksheet.side_effect = lambda name: ws if name == "台北" else (_ for _ in ()).throw(Exception("x"))
+    assert inv.load_punch_times("202610-2", ["台北", "新北"], ss) == {"台北": {"前置作業": "2026/11/01 10:00:00"}}
