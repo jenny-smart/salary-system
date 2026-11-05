@@ -415,6 +415,11 @@ def _mailbox(region: str) -> str:
     return mailbox
 
 
+def sender_display_name(region: str) -> str:
+    """寄件人顯示名稱，沿用各區信箱原本的「檸檬家事服務財務-地區」。"""
+    return f"檸檬家事服務財務-{region.replace('區', '').strip()}"
+
+
 def _drive_name_lookup():
     from modules.auth import get_jenny_drive_service
     from modules.service_fee_mail import _drive_file_name
@@ -430,7 +435,7 @@ def run_send(region: str, period: str, deadline: datetime, mail_id: str = "",
 
     mailbox = _mailbox(region)
     book, mail_id = _open_mail_book(region, period, mail_id)
-    sender_name = f"檸檬家事-{region.replace('區', '').strip()}"
+    sender_name = sender_display_name(region)
     track = {"gas_url": gas_url, "mail_id": mail_id, "period": period} if gas_url else None
     _emit(log, f"▶ 承攬費寄信 {region} {period}：寄件 {mailbox}"
                + ("（追蹤點連結）" if track else "（未設定 GAS 網址，不追蹤點連結）"))
@@ -451,7 +456,7 @@ def run_send_deposit(region: str, period: str, mail_id: str = "", log=None, test
         _emit(log, f"⚠️ 沒有「{period}{DEPOSIT.sheet_suffix}」工作表（工具包押金只在下半月），不寄信")
         return {"sent": 0, "skipped": 0, "failed": [], "total": 0}
     _emit(log, f"▶ 工具包押金寄信 {region} {period}：寄件 {mailbox}")
-    return send_mails(get_gmail_service(mailbox), ws, mailbox, "檸檬家事財務",
+    return send_mails(get_gmail_service(mailbox), ws, mailbox, sender_display_name(region),
                       lambda r, _tracked: build_deposit_html(r), DEPOSIT, period, log=log, test_to=test_to)
 
 

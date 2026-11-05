@@ -169,7 +169,7 @@ def test_deposit_mail_uses_g_columns_and_template():
     assert result["sent"] == 2 and ws.rows[0][6] and ws.rows[0][7] == "已寄出" and ws.rows[0][9] == "t1"
     body = gmail.sent[0].get_body(("html",)).get_content()
     assert "已達91場" in body and "color:#ff0000\">2026/11/10" in body and "匯款1,500元" in body
-    assert gmail.sent[0]["From"].startswith("檸檬家事財務")
+    assert gmail.sent[0]["From"].startswith("檸檬家事財務")  # 測試直接傳入的名稱
 
 
 
@@ -310,3 +310,23 @@ def test_deposit_resync_keeps_status_only_for_existing_sheet(monkeypatch):
             assert ws.writes["G"] == [["2026/11/05 10:00:00", "已寄出", "t", "th", "", ""], [""] * 6]
         else:
             assert "G" not in ws.writes  # 剛從上一期複製的狀態不保留
+
+
+def test_astral_emoji_are_real_4_byte_utf8_not_cesu8():
+    """舊工具把 😊💰🙏 等拆成兩半各自編碼（CESU-8），收件端顯示成 ������。"""
+    body = "<div>😊💰🙏📄📩💡🧰🍋 ✨\ufe0f⏰\ufe0f</div>"
+    raw = base64.urlsafe_b64decode(sender.build_message(MAILBOX, "x", "a@x.com", "s", body)["raw"])
+    msg = email.message_from_bytes(raw, policy=policy.default)
+    for part in (msg.get_body(("html",)), msg.get_body(("plain",))):
+        data = part.get_payload(decode=True)
+        assert "😊".encode("utf-8") in data and "🧰".encode("utf-8") in data
+        assert b"\xed\xa0" not in data and b"\xed\xb8" not in data  # 沒有代理字元（CESU-8）
+        data.decode("utf-8")  # 嚴格解碼不出錯
+
+
+def test_sender_display_name_and_signature_follow_region():
+    from datetime import datetime
+    from modules.service_fee_draft import build_mail_html
+
+    assert sender.sender_display_name("台中區") == "檸檬家事服務財務-台中"
+    assert "檸檬家事-台中" in build_mail_html("202610-2", "台中", datetime(2026, 11, 2, 14))
