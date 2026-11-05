@@ -582,10 +582,11 @@ FUNCTION_MAP = {
     ],
     "📨 承攬作業": [
         "① 承攬費通知信",
-        "② 元大承攬費",
-        "③ 元大工具包押金",
-        "④ 寄出承攬費通知信",
-        "⑤ 更新寄信狀態",
+        "② 寄出承攬費通知信",
+        "③ 更新寄信狀態",
+        "④ 元大承攬費",
+        "⑤ 元大工具包押金",
+        "⑥ 寄出工具包押金通知信",
     ],
 }
 
@@ -619,7 +620,7 @@ _deadline_shown = False
 for function_name in FUNCTION_MAP[system]:
     if st.checkbox(function_name, key=f"func_{system}_{function_name}"):
         selected_functions.append(function_name)
-        if system == "📨 承攬作業" and function_name in ("① 承攬費通知信", "④ 寄出承攬費通知信") \
+        if system == "📨 承攬作業" and function_name in ("① 承攬費通知信", "② 寄出承攬費通知信") \
                 and not _deadline_shown:
             _deadline_shown = True
             _tomorrow = (datetime.now(ZoneInfo("Asia/Taipei")) + timedelta(days=1)).date()
@@ -630,11 +631,16 @@ for function_name in FUNCTION_MAP[system]:
                 st.time_input("回覆期限時間", value=dt_time(14, 0), key="fee_reply_time", step=1800)
         if system == "📨 承攬作業" and function_name == "① 承攬費通知信":
             st.caption("執行後會產生本期範本草稿內文與群組公告文字，供複製貼上。")
-        if system == "📨 承攬作業" and function_name == "④ 寄出承攬費通知信":
+        if system == "📨 承攬作業" and function_name == "② 寄出承攬費通知信":
             st.caption("用各區寄件 Gmail 寄出本期工作表中 F 欄（發送時間）空白的列；已寄過的不會重寄。"
                        "信件內文同「① 範本草稿內文」，回覆期限取上方設定。")
-            st.text_input("測試收件信箱（填了只寄第一封測試信到這裡，不寄給專員）", key="fee_send_test_to")
-            st.checkbox("✅ 我已確認名單與內容，要正式寄出", key="fee_send_confirm")
+        if system == "📨 承攬作業" and function_name == "⑥ 寄出工具包押金通知信":
+            st.caption("寄出「期別工具包押金」工作表中 G 欄（發送時間）空白的列，內容同「<<MEMO>>」押金草稿。")
+if system == "📨 承攬作業" and any(f in selected_functions
+                                   for f in ("② 寄出承攬費通知信", "⑥ 寄出工具包押金通知信")):
+    st.caption("寄出前會逐列核對：主旨、D 欄檔名、連結的實際檔名都要是 B 欄同一人，有任何一列不符就整批不寄。")
+    st.text_input("測試收件信箱（填了只寄第一封測試信到這裡，不寄給專員）", key="fee_send_test_to")
+    st.checkbox("✅ 我已確認名單與內容，要正式寄出", key="fee_send_confirm")
 
 # ── 執行佇列：每項為 {area, system, function, engine}，可跨地區、跨系統 ──
 active_queue = [
@@ -771,10 +777,20 @@ if st.button("🔍 盤點", key="inventory_load", disabled=not _inv_areas or not
         with st.spinner("讀取主控表執行 Log 中…"):
             _rows = _inv.load_log_rows(period, datetime.now(ZoneInfo("Asia/Taipei")).year)
             _punches = _inv.load_punch_times(period, list(_inv_areas))
+            try:
+                from modules.service_fee_sender import load_send_progress
+                _send_progress = load_send_progress(
+                    period, list(_inv_areas),
+                    {r["name"]: str(r.get("mail_id", "") or "") for r in regions},
+                )
+            except Exception as _exc:
+                st.warning(f"讀取承攬服務費 mail 寄出進度失敗：{_exc}")
+                _send_progress = {}
         st.session_state["inventory"] = {
             "period": period,
             "areas": list(_inv_areas),
-            "status": _inv.build_inventory(_rows, period, list(_inv_areas), FUNCTION_MAP, _punches),
+            "status": _inv.build_inventory(_rows, period, list(_inv_areas), FUNCTION_MAP, _punches,
+                                           _send_progress),
         }
         st.session_state["inventory_areas"] = list(_inv_areas)
         st.session_state.pop("inventory_select_all", None)
@@ -791,7 +807,7 @@ elif _inventory:
     _inv_status = _inventory["status"]
     _areas = _inventory["areas"]
     _inv_rows = []
-    for _sys, _funcs in FUNCTION_MAP.items():
+    for _sys, _funcs in _inv.inventory_map(FUNCTION_MAP).items():
         for _f in _funcs:
             _cells = {_a: _inv_status[(_a, _sys, _f)] for _a in _areas}
             _todo = [_a for _a in _areas if _cells[_a].state != _inv.DONE]
@@ -825,7 +841,9 @@ elif _inventory:
         return "✅" if stt.state == _inv.DONE else "❌"
 
     _table = pd.DataFrame([{
-        "執行": bool(r["runnable"] and (True if _override is None else _override)),
+        # 寄信類預設不勾，避免補做其他功能時順便寄出
+        "執行": bool(r["runnable"] and (
+            (r["func"] not in _inv.CONFIRM_FUNCS) if _override is None else _override)),
         "系統": r["system"],
         "功能": r["func"],
         "完成": "✅ 完成" if r["done"] else "❌ 未完成",
@@ -842,7 +860,7 @@ elif _inventory:
     with st.expander("各地區明細（執行時間、錯誤訊息）"):
         def _detail(stt):
             if stt.state == _inv.NONE:
-                return "未執行"
+                return f"未執行 {stt.message}".strip()
             text = f"{_icon(stt)} {stt.time}"
             return f"{text} {stt.message}".strip()
 
@@ -856,16 +874,23 @@ elif _inventory:
     for r in (r for r, flag in zip(_inv_rows, _flags) if flag and not r["runnable"]):
         st.caption(f"「{r['system']} {r['func']}」{'已完成' if r['done'] else '不能批次執行'}，不會執行。")
     _picked = [(_a, r["system"], r["func"]) for r in _selected_rows for _a in r["todo"]]
-    if any(r["func"] == "① 承攬費通知信" for r in _selected_rows):
+    if any(r["func"] in ("① 承攬費通知信", "② 寄出承攬費通知信") for r in _selected_rows):
         st.caption("承攬費通知信的回覆期限沿用上方設定（未設定則為明天 14:00）。")
+    _needs_confirm = [r["func"] for r in _selected_rows if r["func"] in _inv.CONFIRM_FUNCS]
+    _inv_confirmed = True
+    if _needs_confirm:
+        st.caption("寄信會先逐列核對主旨、檔名、連結是同一人，不符就整批不寄；已寄過的不會重寄。")
+        _inv_confirmed = st.checkbox(
+            f"✅ 我已確認名單與內容，要正式寄出（{'、'.join(_needs_confirm)}）", key="inventory_send_confirm")
 
     if st.button(
         f"▶️ 執行勾選的 {len(_selected_rows)} 個功能（共 {len(_picked)} 項）",
         key="inventory_run",
         use_container_width=True,
-        disabled=not _picked or bool(active_queue),
+        disabled=not _picked or bool(active_queue) or not _inv_confirmed,
     ):
-        _queue = _inv.build_queue(_picked, _areas, FUNCTION_MAP, engine="PYTHON", period=period)
+        _queue = _inv.build_queue(_picked, _areas, _inv.inventory_map(FUNCTION_MAP), engine="PYTHON",
+                                  period=period, confirmed=bool(_needs_confirm and _inv_confirmed))
         st.session_state["execution_queue"] = _queue
         st.session_state.pop("pdf_result", None)
         st.session_state.pop("inventory", None)  # 執行後需重新盤點
@@ -1632,7 +1657,7 @@ if run_clicked and _run_engine == "PYTHON":
                         }
                         add_log("草稿內文與公告已產生，請至下方「📢 承攬服務費草稿／公告」複製", "success")
 
-                    elif _plain_func in ("寄出承攬費通知信", "更新寄信狀態"):
+                    elif _plain_func in ("寄出承攬費通知信", "更新寄信狀態", "寄出工具包押金通知信"):
                         from modules import service_fee_sender as _sender
 
                         def sender_log(message):
@@ -1640,19 +1665,32 @@ if run_clicked and _run_engine == "PYTHON":
                                     else "warning" if "⚠️" in message else "info")
 
                         _mail_id = str(_region.get("mail_id", "") or "")
+                        _from_inventory = bool(current_item.get("confirmed"))
+                        _test_to = "" if _from_inventory else \
+                            str(st.session_state.get("fee_send_test_to", "") or "").strip()
+                        if _plain_func != "更新寄信狀態" and not _test_to and not _from_inventory \
+                                and not st.session_state.get("fee_send_confirm"):
+                            raise RuntimeError("尚未勾選「我已確認名單與內容，要正式寄出」，未寄出任何信")
                         if _plain_func == "更新寄信狀態":
                             _sender.run_refresh(_name, _period, mail_id=_mail_id, log=sender_log)
+                        elif _plain_func == "寄出工具包押金通知信":
+                            _dep_result = _sender.run_send_deposit(_name, _period, mail_id=_mail_id,
+                                                                   log=sender_log, test_to=_test_to)
+                            if _dep_result["failed"]:
+                                raise RuntimeError(f"{len(_dep_result['failed'])} 封寄送失敗，見工作表 H 欄")
                         else:
-                            _test_to = str(st.session_state.get("fee_send_test_to", "") or "").strip()
-                            if not _test_to and not st.session_state.get("fee_send_confirm"):
-                                raise RuntimeError("尚未勾選「我已確認名單與內容，要正式寄出」，未寄出任何信")
                             _send_deadline = datetime.combine(
                                 st.session_state.get("fee_reply_date")
                                 or (datetime.now(ZoneInfo("Asia/Taipei")) + timedelta(days=1)).date(),
                                 st.session_state.get("fee_reply_time") or dt_time(14, 0),
                             )
+                            _gas_track_url = str(
+                                _safe_secret("GAS_SCHEDULER_WEB_APP_URL", "")
+                                or os.environ.get("GAS_SCHEDULER_WEB_APP_URL", "")
+                            ).strip()
                             _send_result = _sender.run_send(_name, _period, _send_deadline, mail_id=_mail_id,
-                                                            log=sender_log, test_to=_test_to)
+                                                            log=sender_log, test_to=_test_to,
+                                                            gas_url=_gas_track_url)
                             if _send_result["failed"]:
                                 raise RuntimeError(f"{len(_send_result['failed'])} 封寄送失敗，見工作表 G 欄")
 

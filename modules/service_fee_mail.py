@@ -293,13 +293,13 @@ def _write_period_rows(
     log=None,
 ):
     period_ws.update_cell(1, 4, "")  # D1：D2:D 已是含期別的檔名（不含 .pdf）
-    # 已寄出的發送狀態（F:I）依「姓名＋檔名」保留，重新同步不會清掉、也不會錯位
+    # 已寄出的發送狀態（F:K）依「姓名＋檔名」保留，重新同步不會清掉、也不會錯位
     kept_status = {}
-    for r in period_ws.get("B2:I", value_render_option="FORMATTED_VALUE") or []:
-        r = list(r) + [""] * (8 - len(r))
-        if str(r[0]).strip() and any(str(v).strip() for v in r[4:8]):
-            kept_status[(str(r[0]).strip(), str(r[2]).strip())] = r[4:8]
-    period_ws.batch_clear(["B2:I"])
+    for r in period_ws.get("B2:K", value_render_option="FORMATTED_VALUE") or []:
+        r = list(r) + [""] * (10 - len(r))
+        if str(r[0]).strip() and any(str(v).strip() for v in r[4:10]):
+            kept_status[(str(r[0]).strip(), str(r[2]).strip())] = r[4:10]
+    period_ws.batch_clear(["B2:K"])
 
     data = []
     data.extend([[name, link, file_name] for name, link, file_name in cleaning_rows])
@@ -320,9 +320,9 @@ def _write_period_rows(
             data,
             value_input_option="USER_ENTERED",
         )
-        status_rows = [kept_status.get((row[0], row[2]), ["", "", "", ""]) for row in data]
+        status_rows = [kept_status.get((row[0], row[2]), [""] * 6) for row in data]
         if any(any(v for v in r) for r in status_rows):
-            period_ws.update(f"F2:I{1 + len(data)}", status_rows, value_input_option="RAW")
+            period_ws.update(f"F2:K{1 + len(data)}", status_rows, value_input_option="RAW")
             _emit(log, f"保留已寄出狀態 {sum(1 for r in status_rows if r[0])} 筆")
 
     written_names = period_ws.get(
@@ -455,8 +455,16 @@ def _sync_tool_deposit(
         _emit(log, "PDF產出第121列起無資料，略過工具包押金")
         return 0
 
+    existed = _sheet_or_none(mail_ss, f"{period}工具包押金") is not None
     ws = _ensure_deposit_sheet(mail_ss, period, log=log)
-    ws.batch_clear(["B2:C", "G2:G"])
+    # 已寄出的押金通知狀態（G:L）依姓名保留；剛從上一期複製來的狀態一律清掉
+    kept_status = {}
+    if existed:
+        for r in ws.get("B2:L", value_render_option="FORMATTED_VALUE") or []:
+            r = list(r) + [""] * (11 - len(r))
+            if str(r[0]).strip() and str(r[5]).strip():
+                kept_status[str(r[0]).strip()] = r[5:11]
+    ws.batch_clear(["B2:C", "G2:L"])
 
     due = _previous_business_day(_next_month_tenth(period), log=log)
     due_text = due.strftime("%Y/%m/%d")
@@ -471,6 +479,9 @@ def _sync_tool_deposit(
         values,
         value_input_option="USER_ENTERED",
     )
+    status_rows = [kept_status.get(str(a).strip(), [""] * 6) for a, _b in rows]
+    if any(r[0] for r in status_rows):
+        ws.update(f"G2:L{1 + len(values)}", status_rows, value_input_option="RAW")
     _emit(log, f"工具包押金完成：{len(values)} 筆，日期 {due_text}")
     return len(values)
 
@@ -490,7 +501,7 @@ def sync_service_fee_mail(
 
     1. 依地區 mail_id 開啟承攬服務費 mail
     2. mail!A1/A2 更新 roster_id 與當月名冊 IMPORTRANGE
-    3. 複製前一期工作表為目前期別；D1 清空；清 B2:I（已寄出的 F:I 依姓名＋檔名保留）
+    3. 複製前一期工作表為目前期別；D1 清空；清 B2:K（已寄出的 F:K 依姓名＋檔名保留）
     4. 依序寫入 清潔PDF、專案PDF、其他承攬PDF 的姓名/連結
     5. 其他承攬列依 I 欄服務名稱把「清潔」改為水洗/家電/其他服務
     6. 若 清潔承攬 PDF產出!A121:B 有資料，建立目前期別工具包押金

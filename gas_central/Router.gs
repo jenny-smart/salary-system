@@ -147,6 +147,9 @@ var CentralMaster = {
 
 function doGet(e) {
   var action = e && e.parameter && e.parameter.action;
+  if (action === "click") {
+    return handleMailClick_(e);
+  }
   if (action === "generatePdf") {
     return handleCentralPdfRequest_(e);
   }

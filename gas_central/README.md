@@ -19,6 +19,11 @@
 
 `/exec?app=cleaning&spreadsheetId=目標期別試算表ID`
 
+## 承攬費通知信點連結追蹤
+
+`MailTracking.gs`：`/exec?action=click&m=…&s=…&k=…` 記下點擊時間（K 欄）後轉到 C 欄連結。
+更新程式後需「管理部署 → 編輯 → 新版本」，/exec 網址不變。部署者（我）須能編輯各區承攬服務費 mail 試算表。
+
 ## 安全回退
 
 確認中央版本完成測試前，不刪除任何期別檔內原 GAS。

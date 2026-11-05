@@ -115,6 +115,9 @@ MAIL_TASKS = [
     "__TITLE__:承攬mail系統",
     "清潔承攬mail",
     "其他承攬mail",
+    "承攬費通知信",
+    "寄出承攬費通知信",
+    "寄出工具包押金通知信",
 ]
 
 ALL_TASKS = PAYMENT_TASKS + ["__BLANK__"] + CLEANING_TASKS + ["__BLANK__"] + MAIL_TASKS
@@ -255,8 +258,9 @@ def record_execution(
             next_row = max(sheet.row_count and len(sheet.col_values(1)) + 2, 3)
             sheet.update(f"A{next_row}:A{next_row + 1}", [["承攬mail系統"], [task_key]])
             row = next_row + 1
-        if row is None and task_key in ("場次時數", "承攬費申報"):
-            # 既有地區工作表建立於這兩個作業項目新增之前，補一列讓打卡有位置寫入。
+        if row is None and task_key in ("場次時數", "承攬費申報", "承攬費通知信",
+                                        "寄出承攬費通知信", "寄出工具包押金通知信"):
+            # 既有地區工作表建立於這些作業項目新增之前，補一列讓打卡有位置寫入。
             next_row = max(sheet.row_count and len(sheet.col_values(1)) + 1, 3)
             sheet.update(f"A{next_row}", [[task_key]])
             row = next_row
