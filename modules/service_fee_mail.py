@@ -455,8 +455,16 @@ def _sync_tool_deposit(
         _emit(log, "PDF產出第121列起無資料，略過工具包押金")
         return 0
 
+    existed = _sheet_or_none(mail_ss, f"{period}工具包押金") is not None
     ws = _ensure_deposit_sheet(mail_ss, period, log=log)
-    ws.batch_clear(["B2:C", "G2:G"])
+    # 已寄出的押金通知狀態（G:L）依姓名保留；剛從上一期複製來的狀態一律清掉
+    kept_status = {}
+    if existed:
+        for r in ws.get("B2:L", value_render_option="FORMATTED_VALUE") or []:
+            r = list(r) + [""] * (11 - len(r))
+            if str(r[0]).strip() and str(r[5]).strip():
+                kept_status[str(r[0]).strip()] = r[5:11]
+    ws.batch_clear(["B2:C", "G2:L"])
 
     due = _previous_business_day(_next_month_tenth(period), log=log)
     due_text = due.strftime("%Y/%m/%d")
@@ -471,6 +479,9 @@ def _sync_tool_deposit(
         values,
         value_input_option="USER_ENTERED",
     )
+    status_rows = [kept_status.get(str(a).strip(), [""] * 6) for a, _b in rows]
+    if any(r[0] for r in status_rows):
+        ws.update(f"G2:L{1 + len(values)}", status_rows, value_input_option="RAW")
     _emit(log, f"工具包押金完成：{len(values)} 筆，日期 {due_text}")
     return len(values)
 

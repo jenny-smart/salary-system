@@ -17,6 +17,7 @@ import re
 import secrets
 import time
 from urllib.parse import urlencode
+from dataclasses import dataclass
 from datetime import datetime
 from email.message import EmailMessage
 from email.utils import formataddr, parseaddr
@@ -74,6 +75,19 @@ def _row_body(template_html: str, r: dict, track: Optional[dict]) -> str:
     return render_body(template_html, r["name"], url, LINK_TEXT)
 
 
+def build_deposit_html(r: dict) -> str:
+    """工具包押金通知信（同「<<MEMO>>」草稿）。"""
+    e = html.escape
+    lines = [
+        f"{e(r['name'])}&nbsp;&nbsp;&nbsp;您好！", "<br>",
+        f"目前場次已達{e(r['session'])}場，",
+        f'我們將於 <b><span style="color:#ff0000">{e(r["date"])}</span></b> 匯款{e(r["money"])}元至您的帳戶',
+        "謝謝您，辛苦了", "<br>", "<br>",
+        "檸檬家事財務",
+    ]
+    return '<div dir="ltr">' + "".join(x if x == "<br>" else f"<div>{x}</div>" for x in lines) + "</div>"
+
+
 def _html_to_text(body: str) -> str:
     text = re.sub(r"<br\s*/?>|</div>", "\n", body)
     text = re.sub(r"<a href=\"([^\"]*)\">([^<]*)</a>", lambda m: f"{m.group(2)}：{html.unescape(m.group(1))}"
@@ -86,38 +100,69 @@ def build_message(mailbox: str, sender_name: str, to: str, subject: str, body_ht
     msg["From"] = formataddr((sender_name, mailbox))
     msg["To"] = to
     msg["Subject"] = subject
-    msg.set_content(_html_to_text(body_html))
-    msg.add_alternative(body_html, subtype="html")
+    msg.set_content(_html_to_text(body_html), charset="utf-8")
+    msg.add_alternative(
+        '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>' + body_html + "</body></html>",
+        subtype="html", charset="utf-8")
     return {"raw": base64.urlsafe_b64encode(msg.as_bytes()).decode()}
 
 
 # ──────────────────────────────────────────────────────────────
-# 試算表讀寫
+# 信件種類：承攬費通知信／工具包押金通知信
 # ──────────────────────────────────────────────────────────────
 
-def read_rows(ws) -> list[dict]:
-    values = ws.get("A2:K", value_render_option="FORMATTED_VALUE") or []
+def _col(letter: str) -> int:
+    return ord(letter) - ord("A")
+
+
+def _letter(idx: int) -> str:
+    return chr(ord("A") + idx)
+
+
+@dataclass(frozen=True)
+class MailKind:
+    label: str
+    sheet_suffix: str      # 工作表名稱＝期別＋sheet_suffix
+    subject_col: str       # 主旨欄
+    status_col: str        # 狀態區塊起始欄（發送時間、狀態、狀態時間、threadId、追蹤碼、點連結時間）
+    extra_cols: dict       # 其他欄位 → 欄名
+
+    @property
+    def last_col(self) -> str:
+        return _letter(_col(self.status_col) + len(STATUS_HEADERS) - 1)
+
+
+FEE = MailKind("承攬費通知信", "", "E", "F", {"link": "C", "file": "D"})
+DEPOSIT = MailKind("工具包押金通知信", "工具包押金", "F", "G", {"session": "C", "date": "D", "money": "E"})
+
+
+def read_rows(ws, kind: MailKind = FEE) -> list[dict]:
+    values = ws.get(f"A2:{kind.last_col}", value_render_option="FORMATTED_VALUE") or []
+    base = _col(kind.status_col)
     rows = []
     for i, r in enumerate(values, start=2):
         if not _cell(r, 1):  # B 欄姓名空白即略過
             continue
-        rows.append({
-            "row": i, "email": _cell(r, 0), "name": _cell(r, 1), "link": _cell(r, 2),
-            "file": _cell(r, 3), "subject": _cell(r, 4), "sent_at": _cell(r, 5),
-            "status": _cell(r, 6), "status_at": _cell(r, 7), "thread_id": _cell(r, 8),
-            "token": _cell(r, 9), "clicked_at": _cell(r, 10),
-        })
+        row = {
+            "row": i, "email": _cell(r, 0), "name": _cell(r, 1), "subject": _cell(r, _col(kind.subject_col)),
+            "sent_at": _cell(r, base), "status": _cell(r, base + 1), "status_at": _cell(r, base + 2),
+            "thread_id": _cell(r, base + 3), "token": _cell(r, base + 4), "clicked_at": _cell(r, base + 5),
+        }
+        row.update({k: _cell(r, _col(c)) for k, c in kind.extra_cols.items()})
+        rows.append(row)
     return rows
 
 
 class _StatusWriter:
-    """累積 F:I 的更新，每 FLUSH_EVERY 列寫一次，避免中斷後狀態遺失又不超過 Sheets 配額。"""
+    """累積狀態區塊（前 5 欄）的更新，每 FLUSH_EVERY 列寫一次，避免中斷後狀態遺失又不超過 Sheets 配額。"""
 
-    def __init__(self, ws):
-        self.ws, self.pending = ws, []
+    def __init__(self, ws, kind: MailKind = FEE):
+        self.ws, self.kind, self.pending = ws, kind, []
 
     def set(self, row: int, sent_at: str, status: str, status_at: str, thread_id: str, token: str = ""):
-        self.pending.append({"range": f"F{row}:J{row}", "values": [[sent_at, status, status_at, thread_id, token]]})
+        end = _letter(_col(self.kind.status_col) + 4)
+        self.pending.append({"range": f"{self.kind.status_col}{row}:{end}{row}",
+                             "values": [[sent_at, status, status_at, thread_id, token]]})
         if len(self.pending) >= FLUSH_EVERY:
             self.flush()
 
@@ -127,8 +172,41 @@ class _StatusWriter:
             self.pending = []
 
 
-def ensure_headers(ws) -> None:
-    ws.update(range_name="F1:K1", values=[STATUS_HEADERS], value_input_option="RAW")
+def ensure_headers(ws, kind: MailKind = FEE) -> None:
+    ws.update(range_name=f"{kind.status_col}1:{kind.last_col}1", values=[STATUS_HEADERS],
+              value_input_option="RAW")
+
+
+# ──────────────────────────────────────────────────────────────
+# 寄前核對：連結、主旨、姓名是同一人
+# ──────────────────────────────────────────────────────────────
+
+def _strip_pdf(name: str) -> str:
+    return re.sub(r"(?i)\.pdf$", "", str(name or "").strip())
+
+
+def check_same_person(r: dict, kind: MailKind, period: str = "",
+                      link_file_name: Optional[Callable[[str], str]] = None) -> str:
+    """回傳問題說明；空字串表示主旨、檔名、連結都是 B 欄這個人。"""
+    name = r["name"]
+    if kind is DEPOSIT:
+        return "" if name in r["subject"] else f"主旨不是{name}（{r['subject']}）"
+    if not r["subject"].endswith(f"_{name}"):
+        return f"主旨不是{name}（{r['subject']}）"
+    if period and not r["subject"].startswith(f"{period} "):
+        return f"主旨不是本期（{r['subject']}）"
+    if r.get("file") and not _strip_pdf(r["file"]).endswith(f"_{name}"):
+        return f"D 欄檔名不是{name}（{r['file']}）"
+    if link_file_name is not None:
+        try:
+            actual = _strip_pdf(link_file_name(r["link"]))
+        except Exception as exc:
+            return f"無法讀取連結檔名：{exc}"
+        if not actual.endswith(f"_{name}"):
+            return f"連結檔案不是{name}（{actual}）"
+        if period and not actual.startswith(f"{period} "):
+            return f"連結檔案不是本期（{actual}）"
+    return ""
 
 
 # ──────────────────────────────────────────────────────────────
@@ -154,52 +232,71 @@ def find_already_sent(gmail, to: str, subject: str) -> Optional[dict]:
     return None
 
 
-def send_service_fee_mails(
+def send_mails(
     gmail,
     ws,
     mailbox: str,
     sender_name: str,
-    template_html: str,
+    body_for: Callable[[dict, bool], str],
+    kind: MailKind = FEE,
+    period: str = "",
     log: Optional[Callable[[str], None]] = None,
     test_to: str = "",
     pause: float = 0.3,
-    track: Optional[dict] = None,
+    track: bool = False,
+    link_file_name: Optional[Callable[[str], str]] = None,
 ) -> dict:
-    """寄出 F 欄（發送時間）空白的列。test_to 有值時只寄第一封到該信箱、不回寫試算表。
-    track＝{"gas_url", "mail_id", "period"} 時，信中連結改走 GAS 追蹤點擊。"""
-    rows = read_rows(ws)
+    """寄出發送時間空白的列。body_for(row, tracked) 產生內文。
+
+    寄任何一封之前，先核對每列主旨／檔名／連結都是同一人；有任何一列不符就整批不寄。
+    test_to 有值時只寄第一封到該信箱、不回寫試算表。"""
+    rows = read_rows(ws, kind)
     todo = [r for r in rows if not r["sent_at"]]
     result = {"sent": 0, "skipped": len(rows) - len(todo), "failed": [], "total": len(rows)}
 
     if test_to:
-        if not todo and not rows:
+        if not rows:
             raise RuntimeError("工作表沒有可寄送的資料")
-        r = (todo or rows)[0]  # 測試信直接放原連結，避免點擊被記到專員那一列
+        r = (todo or rows)[0]
+        problem = check_same_person(r, kind, period, link_file_name)
+        if problem:
+            raise RuntimeError(f"{r['name']}：{problem}")
         gmail.users().messages().send(userId="me", body=build_message(
-            mailbox, sender_name, test_to, "【測試】" + r["subject"],
-            _row_body(template_html, r, None))).execute()
+            mailbox, sender_name, test_to, "【測試】" + r["subject"], body_for(r, False))).execute()
         _emit(log, f"✅ 測試信已寄到 {test_to}（內容為 {r['name']}）")
         return result
 
     if result["skipped"]:
         _emit(log, f"已寄出過 {result['skipped']} 封，不重寄")
-    ensure_headers(ws)
+    ensure_headers(ws, kind)
+    writer = _StatusWriter(ws, kind)
+
+    # ── 寄前核對：資料不完整或不是同一人，整批不寄 ──
+    mismatched = []
+    for r in todo:
+        problem = ("無 Email" if not EMAIL_RE.match(r["email"]) else
+                   "無主旨" if not r["subject"] else
+                   "無連結" if kind is FEE and not r.get("link") else
+                   check_same_person(r, kind, period, link_file_name))
+        if problem:
+            writer.set(r["row"], "", f"失敗：{problem}", _now_text(), "", r["token"])
+            mismatched.append(f"{r['name']}（{problem}）")
+    if mismatched:
+        writer.flush()
+        for item in mismatched:
+            _emit(log, f"❌ 核對不符：{item}")
+        raise RuntimeError(f"{len(mismatched)} 列核對不符，整批未寄出，請修正後重新執行")
+    _emit(log, f"核對完成：{len(todo)} 封的主旨與{'連結檔案' if kind is FEE else '姓名'}都是同一人")
+
     # 先一次寫入所有追蹤碼再寄，收件人一收到就點也找得到這一列
     for r in todo:
         r["token"] = r["token"] or secrets.token_hex(8)
+    token_col = _letter(_col(kind.status_col) + 4)
     if todo and track:
-        ws.batch_update([{"range": f"J{r['row']}", "values": [[r["token"]]]} for r in todo],
+        ws.batch_update([{"range": f"{token_col}{r['row']}", "values": [[r["token"]]]} for r in todo],
                         value_input_option="RAW")
-    writer = _StatusWriter(ws)
     try:
         for r in todo:
-            problem = ("無 Email" if not EMAIL_RE.match(r["email"]) else
-                       "無主旨" if not r["subject"] else
-                       "無連結" if not r["link"] else "")
-            if problem:
-                writer.set(r["row"], "", f"失敗：{problem}", _now_text(), "", r["token"])
-                result["failed"].append(f"{r['name']}（{problem}）")
-                continue
             try:
                 existing = find_already_sent(gmail, r["email"], r["subject"])
                 if existing:
@@ -209,8 +306,7 @@ def send_service_fee_mails(
                     result["skipped"] += 1
                     continue
                 sent = gmail.users().messages().send(userId="me", body=build_message(
-                    mailbox, sender_name, r["email"], r["subject"],
-                    _row_body(template_html, r, track))).execute()
+                    mailbox, sender_name, r["email"], r["subject"], body_for(r, track))).execute()
                 t = _now_text()
                 writer.set(r["row"], t, SENT, t, sent.get("threadId", ""), r["token"])
                 result["sent"] += 1
@@ -222,11 +318,23 @@ def send_service_fee_mails(
     finally:
         writer.flush()
 
-    _emit(log, f"{'✅' if not result['failed'] else '⚠️'} 寄出 {result['sent']} 封，"
+    _emit(log, f"{'✅' if not result['failed'] else '⚠️'} {kind.label}：寄出 {result['sent']} 封，"
                f"略過 {result['skipped']} 封，失敗 {len(result['failed'])} 封")
     for item in result["failed"]:
         _emit(log, f"❌ 寄送失敗：{item}")
     return result
+
+
+def send_service_fee_mails(gmail, ws, mailbox: str, sender_name: str, template_html: str,
+                           log=None, test_to: str = "", pause: float = 0.3,
+                           track: Optional[dict] = None, period: str = "",
+                           link_file_name: Optional[Callable[[str], str]] = None) -> dict:
+    """承攬費通知信。track＝{"gas_url", "mail_id", "period"} 時，信中連結改走 GAS 追蹤點擊。"""
+    def body_for(r, tracked):
+        return _row_body(template_html, r, track if tracked else None)
+
+    return send_mails(gmail, ws, mailbox, sender_name, body_for, FEE, period or (track or {}).get("period", ""),
+                      log=log, test_to=test_to, pause=pause, track=bool(track), link_file_name=link_file_name)
 
 
 def _bounced_addresses(gmail, after: str) -> dict:
@@ -242,18 +350,19 @@ def _bounced_addresses(gmail, after: str) -> dict:
     return out
 
 
-def refresh_statuses(gmail, ws, mailbox: str, log: Optional[Callable[[str], None]] = None) -> dict:
-    """依 threadId 檢查回覆與退信，更新 G、H 欄。"""
-    rows = [r for r in read_rows(ws) if r["thread_id"]]
+def refresh_statuses(gmail, ws, mailbox: str, log: Optional[Callable[[str], None]] = None,
+                     kind: MailKind = FEE) -> dict:
+    """依 threadId 檢查回覆與退信，更新狀態與狀態時間。"""
+    rows = [r for r in read_rows(ws, kind) if r["thread_id"]]
     counts = {SENT: 0, CLICKED: 0, REPLIED: 0, BOUNCED: 0}
     if not rows:
-        _emit(log, "⚠️ 沒有已寄出的信（I 欄 threadId 空白），無狀態可更新")
+        _emit(log, f"⚠️ {kind.label}沒有已寄出的信，無狀態可更新")
         return counts
 
     earliest = min(r["sent_at"] for r in rows)[:10] or datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d")
     bounced = _bounced_addresses(gmail, earliest)
     me = mailbox.lower()
-    writer = _StatusWriter(ws)
+    writer = _StatusWriter(ws, kind)
     try:
         for r in rows:
             status, status_at = (CLICKED, r["clicked_at"]) if r["clicked_at"] else (SENT, r["sent_at"])
@@ -274,7 +383,7 @@ def refresh_statuses(gmail, ws, mailbox: str, log: Optional[Callable[[str], None
     finally:
         writer.flush()
 
-    _emit(log, f"✅ 狀態更新：已寄出（未點未回）{counts[SENT]}、已點連結 {counts[CLICKED]}、"
+    _emit(log, f"✅ {kind.label}狀態更新：已寄出（未點未回）{counts[SENT]}、已點連結 {counts[CLICKED]}、"
                f"已回覆 {counts[REPLIED]}、退信 {counts[BOUNCED]}")
     return counts
 
@@ -283,7 +392,7 @@ def refresh_statuses(gmail, ws, mailbox: str, log: Optional[Callable[[str], None
 # 主流程（salaryapp 呼叫）
 # ──────────────────────────────────────────────────────────────
 
-def _open_period_sheet(region: str, period: str, mail_id: str = ""):
+def _open_mail_book(region: str, period: str, mail_id: str = ""):
     from modules.auth import get_gspread_client, get_jenny_gspread_client
     from modules.service_fee_mail import _region_ids
     from modules.year_root import cfg_for_period
@@ -294,7 +403,7 @@ def _open_period_sheet(region: str, period: str, mail_id: str = ""):
     mail_id = str(cfg_for_period(cfg, period).get("mail_id", "") or "").strip()
     if not mail_id:
         raise ValueError(f"【{region}】地區設定 mail_id 為空")
-    return get_jenny_gspread_client().open_by_key(mail_id).worksheet(period), mail_id
+    return get_jenny_gspread_client().open_by_key(mail_id), mail_id
 
 
 def _mailbox(region: str) -> str:
@@ -306,25 +415,56 @@ def _mailbox(region: str) -> str:
     return mailbox
 
 
+def _drive_name_lookup():
+    from modules.auth import get_jenny_drive_service
+    from modules.service_fee_mail import _drive_file_name
+
+    drive = get_jenny_drive_service()
+    return lambda link: _drive_file_name(drive, link)
+
+
 def run_send(region: str, period: str, deadline: datetime, mail_id: str = "",
              log=None, test_to: str = "", gas_url: str = "") -> dict:
     from modules.auth import get_gmail_service
     from modules.service_fee_draft import build_mail_html
 
     mailbox = _mailbox(region)
-    ws, mail_id = _open_period_sheet(region, period, mail_id)
+    book, mail_id = _open_mail_book(region, period, mail_id)
     sender_name = f"檸檬家事-{region.replace('區', '').strip()}"
     track = {"gas_url": gas_url, "mail_id": mail_id, "period": period} if gas_url else None
     _emit(log, f"▶ 承攬費寄信 {region} {period}：寄件 {mailbox}"
                + ("（追蹤點連結）" if track else "（未設定 GAS 網址，不追蹤點連結）"))
-    return send_service_fee_mails(get_gmail_service(mailbox), ws, mailbox, sender_name,
+    return send_service_fee_mails(get_gmail_service(mailbox), book.worksheet(period), mailbox, sender_name,
                                   build_mail_html(period, region, deadline), log=log, test_to=test_to,
-                                  track=track)
+                                  track=track, period=period, link_file_name=_drive_name_lookup())
 
 
-def run_refresh(region: str, period: str, mail_id: str = "", log=None) -> dict:
+def run_send_deposit(region: str, period: str, mail_id: str = "", log=None, test_to: str = "") -> dict:
+    import gspread
     from modules.auth import get_gmail_service
 
     mailbox = _mailbox(region)
-    return refresh_statuses(get_gmail_service(mailbox), _open_period_sheet(region, period, mail_id)[0],
-                            mailbox, log=log)
+    book, _ = _open_mail_book(region, period, mail_id)
+    try:
+        ws = book.worksheet(period + DEPOSIT.sheet_suffix)
+    except gspread.WorksheetNotFound:
+        _emit(log, f"⚠️ 沒有「{period}{DEPOSIT.sheet_suffix}」工作表（工具包押金只在下半月），不寄信")
+        return {"sent": 0, "skipped": 0, "failed": [], "total": 0}
+    _emit(log, f"▶ 工具包押金寄信 {region} {period}：寄件 {mailbox}")
+    return send_mails(get_gmail_service(mailbox), ws, mailbox, "檸檬家事財務",
+                      lambda r, _tracked: build_deposit_html(r), DEPOSIT, period, log=log, test_to=test_to)
+
+
+def run_refresh(region: str, period: str, mail_id: str = "", log=None) -> dict:
+    import gspread
+    from modules.auth import get_gmail_service
+
+    mailbox = _mailbox(region)
+    gmail = get_gmail_service(mailbox)
+    book, _ = _open_mail_book(region, period, mail_id)
+    counts = refresh_statuses(gmail, book.worksheet(period), mailbox, log=log, kind=FEE)
+    try:
+        refresh_statuses(gmail, book.worksheet(period + DEPOSIT.sheet_suffix), mailbox, log=log, kind=DEPOSIT)
+    except gspread.WorksheetNotFound:
+        pass
+    return counts
