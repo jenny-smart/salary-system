@@ -1651,8 +1651,13 @@ if run_clicked and _run_engine == "PYTHON":
                                 or (datetime.now(ZoneInfo("Asia/Taipei")) + timedelta(days=1)).date(),
                                 st.session_state.get("fee_reply_time") or dt_time(14, 0),
                             )
+                            _gas_track_url = str(
+                                _safe_secret("GAS_SCHEDULER_WEB_APP_URL", "")
+                                or os.environ.get("GAS_SCHEDULER_WEB_APP_URL", "")
+                            ).strip()
                             _send_result = _sender.run_send(_name, _period, _send_deadline, mail_id=_mail_id,
-                                                            log=sender_log, test_to=_test_to)
+                                                            log=sender_log, test_to=_test_to,
+                                                            gas_url=_gas_track_url)
                             if _send_result["failed"]:
                                 raise RuntimeError(f"{len(_send_result['failed'])} 封寄送失敗，見工作表 G 欄")
 
