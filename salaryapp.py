@@ -584,6 +584,8 @@ FUNCTION_MAP = {
         "① 承攬費通知信",
         "② 元大承攬費",
         "③ 元大工具包押金",
+        "④ 寄出承攬費通知信",
+        "⑤ 更新寄信狀態",
     ],
 }
 
@@ -613,17 +615,26 @@ with c2:
 
 st.markdown('<div class="field-label">🎯 執行功能（可複選，依序執行）</div>', unsafe_allow_html=True)
 selected_functions = []
+_deadline_shown = False
 for function_name in FUNCTION_MAP[system]:
     if st.checkbox(function_name, key=f"func_{system}_{function_name}"):
         selected_functions.append(function_name)
-        if system == "📨 承攬作業" and function_name == "① 承攬費通知信":
+        if system == "📨 承攬作業" and function_name in ("① 承攬費通知信", "④ 寄出承攬費通知信") \
+                and not _deadline_shown:
+            _deadline_shown = True
             _tomorrow = (datetime.now(ZoneInfo("Asia/Taipei")) + timedelta(days=1)).date()
             _dc1, _dc2 = st.columns(2)
             with _dc1:
                 st.date_input("回覆期限日期", value=_tomorrow, key="fee_reply_date")
             with _dc2:
                 st.time_input("回覆期限時間", value=dt_time(14, 0), key="fee_reply_time", step=1800)
+        if system == "📨 承攬作業" and function_name == "① 承攬費通知信":
             st.caption("執行後會產生本期範本草稿內文與群組公告文字，供複製貼上。")
+        if system == "📨 承攬作業" and function_name == "④ 寄出承攬費通知信":
+            st.caption("用各區寄件 Gmail 寄出本期工作表中 F 欄（發送時間）空白的列；已寄過的不會重寄。"
+                       "信件內文同「① 範本草稿內文」，回覆期限取上方設定。")
+            st.text_input("測試收件信箱（填了只寄第一封測試信到這裡，不寄給專員）", key="fee_send_test_to")
+            st.checkbox("✅ 我已確認名單與內容，要正式寄出", key="fee_send_confirm")
 
 # ── 執行佇列：每項為 {area, system, function, engine}，可跨地區、跨系統 ──
 active_queue = [
@@ -1618,6 +1629,30 @@ if run_clicked and _run_engine == "PYTHON":
                             ),
                         }
                         add_log("草稿內文與公告已產生，請至下方「📢 承攬服務費草稿／公告」複製", "success")
+
+                    elif _plain_func in ("寄出承攬費通知信", "更新寄信狀態"):
+                        from modules import service_fee_sender as _sender
+
+                        def sender_log(message):
+                            add_log(message, "success" if "✅" in message else "error" if "❌" in message
+                                    else "warning" if "⚠️" in message else "info")
+
+                        _mail_id = str(_region.get("mail_id", "") or "")
+                        if _plain_func == "更新寄信狀態":
+                            _sender.run_refresh(_name, _period, mail_id=_mail_id, log=sender_log)
+                        else:
+                            _test_to = str(st.session_state.get("fee_send_test_to", "") or "").strip()
+                            if not _test_to and not st.session_state.get("fee_send_confirm"):
+                                raise RuntimeError("尚未勾選「我已確認名單與內容，要正式寄出」，未寄出任何信")
+                            _send_deadline = datetime.combine(
+                                st.session_state.get("fee_reply_date")
+                                or (datetime.now(ZoneInfo("Asia/Taipei")) + timedelta(days=1)).date(),
+                                st.session_state.get("fee_reply_time") or dt_time(14, 0),
+                            )
+                            _send_result = _sender.run_send(_name, _period, _send_deadline, mail_id=_mail_id,
+                                                            log=sender_log, test_to=_test_to)
+                            if _send_result["failed"]:
+                                raise RuntimeError(f"{len(_send_result['failed'])} 封寄送失敗，見工作表 G 欄")
 
                     elif _plain_func in ("元大承攬費", "元大工具包押金"):
                         from modules.cleaning_process_1 import find_cleaning_file
