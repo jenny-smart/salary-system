@@ -25,7 +25,7 @@ class FakeSheet:
             col, row = ord(start[0]) - ord("A"), int(start[1:])
             vals = item["values"][0]
             r = self.rows[row - 2]
-            r += [""] * (11 - len(r))
+            r += [""] * (12 - len(r))
             r[col:col + len(vals)] = vals
             if start[0] == "F":
                 self.updates.append(row)
@@ -79,8 +79,10 @@ class FakeGmail:
         return _Exec(next(iter(self.sent_before.values())))
 
 
-def _row(email_addr, name, subject="202610-2 檸檬家事｜清潔承攬服務費_X", sent_at=""):
-    return [email_addr, name, "https://drive.google.com/file/d/abc/view", "202610-2 檔", subject, sent_at, "", "", "",
+def _row(email_addr, name, subject=None, sent_at="", file=None):
+    subject = subject or f"202610-2 檸檬家事｜清潔承攬服務費_{name}"
+    file = file or f"202610-2 檸檬家事｜清潔承攬服務費_{name}"
+    return [email_addr, name, f"https://drive.google.com/file/d/{name}/view", file, subject, sent_at, "", "", "",
             "", ""]
 
 
@@ -89,22 +91,91 @@ def test_render_body_fills_name_and_link():
     assert "蔡立娟&nbsp;您好" in body and '<a href="https://x.y/a?b=1&amp;c=2">' in body
 
 
+def _drive_names(link):
+    return f"202610-2 檸檬家事｜清潔承攬服務費_{link.split('/d/')[1].split('/')[0]}.pdf"
+
+
 def test_sends_only_unsent_rows_and_records_status():
-    ws = FakeSheet([_row("a@x.com", "甲"), _row("b@x.com", "乙", sent_at="2026/11/01 10:00:00"),
-                    _row("bad", "丙")])
+    ws = FakeSheet([_row("a@x.com", "甲"), _row("b@x.com", "乙", sent_at="2026/11/01 10:00:00")])
     gmail = FakeGmail()
-    result = sender.send_service_fee_mails(gmail, ws, MAILBOX, "檸檬家事-台北", TEMPLATE, pause=0)
-    assert result["sent"] == 1 and result["skipped"] == 1 and len(result["failed"]) == 1
+    result = sender.send_service_fee_mails(gmail, ws, MAILBOX, "檸檬家事-台北", TEMPLATE, pause=0,
+                                           period="202610-2", link_file_name=_drive_names)
+    assert result["sent"] == 1 and result["skipped"] == 1 and not result["failed"]
     msg = gmail.sent[0]
-    assert msg["To"] == "a@x.com" and msg["Subject"] == "202610-2 檸檬家事｜清潔承攬服務費_X"
+    assert msg["To"] == "a@x.com" and msg["Subject"] == "202610-2 檸檬家事｜清潔承攬服務費_甲"
     assert "甲" in msg.get_body(("html",)).get_content()
     assert ws.rows[0][6] == sender.SENT and ws.rows[0][8] == "t1" and ws.rows[0][5]
-    assert ws.rows[2][6] == "失敗：無 Email" and ws.rows[2][5] == ""
+
+
+def test_any_mismatch_stops_whole_batch():
+    import pytest
+
+    rows = [_row("a@x.com", "甲"),
+            _row("b@x.com", "乙", subject="202610-2 檸檬家事｜清潔承攬服務費_丙"),   # 主旨是別人
+            _row("c@x.com", "丁", file="202610-2 檸檬家事｜清潔承攬服務費_戊"),      # D 欄檔名是別人
+            _row("bad", "己")]
+    rows.append(_row("e@x.com", "庚"))
+    rows[4][2] = "https://drive.google.com/file/d/辛/view"                           # 連結實際是別人
+    ws = FakeSheet(rows)
+    gmail = FakeGmail()
+    with pytest.raises(RuntimeError, match="4 列核對不符"):
+        sender.send_service_fee_mails(gmail, ws, MAILBOX, "檸檬家事-台北", TEMPLATE, pause=0,
+                                      period="202610-2", link_file_name=_drive_names)
+    assert gmail.sent == []
+    assert ws.rows[0][6] == "" and ws.rows[0][5] == ""
+    assert ws.rows[1][6].startswith("失敗：主旨不是乙")
+    assert ws.rows[2][6].startswith("失敗：D 欄檔名不是丁")
+    assert ws.rows[3][6] == "失敗：無 Email"
+    assert ws.rows[4][6].startswith("失敗：連結檔案不是庚")
+
+
+def test_wrong_period_subject_is_rejected():
+    r = {"name": "甲", "subject": "202610-1 檸檬家事｜清潔承攬服務費_甲", "file": "", "link": "x"}
+    assert "不是本期" in sender.check_same_person(r, sender.FEE, "202610-2")
+
+
+def test_utf8_and_emoji_survive():
+    from datetime import datetime
+    from modules.service_fee_draft import build_mail_html
+
+    body = sender.render_body(build_mail_html("202610-2", "台北", datetime(2026, 11, 2, 14)), "蔡立娟", "https://x")
+    raw = base64.urlsafe_b64decode(sender.build_message(MAILBOX, "檸檬家事-台北", "a@x.com", "主旨😊", body)["raw"])
+    msg = email.message_from_bytes(raw, policy=policy.default)
+    html_part = msg.get_body(("html",))
+    assert html_part.get_content_charset() == "utf-8" and '<meta charset="utf-8">' in html_part.get_content()
+    for ch in ("😊", "💰", "🙏", "✨\ufe0f", "📩", "⏰\ufe0f", "🧰", "🍋"):
+        assert ch in html_part.get_content() and ch in msg.get_body(("plain",)).get_content()
+    assert msg["Subject"] == "主旨😊"
+
+
+def _dep_row(email_addr, name, subject=None, sent_at=""):
+    return [email_addr, name, "91", "2026/11/10", "1,500", subject or f"2026/11/10 檸檬家事｜工具包押金_{name}",
+            sent_at, "", "", "", "", ""]
+
+
+def test_deposit_mail_uses_g_columns_and_template():
+    ws = FakeSheet([_dep_row("a@x.com", "林佳緯"), _dep_row("b@x.com", "鄭佩芬", subject="2026/11/10 押金_別人")])
+    gmail = FakeGmail()
+    import pytest
+    with pytest.raises(RuntimeError):
+        sender.send_mails(gmail, ws, MAILBOX, "檸檬家事財務", lambda r, t: sender.build_deposit_html(r),
+                          sender.DEPOSIT, "202610-2", pause=0)
+    assert gmail.sent == [] and ws.rows[1][7].startswith("失敗：主旨不是鄭佩芬")
+
+    ws.rows[1][5] = "2026/11/10 檸檬家事｜工具包押金_鄭佩芬"
+    ws.rows[1][7] = ""
+    result = sender.send_mails(gmail, ws, MAILBOX, "檸檬家事財務", lambda r, t: sender.build_deposit_html(r),
+                               sender.DEPOSIT, "202610-2", pause=0)
+    assert result["sent"] == 2 and ws.rows[0][6] and ws.rows[0][7] == "已寄出" and ws.rows[0][9] == "t1"
+    body = gmail.sent[0].get_body(("html",)).get_content()
+    assert "已達91場" in body and "color:#ff0000\">2026/11/10" in body and "匯款1,500元" in body
+    assert gmail.sent[0]["From"].startswith("檸檬家事財務")
+
 
 
 def test_does_not_resend_when_found_in_sent_folder():
     old = {"internalDate": "1762300000000", "threadId": "told",
-           "payload": {"headers": [{"name": "Subject", "value": "202610-2 檸檬家事｜清潔承攬服務費_X"}]}}
+           "payload": {"headers": [{"name": "Subject", "value": "202610-2 檸檬家事｜清潔承攬服務費_甲"}]}}
     ws = FakeSheet([_row("a@x.com", "甲")])
     gmail = FakeGmail(sent_before={"a@x.com": old})
     result = sender.send_service_fee_mails(gmail, ws, MAILBOX, "檸檬家事-台北", TEMPLATE, pause=0)
@@ -147,8 +218,14 @@ def test_refresh_detects_reply_and_bounce():
     assert ws.updates == [2, 4, 5]  # 沒變的列不重寫
 
 
-def test_resync_keeps_sent_status_by_name_and_file():
-    from modules import service_fee_mail
+def test_resync_keeps_sent_status_by_name_and_file(monkeypatch):
+    import importlib
+    import sys
+
+    # 其他測試會在 sys.modules 放假模組，這裡載入真的
+    for name in ("modules.auth", "modules.drive_helper", "modules.sheet_helper", "modules.service_fee_mail"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    service_fee_mail = importlib.import_module("modules.service_fee_mail")
 
     class Ws:
         def __init__(self):
@@ -194,3 +271,42 @@ def test_refresh_keeps_clicked_when_no_reply():
                                        "payload": {"headers": [{"name": "From", "value": MAILBOX}]}}]})
     counts = sender.refresh_statuses(gmail, ws, MAILBOX)
     assert counts[sender.CLICKED] == 1 and ws.updates == []
+
+
+def test_deposit_resync_keeps_status_only_for_existing_sheet(monkeypatch):
+    import importlib
+    import sys
+
+    for name in ("modules.auth", "modules.drive_helper", "modules.sheet_helper", "modules.service_fee_mail"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    sfm = importlib.import_module("modules.service_fee_mail")
+
+    class Ws:
+        title = "202610-2工具包押金"
+
+        def __init__(self):
+            self.writes = {}
+
+        def get(self, rng, value_render_option=None):
+            return [["林佳緯", "91", "2026/11/10", "1500", "memo", "2026/11/05 10:00:00", "已寄出", "t", "th", "", ""]]
+
+        def batch_clear(self, ranges):
+            assert ranges == ["B2:C", "G2:L"]
+
+        def update(self, rng, values, value_input_option=None):
+            self.writes[rng[0]] = values
+
+    class Cleaning:
+        pass
+
+    monkeypatch.setattr(sfm, "_deposit_source_rows", lambda ss: [("林佳緯", 91), ("鄭佩芬", 97)])
+    monkeypatch.setattr(sfm, "_deposit_amount", lambda region, log=None: 1500)
+    for existed in (True, False):
+        ws = Ws()
+        monkeypatch.setattr(sfm, "_sheet_or_none", lambda ss, title, e=existed: ws if e else None)
+        monkeypatch.setattr(sfm, "_ensure_deposit_sheet", lambda ss, period, log=None, w=ws: w)
+        sfm._sync_tool_deposit(None, Cleaning(), "202610-2", "台中")
+        if existed:
+            assert ws.writes["G"] == [["2026/11/05 10:00:00", "已寄出", "t", "th", "", ""], [""] * 6]
+        else:
+            assert "G" not in ws.writes  # 剛從上一期複製的狀態不保留
