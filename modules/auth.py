@@ -185,3 +185,44 @@ def open_spreadsheet(spreadsheet_id: str):
 def open_jenny_spreadsheet(spreadsheet_id: str):
     """使用 Jenny OAuth 開啟 Google Spreadsheet。"""
     return get_jenny_gspread_client().open_by_key(spreadsheet_id)
+
+
+# ──────────────────────────────────────────────────────────────
+# 各區寄件 Gmail（承攬費通知信）
+# ──────────────────────────────────────────────────────────────
+GMAIL_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.readonly",
+]
+
+
+def _load_region_gmail_tokens() -> dict:
+    """REGION_GMAIL_TOKENS：{"寄件信箱": authorized-user token JSON, ...}。"""
+    raw = os.environ.get("REGION_GMAIL_TOKENS", "").strip() or _streamlit_secret("REGION_GMAIL_TOKENS")
+    if not raw:
+        path = PROJECT_ROOT / "credentials" / "region_gmail_tokens.json"
+        if path.exists():
+            raw = path.read_text(encoding="utf-8")
+    if not raw:
+        raise RuntimeError(
+            "找不到 REGION_GMAIL_TOKENS。請用 get_gmail_token.py 登入各區寄件信箱授權後，"
+            "設定到 Streamlit secrets。"
+        )
+    return _load_json_object(raw, "REGION_GMAIL_TOKENS")
+
+
+def get_gmail_service(mailbox: str):
+    """以該寄件信箱本人的 OAuth token 建立 Gmail service（寄信＋讀回覆／退信）。"""
+    tokens = _load_region_gmail_tokens()
+    info = tokens.get(mailbox)
+    if isinstance(info, str):
+        info = _load_json_object(info, f"REGION_GMAIL_TOKENS[{mailbox}]")
+    if not info:
+        raise RuntimeError(f"REGION_GMAIL_TOKENS 沒有 {mailbox} 的授權，請先用 get_gmail_token.py 授權")
+    creds = UserCredentials.from_authorized_user_info(info, scopes=GMAIL_SCOPES)
+    if not creds.valid:
+        try:
+            creds.refresh(Request())
+        except Exception as exc:
+            raise RuntimeError(f"{mailbox} 的 Gmail 授權已失效，請重新執行 get_gmail_token.py：{exc}") from exc
+    return googleapiclient.discovery.build("gmail", "v1", credentials=creds, cache_discovery=False)

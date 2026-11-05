@@ -293,7 +293,13 @@ def _write_period_rows(
     log=None,
 ):
     period_ws.update_cell(1, 4, "")  # D1：D2:D 已是含期別的檔名（不含 .pdf）
-    period_ws.batch_clear(["B2:F"])
+    # 已寄出的發送狀態（F:I）依「姓名＋檔名」保留，重新同步不會清掉、也不會錯位
+    kept_status = {}
+    for r in period_ws.get("B2:I", value_render_option="FORMATTED_VALUE") or []:
+        r = list(r) + [""] * (8 - len(r))
+        if str(r[0]).strip() and any(str(v).strip() for v in r[4:8]):
+            kept_status[(str(r[0]).strip(), str(r[2]).strip())] = r[4:8]
+    period_ws.batch_clear(["B2:I"])
 
     data = []
     data.extend([[name, link, file_name] for name, link, file_name in cleaning_rows])
@@ -314,6 +320,10 @@ def _write_period_rows(
             data,
             value_input_option="USER_ENTERED",
         )
+        status_rows = [kept_status.get((row[0], row[2]), ["", "", "", ""]) for row in data]
+        if any(any(v for v in r) for r in status_rows):
+            period_ws.update(f"F2:I{1 + len(data)}", status_rows, value_input_option="RAW")
+            _emit(log, f"保留已寄出狀態 {sum(1 for r in status_rows if r[0])} 筆")
 
     written_names = period_ws.get(
         "B2:B", value_render_option="FORMATTED_VALUE"
@@ -480,7 +490,7 @@ def sync_service_fee_mail(
 
     1. 依地區 mail_id 開啟承攬服務費 mail
     2. mail!A1/A2 更新 roster_id 與當月名冊 IMPORTRANGE
-    3. 複製前一期工作表為目前期別；D1 清空；清 B2:D、F2:F
+    3. 複製前一期工作表為目前期別；D1 清空；清 B2:I（已寄出的 F:I 依姓名＋檔名保留）
     4. 依序寫入 清潔PDF、專案PDF、其他承攬PDF 的姓名/連結
     5. 其他承攬列依 I 欄服務名稱把「清潔」改為水洗/家電/其他服務
     6. 若 清潔承攬 PDF產出!A121:B 有資料，建立目前期別工具包押金
