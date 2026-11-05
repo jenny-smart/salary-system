@@ -15,9 +15,18 @@ from dataclasses import dataclass
 # 不適合批次執行的功能：仍會顯示在盤點表，但不能勾選一併執行
 NOT_BATCHABLE = {
     "⑩ 一鍵執行": "尚未實作",
-    "② 寄出承攬費通知信": "寄信需確認後單獨執行",
-    "⑥ 寄出工具包押金通知信": "寄信需確認後單獨執行",
 }
+
+# 不列入盤點的功能（隨時可按，沒有「完成」的概念）
+INVENTORY_EXCLUDE = {"③ 更新寄信狀態"}
+
+# 寄信功能：完成與否看各區 mail 試算表的發送時間（load_send_progress），不看執行紀錄
+SEND_FUNCS = {
+    ("📨 承攬作業", "② 寄出承攬費通知信"): "fee",
+    ("📨 承攬作業", "⑥ 寄出工具包押金通知信"): "deposit",
+}
+# 需要確認才寄的功能：盤點勾選後要另外勾「確認寄出」
+CONFIRM_FUNCS = {func for _system, func in SEND_FUNCS}
 
 # 功能完成的替代判斷：功能 → 打卡（record_execution）作業名稱（任一個有打卡即算完成）
 _OTHER_SERVICES = ("水洗", "家電", "收納", "座椅", "地毯")
@@ -72,15 +81,49 @@ def log_years(period: str, now_year: int) -> list[int]:
     return years
 
 
+def inventory_map(function_map: dict[str, list[str]]) -> dict[str, list[str]]:
+    """盤點用的功能清單（去掉 INVENTORY_EXCLUDE）。"""
+    return {system: [f for f in funcs if f not in INVENTORY_EXCLUDE] for system, funcs in function_map.items()}
+
+
+def apply_send_progress(result: dict, progress: dict, areas: list[str]) -> dict:
+    """寄信功能依 mail 試算表判斷：全部列都有發送時間＝完成；部分寄出或尚未寄＝未完成。"""
+    for (system, func), key in SEND_FUNCS.items():
+        for area in areas:
+            if (area, system, func) not in result:
+                continue
+            if area not in progress:
+                result[(area, system, func)] = Status(NONE, "", "讀不到 mail 試算表")
+                continue
+            sheet = progress[area].get(key)
+            if sheet is None:
+                result[(area, system, func)] = (
+                    Status(DONE, "", "本期沒有押金名單") if key == "deposit"
+                    else Status(NONE, "", "尚未建立本期名單（先執行 ① 承攬費通知信）"))
+                continue
+            sent, total = sheet
+            if total and sent == total:
+                result[(area, system, func)] = Status(DONE, "", f"已寄 {sent}/{total}")
+            elif total == 0:
+                result[(area, system, func)] = (
+                    Status(DONE, "", "名單沒有資料") if key == "deposit"
+                    else Status(NONE, "", "名單沒有資料"))
+            else:
+                result[(area, system, func)] = Status(NONE, "", f"已寄 {sent}/{total}")
+    return result
+
+
 def build_inventory(rows: list[list[str]], period: str, areas: list[str],
                     function_map: dict[str, list[str]],
-                    punches: dict[str, dict[str, str]] | None = None) -> dict:
+                    punches: dict[str, dict[str, str]] | None = None,
+                    send_progress: dict | None = None) -> dict:
     """rows 為統一 Log 的資料列（不含標題，欄位順序同 unified_log.HEADERS）。
     punches 為 {地區: {打卡作業名稱: 完成時間}}（主控表地區工作表本期欄）。
 
     回傳 {(area, system, function): Status}。
     """
     period = str(period or "").strip()
+    function_map = inventory_map(function_map)
     wanted_areas = set(areas)
     renamed = {(system, func.split(" ", 1)[-1].strip()): func
                for system, funcs in function_map.items() for func in funcs}
@@ -129,12 +172,14 @@ def build_inventory(rows: list[list[str]], period: str, areas: list[str],
                 if current.state == NONE or (
                         current.state == FAILED and _norm_time(punched_at) > _norm_time(current.time)):
                     result[(area, system, func)] = Status(DONE, _norm_time(punched_at), f"打卡：{key}")
+    if send_progress is not None:
+        apply_send_progress(result, send_progress, areas)
     return result
 
 
 def build_queue(selected: list[tuple[str, str, str]], areas: list[str],
                 function_map: dict[str, list[str]], engine: str = "PYTHON",
-                period: str = "") -> list[dict]:
+                period: str = "", confirmed: bool = False) -> list[dict]:
     """把勾選的 (area, system, function) 排成執行佇列。
 
     順序：地區 → 系統（金流→清潔→其他→承攬作業）→ 功能編號，
@@ -146,8 +191,11 @@ def build_queue(selected: list[tuple[str, str, str]], areas: list[str],
         for system, funcs in function_map.items():
             for func in funcs:
                 if (area, system, func) in chosen:
-                    queue.append({"area": area, "system": system, "function": func,
-                                  "engine": engine, "period": period})
+                    item = {"area": area, "system": system, "function": func,
+                            "engine": engine, "period": period}
+                    if confirmed and func in CONFIRM_FUNCS:
+                        item["confirmed"] = True  # 盤點已勾「確認寄出」
+                    queue.append(item)
     return queue
 
 

@@ -439,9 +439,21 @@ def run_send(region: str, period: str, deadline: datetime, mail_id: str = "",
     track = {"gas_url": gas_url, "mail_id": mail_id, "period": period} if gas_url else None
     _emit(log, f"▶ 承攬費寄信 {region} {period}：寄件 {mailbox}"
                + ("（追蹤點連結）" if track else "（未設定 GAS 網址，不追蹤點連結）"))
-    return send_service_fee_mails(get_gmail_service(mailbox), book.worksheet(period), mailbox, sender_name,
-                                  build_mail_html(period, region, deadline), log=log, test_to=test_to,
-                                  track=track, period=period, link_file_name=_drive_name_lookup())
+    ws = book.worksheet(period)
+    result = send_service_fee_mails(get_gmail_service(mailbox), ws, mailbox, sender_name,
+                                    build_mail_html(period, region, deadline), log=log, test_to=test_to,
+                                    track=track, period=period, link_file_name=_drive_name_lookup())
+    if not test_to:
+        _punch_progress(region, period, "寄出承攬費通知信", ws, FEE)
+    return result
+
+
+def _punch_progress(region: str, period: str, task_key: str, ws, kind: MailKind) -> None:
+    """主控表打卡：值為「已寄/總數」，時間為本次執行時間。"""
+    from modules.master_sheet import record_execution
+
+    sent, total = sheet_progress(ws, kind)
+    record_execution(region, period, task_key, f"{sent}/{total}")
 
 
 def run_send_deposit(region: str, period: str, mail_id: str = "", log=None, test_to: str = "") -> dict:
@@ -456,8 +468,11 @@ def run_send_deposit(region: str, period: str, mail_id: str = "", log=None, test
         _emit(log, f"⚠️ 沒有「{period}{DEPOSIT.sheet_suffix}」工作表（工具包押金只在下半月），不寄信")
         return {"sent": 0, "skipped": 0, "failed": [], "total": 0}
     _emit(log, f"▶ 工具包押金寄信 {region} {period}：寄件 {mailbox}")
-    return send_mails(get_gmail_service(mailbox), ws, mailbox, sender_display_name(region),
-                      lambda r, _tracked: build_deposit_html(r), DEPOSIT, period, log=log, test_to=test_to)
+    result = send_mails(get_gmail_service(mailbox), ws, mailbox, sender_display_name(region),
+                        lambda r, _tracked: build_deposit_html(r), DEPOSIT, period, log=log, test_to=test_to)
+    if not test_to:
+        _punch_progress(region, period, "寄出工具包押金通知信", ws, DEPOSIT)
+    return result
 
 
 def run_refresh(region: str, period: str, mail_id: str = "", log=None) -> dict:
@@ -473,3 +488,34 @@ def run_refresh(region: str, period: str, mail_id: str = "", log=None) -> dict:
     except gspread.WorksheetNotFound:
         pass
     return counts
+
+
+# ──────────────────────────────────────────────────────────────
+# 盤點：各區本期寄出進度
+# ──────────────────────────────────────────────────────────────
+
+def sheet_progress(ws, kind: MailKind) -> tuple[int, int]:
+    """(已寄出列數, 總列數)；發送時間有值即算已寄出。"""
+    rows = read_rows(ws, kind)
+    return sum(1 for r in rows if r["sent_at"]), len(rows)
+
+
+def load_send_progress(period: str, areas: list[str], mail_ids: dict[str, str] | None = None) -> dict:
+    """{地區: {"fee": (寄出, 總數) 或 None, "deposit": (寄出, 總數) 或 None}}；None＝沒有該工作表。
+    讀不到（例如地區沒設 mail_id）的地區不列入。"""
+    import gspread
+
+    out = {}
+    for area in areas:
+        try:
+            book, _ = _open_mail_book(area, period, (mail_ids or {}).get(area, ""))
+        except Exception:
+            continue
+        progress = {}
+        for key, kind in (("fee", FEE), ("deposit", DEPOSIT)):
+            try:
+                progress[key] = sheet_progress(book.worksheet(period + kind.sheet_suffix), kind)
+            except gspread.WorksheetNotFound:
+                progress[key] = None
+        out[area] = progress
+    return out

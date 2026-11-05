@@ -330,3 +330,10 @@ def test_sender_display_name_and_signature_follow_region():
 
     assert sender.sender_display_name("台中區") == "檸檬家事服務財務-台中"
     assert "檸檬家事-台中" in build_mail_html("202610-2", "台中", datetime(2026, 11, 2, 14))
+
+
+def test_sheet_progress_counts_sent_rows():
+    ws = FakeSheet([_row("a@x.com", "甲", sent_at="2026/11/05 10:00:00"), _row("b@x.com", "乙")])
+    assert sender.sheet_progress(ws, sender.FEE) == (1, 2)
+    dep = FakeSheet([_dep_row("a@x.com", "林佳緯", sent_at="2026/11/05 10:00:00")])
+    assert sender.sheet_progress(dep, sender.DEPOSIT) == (1, 1)

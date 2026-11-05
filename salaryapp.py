@@ -777,10 +777,20 @@ if st.button("🔍 盤點", key="inventory_load", disabled=not _inv_areas or not
         with st.spinner("讀取主控表執行 Log 中…"):
             _rows = _inv.load_log_rows(period, datetime.now(ZoneInfo("Asia/Taipei")).year)
             _punches = _inv.load_punch_times(period, list(_inv_areas))
+            try:
+                from modules.service_fee_sender import load_send_progress
+                _send_progress = load_send_progress(
+                    period, list(_inv_areas),
+                    {r["name"]: str(r.get("mail_id", "") or "") for r in regions},
+                )
+            except Exception as _exc:
+                st.warning(f"讀取承攬服務費 mail 寄出進度失敗：{_exc}")
+                _send_progress = {}
         st.session_state["inventory"] = {
             "period": period,
             "areas": list(_inv_areas),
-            "status": _inv.build_inventory(_rows, period, list(_inv_areas), FUNCTION_MAP, _punches),
+            "status": _inv.build_inventory(_rows, period, list(_inv_areas), FUNCTION_MAP, _punches,
+                                           _send_progress),
         }
         st.session_state["inventory_areas"] = list(_inv_areas)
         st.session_state.pop("inventory_select_all", None)
@@ -797,7 +807,7 @@ elif _inventory:
     _inv_status = _inventory["status"]
     _areas = _inventory["areas"]
     _inv_rows = []
-    for _sys, _funcs in FUNCTION_MAP.items():
+    for _sys, _funcs in _inv.inventory_map(FUNCTION_MAP).items():
         for _f in _funcs:
             _cells = {_a: _inv_status[(_a, _sys, _f)] for _a in _areas}
             _todo = [_a for _a in _areas if _cells[_a].state != _inv.DONE]
@@ -831,7 +841,9 @@ elif _inventory:
         return "✅" if stt.state == _inv.DONE else "❌"
 
     _table = pd.DataFrame([{
-        "執行": bool(r["runnable"] and (True if _override is None else _override)),
+        # 寄信類預設不勾，避免補做其他功能時順便寄出
+        "執行": bool(r["runnable"] and (
+            (r["func"] not in _inv.CONFIRM_FUNCS) if _override is None else _override)),
         "系統": r["system"],
         "功能": r["func"],
         "完成": "✅ 完成" if r["done"] else "❌ 未完成",
@@ -848,7 +860,7 @@ elif _inventory:
     with st.expander("各地區明細（執行時間、錯誤訊息）"):
         def _detail(stt):
             if stt.state == _inv.NONE:
-                return "未執行"
+                return f"未執行 {stt.message}".strip()
             text = f"{_icon(stt)} {stt.time}"
             return f"{text} {stt.message}".strip()
 
@@ -862,16 +874,23 @@ elif _inventory:
     for r in (r for r, flag in zip(_inv_rows, _flags) if flag and not r["runnable"]):
         st.caption(f"「{r['system']} {r['func']}」{'已完成' if r['done'] else '不能批次執行'}，不會執行。")
     _picked = [(_a, r["system"], r["func"]) for r in _selected_rows for _a in r["todo"]]
-    if any(r["func"] == "① 承攬費通知信" for r in _selected_rows):
+    if any(r["func"] in ("① 承攬費通知信", "② 寄出承攬費通知信") for r in _selected_rows):
         st.caption("承攬費通知信的回覆期限沿用上方設定（未設定則為明天 14:00）。")
+    _needs_confirm = [r["func"] for r in _selected_rows if r["func"] in _inv.CONFIRM_FUNCS]
+    _inv_confirmed = True
+    if _needs_confirm:
+        st.caption("寄信會先逐列核對主旨、檔名、連結是同一人，不符就整批不寄；已寄過的不會重寄。")
+        _inv_confirmed = st.checkbox(
+            f"✅ 我已確認名單與內容，要正式寄出（{'、'.join(_needs_confirm)}）", key="inventory_send_confirm")
 
     if st.button(
         f"▶️ 執行勾選的 {len(_selected_rows)} 個功能（共 {len(_picked)} 項）",
         key="inventory_run",
         use_container_width=True,
-        disabled=not _picked or bool(active_queue),
+        disabled=not _picked or bool(active_queue) or not _inv_confirmed,
     ):
-        _queue = _inv.build_queue(_picked, _areas, FUNCTION_MAP, engine="PYTHON", period=period)
+        _queue = _inv.build_queue(_picked, _areas, _inv.inventory_map(FUNCTION_MAP), engine="PYTHON",
+                                  period=period, confirmed=bool(_needs_confirm and _inv_confirmed))
         st.session_state["execution_queue"] = _queue
         st.session_state.pop("pdf_result", None)
         st.session_state.pop("inventory", None)  # 執行後需重新盤點
@@ -1646,8 +1665,10 @@ if run_clicked and _run_engine == "PYTHON":
                                     else "warning" if "⚠️" in message else "info")
 
                         _mail_id = str(_region.get("mail_id", "") or "")
-                        _test_to = str(st.session_state.get("fee_send_test_to", "") or "").strip()
-                        if _plain_func != "更新寄信狀態" and not _test_to \
+                        _from_inventory = bool(current_item.get("confirmed"))
+                        _test_to = "" if _from_inventory else \
+                            str(st.session_state.get("fee_send_test_to", "") or "").strip()
+                        if _plain_func != "更新寄信狀態" and not _test_to and not _from_inventory \
                                 and not st.session_state.get("fee_send_confirm"):
                             raise RuntimeError("尚未勾選「我已確認名單與內容，要正式寄出」，未寄出任何信")
                         if _plain_func == "更新寄信狀態":
