@@ -21,12 +21,14 @@ class FakeSheet:
 
     def batch_update(self, data, value_input_option=None):
         for item in data:
-            row = int(item["range"].split(":")[0][1:])
+            start = item["range"].split(":")[0]
+            col, row = ord(start[0]) - ord("A"), int(start[1:])
             vals = item["values"][0]
             r = self.rows[row - 2]
-            r += [""] * (9 - len(r))
-            r[5:9] = vals
-            self.updates.append(row)
+            r += [""] * (11 - len(r))
+            r[col:col + len(vals)] = vals
+            if start[0] == "F":
+                self.updates.append(row)
 
 
 class _Exec:
@@ -78,7 +80,8 @@ class FakeGmail:
 
 
 def _row(email_addr, name, subject="202610-2 檸檬家事｜清潔承攬服務費_X", sent_at=""):
-    return [email_addr, name, "https://drive.google.com/file/d/abc/view", "202610-2 檔", subject, sent_at, "", "", ""]
+    return [email_addr, name, "https://drive.google.com/file/d/abc/view", "202610-2 檔", subject, sent_at, "", "", "",
+            "", ""]
 
 
 def test_render_body_fills_name_and_link():
@@ -138,7 +141,7 @@ def test_refresh_detects_reply_and_bounce():
                   "payload": {"headers": [{"name": "X-Failed-Recipients", "value": "D@x.com"}]}}],
     )
     counts = sender.refresh_statuses(gmail, ws, MAILBOX)
-    assert counts == {sender.SENT: 1, sender.REPLIED: 1, sender.BOUNCED: 2}
+    assert counts == {sender.SENT: 1, sender.CLICKED: 0, sender.REPLIED: 1, sender.BOUNCED: 2}
     assert ws.rows[0][6] == "已回覆" and ws.rows[1][6] == "已寄出"
     assert ws.rows[2][6] == "退信" and ws.rows[3][6] == "退信"
     assert ws.updates == [2, 4, 5]  # 沒變的列不重寫
@@ -149,18 +152,18 @@ def test_resync_keeps_sent_status_by_name_and_file():
 
     class Ws:
         def __init__(self):
-            self.rows = [["甲", "l", "202610-2 甲", "s", "2026/11/05 10:00:00", "已回覆", "t", "th1"],
-                         ["舊", "l", "202610-1 舊", "s", "2026/10/20 10:00:00", "已寄出", "t", "th0"]]
+            self.rows = [["甲", "l", "202610-2 甲", "s", "2026/11/05 10:00:00", "已回覆", "t", "th1", "ab", "c"],
+                         ["舊", "l", "202610-1 舊", "s", "2026/10/20 10:00:00", "已寄出", "t", "th0", "cd", ""]]
             self.writes = {}
 
         def update_cell(self, *a):
             pass
 
         def get(self, rng, value_render_option=None):
-            return self.rows if rng == "B2:I" else [[r[0]] for r in self.writes.get("B", [])]
+            return self.rows if rng == "B2:K" else [[r[0]] for r in self.writes.get("B", [])]
 
         def batch_clear(self, ranges):
-            assert ranges == ["B2:I"]
+            assert ranges == ["B2:K"]
 
         def update(self, rng, values, value_input_option=None):
             self.writes[rng[0]] = values
@@ -168,4 +171,26 @@ def test_resync_keeps_sent_status_by_name_and_file():
     ws = Ws()
     service_fee_mail._write_period_rows(ws, "202610-2", [("甲", "l", "202610-2 甲.pdf"), ("乙", "l", "202610-2 乙.pdf")],
                                         [], [])
-    assert ws.writes["F"] == [["2026/11/05 10:00:00", "已回覆", "t", "th1"], ["", "", "", ""]]
+    assert ws.writes["F"] == [["2026/11/05 10:00:00", "已回覆", "t", "th1", "ab", "c"], [""] * 6]
+
+
+def test_tracking_link_and_token_written_before_send():
+    ws = FakeSheet([_row("a@x.com", "甲")])
+    gmail = FakeGmail()
+    track = {"gas_url": "https://script.google.com/macros/s/X/exec", "mail_id": "MID", "period": "202610-2"}
+    sender.send_service_fee_mails(gmail, ws, MAILBOX, "檸檬家事-台北", TEMPLATE, pause=0, track=track)
+    token = ws.rows[0][9]
+    assert len(token) == 16
+    html_body = gmail.sent[0].get_body(("html",)).get_content()
+    assert f"action=click&amp;m=MID&amp;s=202610-2&amp;k={token}" in html_body
+    assert sender.LINK_TEXT in html_body and "drive.google.com" not in html_body
+    assert "action=click" in gmail.sent[0].get_body(("plain",)).get_content()
+
+
+def test_refresh_keeps_clicked_when_no_reply():
+    ws = FakeSheet([["a@x.com", "甲", "l", "f", "s", "2026/11/05 10:00:00", "已點連結", "2026/11/05 11:00:00",
+                     "t1", "abcd", "2026/11/05 11:00:00"]])
+    gmail = FakeGmail(threads={"t1": [{"internalDate": "1762308000000",
+                                       "payload": {"headers": [{"name": "From", "value": MAILBOX}]}}]})
+    counts = sender.refresh_statuses(gmail, ws, MAILBOX)
+    assert counts[sender.CLICKED] == 1 and ws.updates == []
