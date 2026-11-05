@@ -106,8 +106,9 @@ def test_send_functions_use_mail_sheet_progress_and_update_status_is_excluded():
     assert status[("台北", *fee)].state == inv.DONE and status[("台北", *fee)].message == "已寄 47/47"
     assert status[("台北", *dep)].state == inv.NONE and status[("台北", *dep)].message == "已寄 1/2"
     assert status[("台中", *fee)].state == inv.NONE and status[("台中", *fee)].message == "已寄 45/47"
-    assert status[("台中", *dep)].state == inv.DONE  # 上半月沒有押金名單
+    assert status[("台中", *dep)].state == inv.DONE  # 本期沒有押金名單（上下半月都可能）
     assert "尚未建立" in status[("高雄", *fee)].message
+    assert status[("高雄", *dep)].state == inv.NONE  # ① 還沒跑，無從判斷押金
     assert status[("新北", *fee)].message == "讀不到 mail 試算表"
     assert ("台北", "📨 承攬作業", "③ 更新寄信狀態") not in status
 

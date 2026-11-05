@@ -465,7 +465,7 @@ def run_send_deposit(region: str, period: str, mail_id: str = "", log=None, test
     try:
         ws = book.worksheet(period + DEPOSIT.sheet_suffix)
     except gspread.WorksheetNotFound:
-        _emit(log, f"⚠️ 沒有「{period}{DEPOSIT.sheet_suffix}」工作表（工具包押金只在下半月），不寄信")
+        _emit(log, f"⚠️ 沒有「{period}{DEPOSIT.sheet_suffix}」工作表（本期沒有人達押金門檻，或尚未執行 ①），不寄信")
         return {"sent": 0, "skipped": 0, "failed": [], "total": 0}
     _emit(log, f"▶ 工具包押金寄信 {region} {period}：寄件 {mailbox}")
     result = send_mails(get_gmail_service(mailbox), ws, mailbox, sender_display_name(region),

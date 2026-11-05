@@ -97,9 +97,12 @@ def apply_send_progress(result: dict, progress: dict, areas: list[str]) -> dict:
                 continue
             sheet = progress[area].get(key)
             if sheet is None:
-                result[(area, system, func)] = (
-                    Status(DONE, "", "本期沒有押金名單") if key == "deposit"
-                    else Status(NONE, "", "尚未建立本期名單（先執行 ① 承攬費通知信）"))
+                # 押金名單只在本期有人達門檻時才建立（上、下半月都可能沒有）；
+                # 但 ① 還沒跑時無從判斷，先算未完成
+                if key == "deposit" and progress[area].get("fee") is not None:
+                    result[(area, system, func)] = Status(DONE, "", "本期沒有押金名單")
+                else:
+                    result[(area, system, func)] = Status(NONE, "", "尚未建立本期名單（先執行 ① 承攬費通知信）")
                 continue
             sent, total = sheet
             if total and sent == total:
