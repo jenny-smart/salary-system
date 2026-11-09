@@ -1,5 +1,9 @@
 name: Lemon Clean 期別排程
 
+# 排程由 tool-system 的 Cloud Schedule Router 派送（主控表「排程設定」的 salary_create_period，
+# 每月 10、25 日 10:00），派送時帶 scheduled_slot，用來辨識同一時段是否已派送過。
+run-name: ${{ inputs.scheduled_slot && format('cloud-{0}', inputs.scheduled_slot) || github.workflow }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -15,6 +19,10 @@ on:
         description: "執行功能"
         required: false
         default: "create_period"
+      scheduled_slot:
+        description: "外部排程時段（tool-system Router 自動帶入；手動執行留空）"
+        required: false
+        default: ""
 
 jobs:
   run-scheduler:

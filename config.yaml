@@ -46,10 +46,12 @@ regions:
     roster_sheet_id: "1D9IZc95fr3S"
     mail_id: "1hCckNt44gBpjh5fO0EITWdIg_NLbjANVG2haWHVswGI"
 
+# 排程已移到 tool-system 主控表「排程設定」的 salary_create_period（每月 10、25 日 10:00），
+# 這裡只是 App 讀不到 Google Sheet 時的備援；GAS 排程停用。
 schedule:
-  enabled: true
-  days: [10, 30]
-  time: "17:10"
+  enabled: false
+  days: [10, 25]
+  time: "10:00"
   timezone: "Asia/Taipei"
   action: "create_period"
   task: "建立期別資料夾與檔案"
