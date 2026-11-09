@@ -1,5 +1,10 @@
 # 期別資料夾與檔案排程更新包
 
+> **2026-11-10 起排程改由 tool-system 觸發**：每月 10、25 日的「建立期別資料夾與檔案」由 tool-system 主控表「排程設定」
+> 的 `salary_create_period` 列設定時間，Cloud Schedule Router 派送本 repo 的 `.github/workflows/scheduler.yml`
+> （帶 `scheduled_slot`，期別＝執行日的半月）。tool-system 那列啟用後，本主控表「排程設定」的 `enabled` 改成 FALSE
+> 並執行 GAS `syncScheduleTriggers` 刪除舊 Trigger。說明見 tool-system `docs/cloud-schedule.md`。
+
 這個更新包的目的：
 
 - 排程時間到時，直接呼叫手動建立期別使用的 `create_period()`

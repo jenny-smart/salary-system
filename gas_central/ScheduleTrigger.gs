@@ -6,6 +6,11 @@
  * 1. 讀取主控檔「排程設定」工作表
  * 2. 儲存排程後重新建立 GAS Trigger
  * 3. 到時間後呼叫 GitHub Actions workflow_dispatch
+ *
+ * 2026-11-10 起：每月 10、25 日的排程改由 tool-system 主控表「排程設定」
+ * （功能代號 salary_create_period）派送。tool-system 那列啟用後，
+ * 請把本主控表「排程設定」的 enabled 改成 FALSE 並執行 syncScheduleTriggers，
+ * 刪掉這裡的 GAS Trigger，避免同一天跑兩次。
  ************************************************************/
 
 const MASTER_SHEET_ID = "1GdW3FSZ0s3TGeYiNx3JtYvED_RRfJjiFYwLFeYHZ1hA";
