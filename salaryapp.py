@@ -1835,128 +1835,57 @@ def _dispatch_github_now_from_gas():
 
 schedule = config.get("schedule", {}) or {}
 
-sc1, sc2 = st.columns(2)
-with sc1:
-    st.markdown('<div class="field-label">📅 排程日期（每月幾號，逗號分隔）</div>', unsafe_allow_html=True)
-    sched_days = st.text_input(
-        "日期",
-        value=_format_days_for_input(schedule.get("days", [10, 25])),
-        label_visibility="collapsed",
-        key="sched_days",
-    )
-with sc2:
-    st.markdown('<div class="field-label">🕘 執行時間（台北時區 HH:MM）</div>', unsafe_allow_html=True)
-    sched_time = st.text_input(
-        "時間",
-        value=str(schedule.get("time", "09:00")),
-        label_visibility="collapsed",
-        key="sched_time",
-    )
+# 2026-11 起排程改由 tool-system 統一管理：主控表（tool-system）「排程設定」分頁的
+# salary_create_period 列（每月 10、25 日 10:00），由 Cloud Schedule Router 派送本 repo 的
+# scheduler.yml。這裡不再建立 GAS Trigger，只保留「停用 GAS 排程」與「立即觸發」。
+st.info(
+    "排程已移到 tool-system 統一管理：主控表「排程設定」分頁的 "
+    "`salary_create_period`（【金流對帳】建立期別資料夾與檔案，每月 10、25 日 10:00）。"
+    "要改時間請改那張表，這裡不再建立 GAS Trigger。"
+)
 
-sc3, sc4 = st.columns(2)
-with sc3:
-    st.markdown('<div class="field-label">🎯 排程功能</div>', unsafe_allow_html=True)
-    sched_action = st.selectbox(
-        "排程功能",
-        ["create_period"],
-        index=0,
-        label_visibility="collapsed",
-        key="sched_action",
-    )
-with sc4:
-    st.markdown('<div class="field-label">📆 指定期別（可留空自動判斷）</div>', unsafe_allow_html=True)
-    sched_period = st.text_input(
-        "指定期別",
-        value=str(schedule.get("period", "") or ""),
-        placeholder="例如 202606-2；留空則自動判斷",
-        label_visibility="collapsed",
-        key="sched_period",
-    )
-
-sc5, sc6 = st.columns(2)
-with sc5:
-    region_names_for_schedule = [r["name"] for r in regions]
-    schedule_region_options = ["全區", *region_names_for_schedule]
-    saved_schedule_region = (
-        "全區"
-        if bool(schedule.get("all_regions", True))
-        else str(schedule.get("region", "") or "")
-    )
-    default_schedule_region_index = (
-        schedule_region_options.index(saved_schedule_region)
-        if saved_schedule_region in schedule_region_options
-        else 0
-    )
-    st.markdown('<div class="field-label">🗺️ 排程地區</div>', unsafe_allow_html=True)
-    sched_region = st.selectbox(
-        "排程地區",
-        schedule_region_options,
-        index=default_schedule_region_index,
-        label_visibility="collapsed",
-        key="sched_region",
-    )
-with sc6:
-    sched_enabled = st.checkbox(
-        "啟用排程",
-        value=bool(schedule.get("enabled", False)),
-        key="sched_enabled",
-    )
-
-sched_all = sched_region == "全區"
+gas_enabled = bool(schedule.get("enabled", False))
+st.caption(
+    f"GAS 排程目前：{'⚠️ 仍啟用（請按下方按鈕停用，避免重複執行）' if gas_enabled else '已停用'}"
+)
 
 last_run = schedule.get("last_run", "")
 last_result = schedule.get("last_result", "")
 if last_run or last_result:
-    st.caption(f"最近排程同步：{last_run or '尚無'}")
+    st.caption(f"最近 GAS 排程同步：{last_run or '尚無'}")
     if last_result:
         st.caption(f"最近結果：{last_result}")
 
 sc_btn1, sc_btn2 = st.columns(2)
 
 with sc_btn1:
-    save_schedule_clicked = st.button("💾 儲存排程設定", use_container_width=True)
+    disable_gas_clicked = st.button("🛑 停用 GAS 排程（刪除 GAS Trigger）", use_container_width=True)
 
 with sc_btn2:
     dispatch_now_clicked = st.button("▶ 立即觸發 GitHub Actions", use_container_width=True)
 
-if save_schedule_clicked:
+if disable_gas_clicked:
     try:
-        days = [int(d.strip()) for d in sched_days.split(",") if d.strip()]
-        if not days:
-            raise ValueError("請輸入排程日期")
-        if ":" not in sched_time:
-            raise ValueError("請輸入正確時間格式，例如 17:10")
-
-        config["schedule"] = {
-            "enabled": sched_enabled,
-            "days": days,
-            "time": sched_time.strip(),
-            "timezone": "Asia/Taipei",
-            "task": "建立期別資料夾與檔案",
-            "action": sched_action,
-            "all_regions": sched_all,
-            "region": "" if sched_all else sched_region,
-            "period": sched_period.strip(),
-            "last_run": schedule.get("last_run", ""),
-            "last_result": schedule.get("last_result", ""),
-        }
-
+        config["schedule"] = {**schedule, "enabled": False}
         save_config(config)
-        add_log(f"排程設定已儲存：每月 {days} 日 {sched_time}", "success")
+        add_log("GAS 排程已設為停用（enabled=false）", "success")
 
+        # enabled=false 時，GAS syncScheduleTriggers() 會刪除既有的排程 Trigger
         sync_result = _sync_gas_schedule_triggers()
         if sync_result.get("success"):
-            msg = sync_result.get("result", {}).get("message") or "GAS Trigger 已同步"
+            msg = sync_result.get("result", {}).get("message") or "GAS Trigger 已刪除"
             add_log(msg, "success")
-            st.success("✅ 排程設定已儲存，GAS Trigger 已同步")
+            st.success(f"✅ GAS 排程已停用：{msg}")
         else:
             msg = sync_result.get("message") or str(sync_result)
-            add_log(f"GAS Trigger 同步失敗：{msg}", "warning")
-            st.warning(f"⚠️ 排程已儲存，但 GAS Trigger 同步失敗：{msg}")
-
+            add_log(f"GAS Trigger 刪除失敗：{msg}", "warning")
+            st.warning(
+                f"⚠️ 已設為停用（時間到 GAS 也會略過），但刪除 GAS Trigger 失敗：{msg}。"
+                "可到 Apps Script →「觸發條件」手動刪除 runScheduledGithubAction。"
+            )
     except Exception as e:
         st.error(f"❌ {e}")
-        add_log(f"排程設定儲存失敗：{e}", "error")
+        add_log(f"停用 GAS 排程失敗：{e}", "error")
 
 if dispatch_now_clicked:
     try:
