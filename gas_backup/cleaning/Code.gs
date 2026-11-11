@@ -3262,6 +3262,13 @@ try {
     console.log("📝 無新增人員，跳過公式複製");
   }
 
+  // 2016:2017（實境／實習承攬費）既有人員欄若空白，依 L 欄補齊
+  const filledTemplateCells = fillBlankTemplateRows_(salarySheet, nValues.length);
+  if (filledTemplateCells > 0) {
+    SpreadsheetApp.flush();
+    console.log("✅ 已補齊 2016:2017 空白格，共 " + filledTemplateCells + " 格");
+  }
+
   console.log("✅ 步驟9/10完成");
 
 } catch (error) {
@@ -3493,6 +3500,46 @@ function copyFormulasWithReplaceBatch(sheet, sourceCol, targetColStart, numCols,
   }
   
   console.log(`✅ 批次複製完成，共處理 ${numCols} 欄 x ${numRows} 列`);
+}
+
+// 薪資表中 L 欄為「全員共用費率」的列（2016 實境承攬費、2017 實習承攬費）
+const SALARY_TEMPLATE_VALUE_ROWS = [2016, 2017];
+
+/**
+ * 既有人員欄（M 起）在 2016:2017 若空白，依 L 欄樣板補上
+ * （公式替換欄字母；固定數值照抄）。已有內容的格子不動。
+ * 回傳補上的格數。
+ */
+function fillBlankTemplateRows_(salarySheet, nameCount) {
+  if (nameCount <= 1) return 0;
+  const firstRow = SALARY_TEMPLATE_VALUE_ROWS[0];
+  const numRows = SALARY_TEMPLATE_VALUE_ROWS.length;
+  const range = salarySheet.getRange(firstRow, 12, numRows, nameCount);
+  const formulas = range.getFormulas();
+  const values = range.getValues();
+  const regex = /(\$?)\bL(?=\$?\d)/g;
+  let filled = 0;
+
+  for (let r = 0; r < numRows; r++) {
+    const tmplFormula = formulas[r][0];
+    const tmplValue = values[r][0];
+    if (!tmplFormula && String(tmplValue).trim() === "") continue;
+
+    for (let c = 1; c < nameCount; c++) {
+      if (formulas[r][c] || String(values[r][c]).trim() !== "") continue;
+      const cell = salarySheet.getRange(firstRow + r, 12 + c);
+      if (tmplFormula) {
+        const letter = getColumnLetter(12 + c);
+        cell.setFormula(tmplFormula.replace(regex, function(match, dollar) {
+          return dollar ? match : letter;
+        }));
+      } else {
+        cell.setValue(tmplValue);
+      }
+      filled++;
+    }
+  }
+  return filled;
 }
 
 function getAdjustmentNamesFromS_(adjustSheet) {
