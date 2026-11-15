@@ -462,6 +462,9 @@ def _prep_step1_salary_rows(
     def _range(row: int) -> str:
         return f"L{row}:{last_letter}{row}"
 
+    # 薪資表同樣以 L 欄公式為範本複製到其餘人員欄（固定值不複製）。
+    _copy_formula_cells(ws_salary, _last_name_col(ws_salary), log)
+
     if is_first_half:
         ws_salary.batch_clear([_range(2041), _range(2045)])
         _log(log, "    上半月：已清空 L2041 及 L2045")
@@ -491,9 +494,9 @@ def _prep_step1_salary_rows(
     def _project_range(row: int) -> str:
         return f"L{row}:{last_project_letter}{row}"
 
-    # 第 1 列有人員時，把 L2:2048 的公式複製到其餘人員欄（L 欄為範本）。
+    # 第 1 列有人員時，把 L2:2048 的「公式」複製到其餘人員欄（L 欄為範本，固定值不複製）。
     # 先複製，後續 2041／2045 的清空或貼值仍照原規則處理；L2:1995 不清空。
-    _copy_project_formulas(ws_project_salary, last_project_col, log)
+    _copy_formula_cells(ws_project_salary, last_project_col, log)
 
     if is_first_half:
         # L2:1995 為交叉欄公式區，不清空，避免公式被清掉。
@@ -514,35 +517,59 @@ def _prep_step1_salary_rows(
         _log(log, "    下半月：專案薪資表 L2046→L2045、L2040→L2041 貼值完成")
 
 
-def _copy_project_formulas(
-    ws_project_salary: gspread.Worksheet,
-    last_project_col: int,
+def _copy_formula_cells(
+    ws: gspread.Worksheet,
+    last_col: int,
     log: List[str],
     last_row: int = 2048,
 ) -> None:
-    """將專案薪資表 L2:L{last_row} 的公式複製到 M～最後人員欄（只貼公式，相對參照自動位移）。"""
-    if last_project_col <= 12:
-        _log(log, "    專案薪資表僅 L 欄一位人員，無需複製公式")
+    """將 L2:L{last_row} 中「公式」儲存格複製到 M～last_col 同列（相對參照自動位移）。
+    固定值與空白格一律不複製，只對連續的公式列送出 copyPaste（PASTE_FORMULA）。"""
+    if last_col <= 12:
+        _log(log, f"    {ws.title}僅 L 欄一位人員，無需複製公式")
         return
-    end_row = min(last_row, ws_project_salary.row_count)
-    sheet_id = ws_project_salary.id
-    ws_project_salary.spreadsheet.batch_update({"requests": [{
-        "copyPaste": {
-            "source": {
-                "sheetId": sheet_id,
-                "startRowIndex": 1, "endRowIndex": end_row,
-                "startColumnIndex": 11, "endColumnIndex": 12,
-            },
-            "destination": {
-                "sheetId": sheet_id,
-                "startRowIndex": 1, "endRowIndex": end_row,
-                "startColumnIndex": 12, "endColumnIndex": last_project_col,
-            },
-            "pasteType": "PASTE_FORMULA",
-            "pasteOrientation": "NORMAL",
-        }
-    }]})
-    _log(log, f"    專案薪資表 L2:L{end_row} 公式已複製到 M～{_col_letter(last_project_col)}")
+    end_row = min(last_row, ws.row_count)
+    cells = ws.get(
+        f"L2:L{end_row}", value_render_option="FORMULA"
+    ) or []
+    is_formula = [
+        bool(row) and isinstance(row[0], str) and row[0].lstrip().startswith("=")
+        for row in cells
+    ]
+    requests, start = [], None
+    for i, flag in enumerate(is_formula + [False]):
+        if flag and start is None:
+            start = i
+        elif not flag and start is not None:
+            row0, row1 = 1 + start, 1 + i        # 0-based，含頭不含尾
+            requests.append({"copyPaste": {
+                "source": {
+                    "sheetId": ws.id, "startRowIndex": row0, "endRowIndex": row1,
+                    "startColumnIndex": 11, "endColumnIndex": 12,
+                },
+                "destination": {
+                    "sheetId": ws.id, "startRowIndex": row0, "endRowIndex": row1,
+                    "startColumnIndex": 12, "endColumnIndex": last_col,
+                },
+                "pasteType": "PASTE_FORMULA",
+                "pasteOrientation": "NORMAL",
+            }})
+            start = None
+    if not requests:
+        _log(log, f"    {ws.title} L2:L{end_row} 無公式，略過複製")
+        return
+    ws.spreadsheet.batch_update({"requests": requests})
+    _log(log, f"    {ws.title} L2:L{end_row} 公式列（{sum(is_formula)} 格）已複製到 "
+              f"M～{_col_letter(last_col)}，固定值不複製")
+
+
+def _last_name_col(ws: gspread.Worksheet) -> int:
+    """第 1 列最右邊有姓名的欄號（不足 12 回傳 0）。"""
+    return max(
+        (idx for idx, value in enumerate(ws.row_values(1), start=1)
+         if str(value).strip()),
+        default=0,
+    )
 
 
 # ── 步驟2：讀取清潔營收明細 ──────────────────────────────────
