@@ -225,4 +225,12 @@ def get_gmail_service(mailbox: str):
             creds.refresh(Request())
         except Exception as exc:
             raise RuntimeError(f"{mailbox} 的 Gmail 授權已失效，請重新執行 get_gmail_token.py：{exc}") from exc
-    return googleapiclient.discovery.build("gmail", "v1", credentials=creds, cache_discovery=False)
+    service = googleapiclient.discovery.build("gmail", "v1", credentials=creds, cache_discovery=False)
+    # 寄信前確認 token 實際屬於該信箱，避免授權時登入錯帳號、信從別區信箱寄出。
+    actual = str(service.users().getProfile(userId="me").execute().get("emailAddress", "")).strip().lower()
+    if actual != str(mailbox).strip().lower():
+        raise RuntimeError(
+            f"授權帳號對不上：REGION_GMAIL_TOKENS 裡「{mailbox}」的授權實際是 {actual or '未知帳號'}，"
+            f"已停止寄信。請在瀏覽器登入 {mailbox} 後重新執行 get_gmail_token.py，並更新 Secrets。"
+        )
+    return service
