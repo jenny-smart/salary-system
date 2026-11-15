@@ -406,3 +406,13 @@ def test_test_mail_body_matches_formal_mail_body():
     ws_f, g_f = FakeSheet([_row("a@x.com", "甲")]), Gmail()
     sender.send_mails(g_f, ws_f, "m@x.com", "名", body_for, sender.FEE, "202610-2", pause=0)
     assert html_of(g_t.raws[0]) == html_of(g_f.raws[0])
+
+
+def test_subject_annotation_in_sheet_does_not_fail_same_person_check():
+    row = {"name": "甲", "subject": "【更正】202611-1 檸檬家事｜清潔承攬服務費_甲",
+           "file": "202611-1 檸檬家事｜清潔承攬服務費_甲", "link": "x"}
+    assert sender.check_same_person(row, sender.FEE, "202611-1") == ""
+    wrong = dict(row, subject="【更正】202610-2 檸檬家事｜清潔承攬服務費_甲")
+    assert "不是本期" in sender.check_same_person(wrong, sender.FEE, "202611-1")
+    other = dict(row, subject="【更正】202611-1 檸檬家事｜清潔承攬服務費_乙")
+    assert "不是甲" in sender.check_same_person(other, sender.FEE, "202611-1")

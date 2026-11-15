@@ -193,9 +193,11 @@ def check_same_person(r: dict, kind: MailKind, period: str = "",
     name = r["name"]
     if kind is DEPOSIT:
         return "" if name in r["subject"] else f"主旨不是{name}（{r['subject']}）"
-    if not r["subject"].endswith(f"_{name}"):
+    # 主旨最前面的【更正】【重寄】這類註記不影響核對（可能是手動寫在 E 欄，或由寄信時加上）。
+    subject = re.sub(r"^(?:【[^】]*】\s*)+", "", r["subject"]).strip()
+    if not subject.endswith(f"_{name}"):
         return f"主旨不是{name}（{r['subject']}）"
-    if period and not r["subject"].startswith(f"{period} "):
+    if period and not subject.startswith(f"{period} "):
         return f"主旨不是本期（{r['subject']}）"
     if r.get("file") and not _strip_pdf(r["file"]).endswith(f"_{name}"):
         return f"D 欄檔名不是{name}（{r['file']}）"
@@ -255,6 +257,12 @@ def send_mails(
 
     寄任何一封之前，先核對每列主旨／檔名／連結都是同一人；有任何一列不符就整批不寄。
     test_to 有值時只寄第一封到該信箱、不回寫試算表。"""
+    def subject_of(r):
+        """實際寄出的主旨：加上註記；E 欄已經以該註記開頭就不重複加。"""
+        if subject_prefix and r["subject"].startswith(subject_prefix):
+            return r["subject"]
+        return subject_prefix + r["subject"]
+
     rows = read_rows(ws, kind)
     todo = [r for r in rows if not r["sent_at"]]
     result = {"sent": 0, "skipped": len(rows) - len(todo), "failed": [], "total": len(rows)}
@@ -270,7 +278,7 @@ def send_mails(
         if track and not r["token"]:
             r["token"] = secrets.token_hex(8)  # 僅供產生連結；未寫入工作表，所以測試信點了不會被記錄
         gmail.users().messages().send(userId="me", body=build_message(
-            mailbox, sender_name, test_to, "【測試】" + subject_prefix + r["subject"], body_for(r, track))).execute()
+            mailbox, sender_name, test_to, "【測試】" + subject_of(r), body_for(r, track))).execute()
         _emit(log, f"✅ 測試信已寄到 {test_to}（內容為 {r['name']}，與正式信相同；差別只有主旨加【測試】、不寫回工作表）"
                    + ("；⚠️ 連結走追蹤網址，測試信的點擊不會被記錄" if track else ""))
         return result
@@ -307,7 +315,7 @@ def send_mails(
     try:
         for r in todo:
             try:
-                existing = find_already_sent(gmail, r["email"], subject_prefix + r["subject"])
+                existing = find_already_sent(gmail, r["email"], subject_of(r))
                 if existing:
                     t = _ms_text(existing["internalDate"])
                     writer.set(r["row"], t, SENT, t, existing.get("threadId", ""), r["token"])
@@ -315,7 +323,7 @@ def send_mails(
                     result["skipped"] += 1
                     continue
                 sent = gmail.users().messages().send(userId="me", body=build_message(
-                    mailbox, sender_name, r["email"], subject_prefix + r["subject"], body_for(r, track))).execute()
+                    mailbox, sender_name, r["email"], subject_of(r), body_for(r, track))).execute()
                 t = _now_text()
                 writer.set(r["row"], t, SENT, t, sent.get("threadId", ""), r["token"])
                 result["sent"] += 1
