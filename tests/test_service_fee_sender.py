@@ -337,3 +337,13 @@ def test_sheet_progress_counts_sent_rows():
     assert sender.sheet_progress(ws, sender.FEE) == (1, 2)
     dep = FakeSheet([_dep_row("a@x.com", "林佳緯", sent_at="2026/11/05 10:00:00")])
     assert sender.sheet_progress(dep, sender.DEPOSIT) == (1, 1)
+
+
+def test_mail_bodies_use_larger_font():
+    from datetime import datetime
+    from modules.service_fee_draft import MAIL_STYLE, build_mail_html
+
+    assert "font-size:18px" in MAIL_STYLE
+    assert MAIL_STYLE in build_mail_html("202610-2", "台北", datetime(2026, 11, 2, 14))
+    deposit = sender.build_deposit_html({"name": "甲", "session": "20", "date": "11/20", "money": "1000"})
+    assert MAIL_STYLE in deposit
