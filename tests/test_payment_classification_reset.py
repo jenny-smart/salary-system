@@ -78,3 +78,47 @@ def test_second_half_keeps_existing_revenue_detail_rows(monkeypatch):
     payment._prepare_classification_targets(clean, other, False)
 
     assert cleared == []
+
+
+class _FakeRecSheet(FakeSheet):
+    pass
+
+
+class _FakeRecSpreadsheet(FakeSpreadsheet):
+    def __init__(self):
+        super().__init__(["範本", payment.RECONCILIATION_SHEET_NAME])
+
+
+def _patch_clear_environment(monkeypatch, cleared):
+    rec = _FakeRecSpreadsheet()
+    clean, other = _spreadsheets()
+    ids = {"金流對帳": "rec", "清潔承攬": "clean", "其他承攬": "other"}
+    books = {"rec": rec, "clean": clean, "other": other}
+    monkeypatch.setattr(payment, "_get_period_file_id", lambda root, period, label, region: ids[label])
+    monkeypatch.setattr(payment, "open_spreadsheet", lambda file_id: books[file_id])
+    monkeypatch.setattr(payment, "_remove_basic_filter", lambda ws, log_fn=None: cleared.append(("filter", ws.title)))
+    monkeypatch.setattr(
+        payment, "_clear_a2_bj_contents_and_formats",
+        lambda sheet, log_fn=None: cleared.append(("clear", sheet.title)),
+    )
+
+
+def test_first_half_clears_previous_period_data_before_move(monkeypatch):
+    cleared = []
+    _patch_clear_environment(monkeypatch, cleared)
+
+    payment.clear_previous_period_data("root", "202611-1", "新竹")
+
+    titles = [t for kind, t in cleared if kind == "clear"]
+    assert "範本" in titles and payment.RECONCILIATION_SHEET_NAME in titles
+    assert "清潔營收明細" in titles
+    assert set(payment.OTHER_CONTRACT_MAP.values()) <= set(titles)
+
+
+def test_second_half_keeps_previous_period_data(monkeypatch):
+    cleared = []
+    _patch_clear_environment(monkeypatch, cleared)
+
+    payment.clear_previous_period_data("root", "202611-2", "新竹")
+
+    assert cleared == []
