@@ -348,3 +348,24 @@ def test_mail_body_font_size_12pt():
     deposit = build_deposit_html({"name": "姜淑婷", "session": "20", "date": "11/20", "money": "1000"})
     assert fee.startswith('<div dir="ltr" style="font-size:12pt">')
     assert deposit.startswith('<div dir="ltr" style="font-size:12pt">')
+
+
+def test_subject_prefix_is_added_to_sent_subject_only():
+    import base64, email
+    from email import policy
+    from types import SimpleNamespace
+
+    class Gmail:
+        def __init__(self): self.raws = []
+        def users(self): return self
+        def messages(self): return self
+        def send(self, userId, body):
+            self.raws.append(body["raw"]); return SimpleNamespace(execute=lambda: {"threadId": "t"})
+        def list(self, **kw): return SimpleNamespace(execute=lambda: {})
+
+    ws = FakeSheet([_row("a@x.com", "甲")])
+    gmail = Gmail()
+    sender.send_mails(gmail, ws, "m@x.com", "名", lambda r, t: "<div>x</div>", sender.FEE,
+                      "202610-2", pause=0, subject_prefix="【重寄】")
+    subject = email.message_from_bytes(base64.urlsafe_b64decode(gmail.raws[0]), policy=policy.default)["Subject"]
+    assert str(subject).startswith("【重寄】")

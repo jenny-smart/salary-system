@@ -640,6 +640,7 @@ if system == "📨 承攬作業" and any(f in selected_functions
                                    for f in ("② 寄出承攬費通知信", "⑥ 寄出工具包押金通知信")):
     st.caption("寄出前會逐列核對：主旨、D 欄檔名、連結的實際檔名都要是 B 欄同一人，有任何一列不符就整批不寄。")
     st.text_input("測試收件信箱（填了只寄第一封測試信到這裡，不寄給專員）", key="fee_send_test_to")
+    st.text_input("承攬費信件主旨註記（選填，加在主旨最前面，例如：【重寄】）", key="fee_subject_prefix")
     st.checkbox("✅ 我已確認名單與內容，要正式寄出", key="fee_send_confirm")
 
 # ── 執行佇列：每項為 {area, system, function, engine}，可跨地區、跨系統 ──
@@ -1692,7 +1693,9 @@ if run_clicked and _run_engine == "PYTHON":
                             ).strip()
                             _send_result = _sender.run_send(_name, _period, _send_deadline, mail_id=_mail_id,
                                                             log=sender_log, test_to=_test_to,
-                                                            gas_url=_gas_track_url)
+                                                            gas_url=_gas_track_url,
+                                                            subject_prefix=str(st.session_state.get(
+                                                                "fee_subject_prefix", "") or "").strip())
                             if _send_result["failed"]:
                                 raise RuntimeError(f"{len(_send_result['failed'])} 封寄送失敗，見工作表 G 欄")
 
