@@ -491,13 +491,17 @@ def _prep_step1_salary_rows(
     def _project_range(row: int) -> str:
         return f"L{row}:{last_project_letter}{row}"
 
+    # 第 1 列有人員時，把 L2:2048 的公式複製到其餘人員欄（L 欄為範本）。
+    # 先複製，後續 2041／2045 的清空或貼值仍照原規則處理；L2:1995 不清空。
+    _copy_project_formulas(ws_project_salary, last_project_col, log)
+
     if is_first_half:
+        # L2:1995 為交叉欄公式區，不清空，避免公式被清掉。
         ws_project_salary.batch_clear([
             _project_range(2041),
             _project_range(2045),
-            f"L2:{last_project_letter}1995",
         ])
-        _log(log, "    上半月：專案薪資表 L2041、L2045 及 L2:1995 已清空")
+        _log(log, "    上半月：專案薪資表 L2041、L2045 已清空（L2:1995 保留）")
     else:
         for source_row, target_row in ((2046, 2045), (2040, 2041)):
             values = ws_project_salary.get(
@@ -508,6 +512,37 @@ def _prep_step1_salary_rows(
                 _project_range(target_row), values, value_input_option="RAW"
             )
         _log(log, "    下半月：專案薪資表 L2046→L2045、L2040→L2041 貼值完成")
+
+
+def _copy_project_formulas(
+    ws_project_salary: gspread.Worksheet,
+    last_project_col: int,
+    log: List[str],
+    last_row: int = 2048,
+) -> None:
+    """將專案薪資表 L2:L{last_row} 的公式複製到 M～最後人員欄（只貼公式，相對參照自動位移）。"""
+    if last_project_col <= 12:
+        _log(log, "    專案薪資表僅 L 欄一位人員，無需複製公式")
+        return
+    end_row = min(last_row, ws_project_salary.row_count)
+    sheet_id = ws_project_salary.id
+    ws_project_salary.spreadsheet.batch_update({"requests": [{
+        "copyPaste": {
+            "source": {
+                "sheetId": sheet_id,
+                "startRowIndex": 1, "endRowIndex": end_row,
+                "startColumnIndex": 11, "endColumnIndex": 12,
+            },
+            "destination": {
+                "sheetId": sheet_id,
+                "startRowIndex": 1, "endRowIndex": end_row,
+                "startColumnIndex": 12, "endColumnIndex": last_project_col,
+            },
+            "pasteType": "PASTE_FORMULA",
+            "pasteOrientation": "NORMAL",
+        }
+    }]})
+    _log(log, f"    專案薪資表 L2:L{end_row} 公式已複製到 M～{_col_letter(last_project_col)}")
 
 
 # ── 步驟2：讀取清潔營收明細 ──────────────────────────────────
