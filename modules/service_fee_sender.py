@@ -85,7 +85,9 @@ def build_deposit_html(r: dict) -> str:
         "謝謝您，辛苦了", "<br>", "<br>",
         "檸檬家事財務",
     ]
-    return '<div dir="ltr">' + "".join(x if x == "<br>" else f"<div>{x}</div>" for x in lines) + "</div>"
+    from modules.service_fee_draft import MAIL_STYLE
+
+    return f'<div dir="ltr" style="{MAIL_STYLE}">' + "".join(x if x == "<br>" else f"<div>{x}</div>" for x in lines) + "</div>"
 
 
 def _html_to_text(body: str) -> str:
