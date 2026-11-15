@@ -22,6 +22,8 @@ REGION_MAILBOXES = {
     "高雄": "salary.lemonkaohsuing@gmail.com",
 }
 WEEKDAYS = "一二三四五六日"
+# 信件內文字級（2026-11-15 Jenny：預設字太小，改 12 級）
+MAIL_STYLE = "font-size:12pt"
 PERIOD_RE = re.compile(r"^(\d{4})(\d{2})-([12])$")
 
 
@@ -82,7 +84,7 @@ def build_mail_html(period: str, region: str, deadline: dt.datetime) -> str:
     body = "".join(
         line if line == "<br>" else f"<div>{line}</div>" for line in lines
     )
-    return f"<div dir=\"ltr\">{body}</div>"
+    return f"<div dir=\"ltr\" style=\"{MAIL_STYLE}\">{body}</div>"
 
 
 def build_announcement(
