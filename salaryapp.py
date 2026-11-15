@@ -2,6 +2,7 @@
 Lemon Clean 薪資系統主控
 """
 
+import os
 import streamlit as st
 import yaml
 from datetime import datetime, timedelta, time as dt_time
