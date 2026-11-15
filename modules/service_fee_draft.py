@@ -22,7 +22,7 @@ REGION_MAILBOXES = {
     "高雄": "salary.lemonkaohsuing@gmail.com",
 }
 # 信件內文字體（Gmail 預設偏小，放大並加大行距，方便閱讀）
-MAIL_STYLE = "font-size:18px;line-height:1.7"
+MAIL_STYLE = "font-size:16px;line-height:1.6"
 WEEKDAYS = "一二三四五六日"
 PERIOD_RE = re.compile(r"^(\d{4})(\d{2})-([12])$")
 
