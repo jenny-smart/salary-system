@@ -369,3 +369,40 @@ def test_subject_prefix_is_added_to_sent_subject_only():
                       "202610-2", pause=0, subject_prefix="【重寄】")
     subject = email.message_from_bytes(base64.urlsafe_b64decode(gmail.raws[0]), policy=policy.default)["Subject"]
     assert str(subject).startswith("【重寄】")
+
+
+def test_test_mail_body_matches_formal_mail_body():
+    import base64
+    import email
+    from email import policy
+    from types import SimpleNamespace
+
+    class Gmail:
+        def __init__(self):
+            self.raws = []
+
+        def users(self):
+            return self
+
+        def messages(self):
+            return self
+
+        def send(self, userId, body):
+            self.raws.append(body["raw"])
+            return SimpleNamespace(execute=lambda: {"threadId": "t"})
+
+        def list(self, **kw):
+            return SimpleNamespace(execute=lambda: {})
+
+    def html_of(raw):
+        msg = email.message_from_bytes(base64.urlsafe_b64decode(raw), policy=policy.default)
+        return msg.get_body(preferencelist=("html",)).get_content()
+
+    def body_for(r, tracked):
+        return f"<div>{r['link']}|{tracked}</div>"
+
+    ws_t, g_t = FakeSheet([_row("a@x.com", "甲")]), Gmail()
+    sender.send_mails(g_t, ws_t, "m@x.com", "名", body_for, sender.FEE, "202610-2", pause=0, test_to="me@x.com")
+    ws_f, g_f = FakeSheet([_row("a@x.com", "甲")]), Gmail()
+    sender.send_mails(g_f, ws_f, "m@x.com", "名", body_for, sender.FEE, "202610-2", pause=0)
+    assert html_of(g_t.raws[0]) == html_of(g_f.raws[0])

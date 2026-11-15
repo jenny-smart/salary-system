@@ -266,9 +266,13 @@ def send_mails(
         problem = check_same_person(r, kind, period, link_file_name)
         if problem:
             raise RuntimeError(f"{r['name']}：{problem}")
+        # 測試信內文與正式信走同一套邏輯（同樣的連結型態、同樣的主旨註記），只多【測試】且不寫回工作表。
+        if track and not r["token"]:
+            r["token"] = secrets.token_hex(8)  # 僅供產生連結；未寫入工作表，所以測試信點了不會被記錄
         gmail.users().messages().send(userId="me", body=build_message(
-            mailbox, sender_name, test_to, "【測試】" + subject_prefix + r["subject"], body_for(r, False))).execute()
-        _emit(log, f"✅ 測試信已寄到 {test_to}（內容為 {r['name']}）")
+            mailbox, sender_name, test_to, "【測試】" + subject_prefix + r["subject"], body_for(r, track))).execute()
+        _emit(log, f"✅ 測試信已寄到 {test_to}（內容為 {r['name']}，與正式信相同；差別只有主旨加【測試】、不寫回工作表）"
+                   + ("；⚠️ 連結走追蹤網址，測試信的點擊不會被記錄" if track else ""))
         return result
 
     if result["skipped"]:
