@@ -6,7 +6,7 @@
 
 狀態：已寄出 → 已點連結 → 已回覆／退信；寄送失敗會寫「失敗：原因」且 F 留空，下次會重寄。
 F 有值的列不會重寄；寄之前也會查寄件備份，避免中斷後重跑造成重複寄出。
-點連結：有設定中央 GAS 網址（GAS_SCHEDULER_WEB_APP_URL）時，信中連結改走
+點連結：有設定追蹤網址（MAIL_TRACK_WEB_APP_URL，未設定則不追蹤、直接放連結）時，信中連結改走
   {GAS}?action=click&m=mail試算表ID&s=期別&k=追蹤碼，GAS 記下 K 欄時間後轉到 C 欄連結。
 開信：無法可靠得知（GAS 無法回傳追蹤圖片、各家信箱也會擋），不記錄。
 """
@@ -247,8 +247,11 @@ def send_mails(
     pause: float = 0.3,
     track: bool = False,
     link_file_name: Optional[Callable[[str], str]] = None,
+    subject_prefix: str = "",
 ) -> dict:
     """寄出發送時間空白的列。body_for(row, tracked) 產生內文。
+    subject_prefix 會加在實際寄出的主旨前（例如「【重寄】」）；工作表 E 欄與寄前核對仍用原主旨。
+    因為主旨不同，不會被寄件備份的「同主旨已寄」判斷擋下。
 
     寄任何一封之前，先核對每列主旨／檔名／連結都是同一人；有任何一列不符就整批不寄。
     test_to 有值時只寄第一封到該信箱、不回寫試算表。"""
@@ -264,7 +267,7 @@ def send_mails(
         if problem:
             raise RuntimeError(f"{r['name']}：{problem}")
         gmail.users().messages().send(userId="me", body=build_message(
-            mailbox, sender_name, test_to, "【測試】" + r["subject"], body_for(r, False))).execute()
+            mailbox, sender_name, test_to, "【測試】" + subject_prefix + r["subject"], body_for(r, False))).execute()
         _emit(log, f"✅ 測試信已寄到 {test_to}（內容為 {r['name']}）")
         return result
 
@@ -300,7 +303,7 @@ def send_mails(
     try:
         for r in todo:
             try:
-                existing = find_already_sent(gmail, r["email"], r["subject"])
+                existing = find_already_sent(gmail, r["email"], subject_prefix + r["subject"])
                 if existing:
                     t = _ms_text(existing["internalDate"])
                     writer.set(r["row"], t, SENT, t, existing.get("threadId", ""), r["token"])
@@ -308,7 +311,7 @@ def send_mails(
                     result["skipped"] += 1
                     continue
                 sent = gmail.users().messages().send(userId="me", body=build_message(
-                    mailbox, sender_name, r["email"], r["subject"], body_for(r, track))).execute()
+                    mailbox, sender_name, r["email"], subject_prefix + r["subject"], body_for(r, track))).execute()
                 t = _now_text()
                 writer.set(r["row"], t, SENT, t, sent.get("threadId", ""), r["token"])
                 result["sent"] += 1
@@ -330,13 +333,15 @@ def send_mails(
 def send_service_fee_mails(gmail, ws, mailbox: str, sender_name: str, template_html: str,
                            log=None, test_to: str = "", pause: float = 0.3,
                            track: Optional[dict] = None, period: str = "",
-                           link_file_name: Optional[Callable[[str], str]] = None) -> dict:
+                           link_file_name: Optional[Callable[[str], str]] = None,
+                           subject_prefix: str = "") -> dict:
     """承攬費通知信。track＝{"gas_url", "mail_id", "period"} 時，信中連結改走 GAS 追蹤點擊。"""
     def body_for(r, tracked):
         return _row_body(template_html, r, track if tracked else None)
 
     return send_mails(gmail, ws, mailbox, sender_name, body_for, FEE, period or (track or {}).get("period", ""),
-                      log=log, test_to=test_to, pause=pause, track=bool(track), link_file_name=link_file_name)
+                      log=log, test_to=test_to, pause=pause, track=bool(track), link_file_name=link_file_name,
+                      subject_prefix=subject_prefix)
 
 
 def _bounced_addresses(gmail, after: str) -> dict:
@@ -431,7 +436,7 @@ def _drive_name_lookup():
 
 
 def run_send(region: str, period: str, deadline: datetime, mail_id: str = "",
-             log=None, test_to: str = "", gas_url: str = "") -> dict:
+             log=None, test_to: str = "", gas_url: str = "", subject_prefix: str = "") -> dict:
     from modules.auth import get_gmail_service
     from modules.service_fee_draft import build_mail_html
 
@@ -440,11 +445,13 @@ def run_send(region: str, period: str, deadline: datetime, mail_id: str = "",
     sender_name = sender_display_name(region)
     track = {"gas_url": gas_url, "mail_id": mail_id, "period": period} if gas_url else None
     _emit(log, f"▶ 承攬費寄信 {region} {period}：寄件 {mailbox}"
-               + ("（追蹤點連結）" if track else "（未設定 GAS 網址，不追蹤點連結）"))
+               + ("（追蹤點連結）" if track else "（未設定 GAS 網址，不追蹤點連結）")
+               + (f"，主旨加註「{subject_prefix}」" if subject_prefix else ""))
     ws = book.worksheet(period)
     result = send_service_fee_mails(get_gmail_service(mailbox), ws, mailbox, sender_name,
                                     build_mail_html(period, region, deadline), log=log, test_to=test_to,
-                                    track=track, period=period, link_file_name=_drive_name_lookup())
+                                    track=track, period=period, link_file_name=_drive_name_lookup(),
+                                    subject_prefix=subject_prefix)
     if not test_to:
         _punch_progress(region, period, "寄出承攬費通知信", ws, FEE)
     return result
