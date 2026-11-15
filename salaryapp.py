@@ -1684,9 +1684,11 @@ if run_clicked and _run_engine == "PYTHON":
                                 or (datetime.now(ZoneInfo("Asia/Taipei")) + timedelta(days=1)).date(),
                                 st.session_state.get("fee_reply_time") or dt_time(14, 0),
                             )
+                            # 點連結追蹤改用獨立設定 MAIL_TRACK_WEB_APP_URL；未設定就不追蹤，
+                            # 信中直接放承攬服務費連結（與測試信相同）。不再沿用排程／PDF 的 GAS 網址。
                             _gas_track_url = str(
-                                _safe_secret("GAS_SCHEDULER_WEB_APP_URL", "")
-                                or os.environ.get("GAS_SCHEDULER_WEB_APP_URL", "")
+                                _safe_secret("MAIL_TRACK_WEB_APP_URL", "")
+                                or os.environ.get("MAIL_TRACK_WEB_APP_URL", "")
                             ).strip()
                             _send_result = _sender.run_send(_name, _period, _send_deadline, mail_id=_mail_id,
                                                             log=sender_log, test_to=_test_to,
