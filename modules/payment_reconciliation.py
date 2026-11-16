@@ -875,6 +875,21 @@ def _get_period_paste_row(sheet, first_half: bool, log_fn=None) -> int:
     return _get_append_row_by_col_b(sheet)
 
 
+SALARY_SUMMARY_SHEET = "薪資總表"
+
+
+def _clear_salary_summary_settlement(ss_other, log_fn=None) -> None:
+    """其他承攬「薪資總表」N:X（上半月 N:Q／下半月 U:X 的結算結果）自第 3 列起清空內容，
+    避免上個月下半月的結算結果殘留到新月份。"""
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    ws = ss_other.worksheet(SALARY_SUMMARY_SHEET)
+    ws.batch_clear([f"N3:X{max(ws.row_count, 3)}"])
+    log(f"🧹 {SALARY_SUMMARY_SHEET} N:X 已自第 3 列起清空")
+
+
 def _prepare_classification_targets(ss_clean, ss_other, first_half: bool, log_fn=None) -> dict:
     """Resolve every revenue-detail sheet before writing and reset all first-half targets."""
     def log(msg):
@@ -892,6 +907,7 @@ def _prepare_classification_targets(ss_clean, ss_other, first_half: bool, log_fn
         for label, target in targets.items():
             _clear_a2_bj_contents_and_formats(target, log_fn=log)
             log(f"🧹 {label}營收明細已自 A2 起清空資料與格式")
+        _clear_salary_summary_settlement(ss_other, log_fn=log)
 
     return targets
 
