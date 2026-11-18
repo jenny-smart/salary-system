@@ -133,6 +133,37 @@ def convert_payment_file(root_folder_id: str, period: str, region_name: str, log
 # ③ 訂單搬運到範本
 # ═══════════════════════════════════════════════════════════════
 
+def clear_previous_period_data(
+    root_folder_id: str, period: str, region_name: str, log_fn=None
+) -> None:
+    """
+    上半月（新月份開頭）搬運前，先清掉前個期別留下的資料：
+    「範本」、「金流對帳」、清潔營收明細、其他承攬各服務營收明細，A2:BJ 內容與格式。
+    這樣即使本期查不到訂單資料（③ 會報「訂單無資料」而中止），
+    後續 ④加工／⑤分類／金流對帳也不會拿前期遺留資料當成本期資料。
+    下半月是接續上半月累加，不清除。
+    """
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    if not is_first_half(period):
+        return
+    log("🧹 上半月：搬運前先清除前個期別的資料")
+    reconciliation_id = _get_period_file_id(root_folder_id, period, "金流對帳", region_name)
+    cleaning_id       = _get_period_file_id(root_folder_id, period, "清潔承攬", region_name)
+    other_id          = _get_period_file_id(root_folder_id, period, "其他承攬", region_name)
+
+    ss_rec = open_spreadsheet(reconciliation_id)
+    _clear_a2_bj_contents_and_formats(ss_rec.worksheet("範本"), log_fn=log)
+    recon = ss_rec.worksheet(RECONCILIATION_SHEET_NAME)
+    _remove_basic_filter(recon, log_fn=log)
+    _clear_a2_bj_contents_and_formats(recon, log_fn=log)
+    _prepare_classification_targets(
+        open_spreadsheet(cleaning_id), open_spreadsheet(other_id), True, log_fn=log,
+    )
+
+
 def copy_orders_to_template(
     root_folder_id: str, period: str, region_name: str, log_fn=None
 ) -> dict:
@@ -155,6 +186,9 @@ def copy_orders_to_template(
         raise Exception(f"找不到訂單 Google Sheet：{order_name}，請先執行「期別訂單轉檔」")
 
     log(f"📂 來源：{order_name}")
+
+    # 先清前期資料，再讀本期訂單；本期無資料時也不會留下前期遺留資料
+    clear_previous_period_data(root_folder_id, period, region_name, log_fn=log)
 
     reconciliation_id = _get_period_file_id(root_folder_id, period, "金流對帳", region_name)
     ss_order = open_spreadsheet(order_file["id"])
