@@ -909,6 +909,20 @@ def _get_period_paste_row(sheet, first_half: bool, log_fn=None) -> int:
     return _get_append_row_by_col_b(sheet)
 
 
+SALARY_SUMMARY_SHEET = "薪資總表"
+
+
+def _clear_salary_summary_settlement(ws, log_fn=None) -> None:
+    """其他承攬「薪資總表」N:X（上半月 N:Q／下半月 U:X 的結算結果）自第 3 列起清空內容，
+    避免上個月下半月的結算結果殘留到新月份。ws 須在任何清空動作前先取得。"""
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    ws.batch_clear([f"N3:X{max(ws.row_count, 3)}"])
+    log(f"🧹 {SALARY_SUMMARY_SHEET} N:X 已自第 3 列起清空")
+
+
 def _prepare_classification_targets(ss_clean, ss_other, first_half: bool, log_fn=None) -> dict:
     """Resolve every revenue-detail sheet before writing and reset all first-half targets."""
     def log(msg):
@@ -920,12 +934,15 @@ def _prepare_classification_targets(ss_clean, ss_other, first_half: bool, log_fn
         for label, sheet_name in OTHER_CONTRACT_MAP.items()
     }
     targets["清潔"] = ss_clean.worksheet("清潔營收明細")
+    # 上半月要清薪資總表 N:X：先確認分頁存在，缺了就在清空任何營收明細前中止
+    salary_summary = ss_other.worksheet(SALARY_SUMMARY_SHEET) if first_half else None
 
     if first_half:
         log("🔎 上半月：已確認清潔營收明細及其他承攬各服務營收明細工作表")
         for label, target in targets.items():
             _clear_a2_bj_contents_and_formats(target, log_fn=log)
             log(f"🧹 {label}營收明細已自 A2 起清空資料與格式")
+        _clear_salary_summary_settlement(salary_summary, log_fn=log)
 
     return targets
 

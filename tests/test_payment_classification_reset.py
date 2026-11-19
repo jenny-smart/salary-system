@@ -33,8 +33,14 @@ from modules import payment_reconciliation as payment
 
 
 class FakeSheet:
+    row_count = 1000
+
     def __init__(self, title):
         self.title = title
+        self.batch_cleared = []
+
+    def batch_clear(self, ranges):
+        self.batch_cleared.extend(ranges)
 
 
 class FakeSpreadsheet:
@@ -47,7 +53,7 @@ class FakeSpreadsheet:
 
 def _spreadsheets():
     clean = FakeSpreadsheet(["清潔營收明細"])
-    other = FakeSpreadsheet(payment.OTHER_CONTRACT_MAP.values())
+    other = FakeSpreadsheet([*payment.OTHER_CONTRACT_MAP.values(), payment.SALARY_SUMMARY_SHEET])
     return clean, other
 
 
@@ -78,6 +84,24 @@ def test_second_half_keeps_existing_revenue_detail_rows(monkeypatch):
     payment._prepare_classification_targets(clean, other, False)
 
     assert cleared == []
+
+
+def test_first_half_clears_salary_summary_n_to_x(monkeypatch):
+    clean, other = _spreadsheets()
+    monkeypatch.setattr(payment, "_clear_a2_bj_contents_and_formats", lambda sheet, log_fn=None: None)
+
+    payment._prepare_classification_targets(clean, other, True)
+
+    assert other.sheets[payment.SALARY_SUMMARY_SHEET].batch_cleared == ["N3:X1000"]
+
+
+def test_second_half_keeps_salary_summary(monkeypatch):
+    clean, other = _spreadsheets()
+    monkeypatch.setattr(payment, "_clear_a2_bj_contents_and_formats", lambda sheet, log_fn=None: None)
+
+    payment._prepare_classification_targets(clean, other, False)
+
+    assert other.sheets[payment.SALARY_SUMMARY_SHEET].batch_cleared == []
 
 
 class _FakeRecSheet(FakeSheet):
@@ -122,3 +146,22 @@ def test_second_half_keeps_previous_period_data(monkeypatch):
     payment.clear_previous_period_data("root", "202611-2", "新竹")
 
     assert cleared == []
+
+
+def test_missing_salary_summary_aborts_before_any_reset(monkeypatch):
+    clean, other = _spreadsheets()
+    del other.sheets[payment.SALARY_SUMMARY_SHEET]
+    cleared = []
+    monkeypatch.setattr(
+        payment, "_clear_a2_bj_contents_and_formats",
+        lambda sheet, log_fn=None: cleared.append(sheet.title),
+    )
+
+    try:
+        payment._prepare_classification_targets(clean, other, True)
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("missing 薪資總表 should abort")
+
+    assert cleared == []  # 營收明細都還沒被清空，不會留下兩個空白檔
