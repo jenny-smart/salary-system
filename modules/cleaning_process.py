@@ -80,6 +80,9 @@ def find_cleaning_file(root_folder_id: str, period: str, region: str) -> str:
     """
     from modules.auth import get_drive_service
     drive = get_drive_service()
+    # 期別在別的年度（例如 2027 跑 202701-1）時，改到「{YYYY}專員承攬服務費/同名地區資料夾」找
+    from modules.year_root import root_for_period
+    root_folder_id = root_for_period(drive, root_folder_id, period)
 
     def _query(parent_id: str, name: str, mime_type: str) -> str | None:
         """Drive API query，回傳第一筆符合的檔案 ID，找不到回傳 None。"""
