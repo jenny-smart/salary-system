@@ -483,3 +483,69 @@ class SalaryTemplateTest(unittest.TestCase):
         suffix = self.cp1._INTERN_SUFFIX[2006]
         self.assertEqual(self.cp1._with_suffix("=SUM(X)-L2003", suffix), "=SUM(X)" + suffix)
         self.assertEqual(self.cp1._with_suffix("=SUM(X) - L2003 ", suffix), "=SUM(X)" + suffix)
+
+
+class CleanupDatesTest(unittest.TestCase):
+    """大掃除日期：網頁設定 → 前置作業寫入 B2006:B2008；11、12 月提醒。"""
+
+    def setUp(self):
+        from datetime import date
+        from modules import cleanup_dates as cd
+        self.cd, self.date = cd, date
+        self.dates = cd.CleanupDates(date(2026, 12, 15), date(2027, 1, 21), date(2027, 2, 4))
+
+    def test_parse_and_validate(self):
+        cd, d = self.cd, self.date
+        self.assertEqual(cd.parse_row(["2026/12/15", "2027/1/21", "2027-02-04"]), self.dates)
+        self.assertIsNone(cd.parse_row(["2026/12/15", "", "2027/2/4"]))
+        self.assertEqual(self.dates.errors(), [])
+        self.assertTrue(cd.CleanupDates(d(2027, 1, 21), d(2026, 12, 15), d(2027, 2, 4)).errors())
+        self.assertTrue(cd.CleanupDates(d(2026, 12, 15), d(2027, 1, 21), d(2027, 1, 20)).errors())
+
+    def test_reminder_only_in_nov_dec_when_not_set_for_this_season(self):
+        cd, d = self.cd, self.date
+        last_season = cd.CleanupDates(d(2025, 12, 25), d(2026, 2, 1), d(2026, 2, 16))
+        self.assertTrue(cd.needs_reminder(d(2026, 11, 1), None))
+        self.assertTrue(cd.needs_reminder(d(2026, 11, 21), last_season))
+        self.assertFalse(cd.needs_reminder(d(2026, 11, 21), self.dates))
+        self.assertFalse(cd.needs_reminder(d(2026, 10, 31), None))
+        self.assertTrue(cd.needs_reminder(d(2026, 12, 20), last_season))
+
+    def _ss(self, titles):
+        ss = mock.MagicMock()
+        sheets = {t: mock.MagicMock(title=t) for t in titles}
+        ss.worksheets.return_value = list(sheets.values())
+        ss.worksheet.side_effect = lambda name: sheets[name]
+        return ss, sheets
+
+    def test_writes_both_sheets(self):
+        ss, sheets = self._ss(["薪資表", "專案薪資表", "清潔訂單"])
+        log = []
+        self.cd.apply_to_cleaning_file(ss, self.dates, log)
+        for name in ("薪資表", "專案薪資表"):
+            sheets[name].update.assert_called_once_with(
+                values=[["2026/12/15"], ["2027/1/21"], ["2027/2/4"]],
+                range_name="B2006:B2008", value_input_option="USER_ENTERED",
+            )
+        sheets["清潔訂單"].update.assert_not_called()
+        self.assertIn("已寫入", log[-1])
+
+    def test_missing_settings_keeps_file_dates(self):
+        ss, sheets = self._ss(["薪資表"])
+        log = []
+        self.cd.apply_to_cleaning_file(ss, None, log)
+        sheets["薪資表"].update.assert_not_called()
+        self.assertIn("維持原日期", log[-1])
+
+    def test_settings_read_failure_does_not_break_preparation(self):
+        ss, sheets = self._ss(["薪資表"])
+        log = []
+        import sys
+        import types
+        master = types.ModuleType("modules.master_sheet")
+        master.MASTER_SHEET_ID = "SHEET"
+        with mock.patch.dict(sys.modules, {"modules.master_sheet": master}), \
+             mock.patch.object(self.cd, "load", side_effect=RuntimeError("quota")):
+            self.cd.apply_from_settings(ss, log)
+        sheets["薪資表"].update.assert_not_called()
+        self.assertIn("quota", log[-1])

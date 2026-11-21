@@ -402,6 +402,9 @@ def run_preparation(
 
         # ── 步驟1：薪資表特定列處理 ──────────────────────────
         _log(log, "  步驟1：薪資表特定列處理")
+        # 大掃除日期：依網頁設定寫入 薪資表／專案薪資表 B2006:B2008
+        from modules import cleanup_dates
+        cleanup_dates.apply_from_settings(ss, log)
         _prep_step1_salary_rows(
             ws_salary, is_first_half, log, ws_project_salary=ws_project_salary
         )

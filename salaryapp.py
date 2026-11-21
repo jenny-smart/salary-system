@@ -5,7 +5,7 @@ Lemon Clean 薪資系統主控
 import os
 import streamlit as st
 import yaml
-from datetime import datetime, timedelta, time as dt_time
+from datetime import date, datetime, timedelta, time as dt_time
 from zoneinfo import ZoneInfo
 from modules.period_utils import get_auto_period, is_first_half
 from modules.year_root import cfg_for_period
@@ -596,6 +596,24 @@ FUNCTION_MAP = {
 # █ 區塊5：UI — 主標題
 # ═══════════════════════════════════════════════════════════
 st.markdown('<div class="app-title">🍋 Lemon Clean 薪資系統</div>', unsafe_allow_html=True)
+
+
+# 大掃除日期：每年 11、12 月尚未設定本年度日期時提醒（設定在下方「🧹 大掃除日期」）
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_cleanup_dates():
+    from modules import cleanup_dates
+    from modules.master_sheet import MASTER_SHEET_ID
+    return cleanup_dates.load(MASTER_SHEET_ID)
+
+
+try:
+    from modules import cleanup_dates as _cleanup_dates
+    _cd_today = datetime.now(ZoneInfo("Asia/Taipei")).date()
+    if _cleanup_dates.needs_reminder(_cd_today, _load_cleanup_dates()):
+        st.warning("🧹 請設定今年的大掃除日期（頁面下方「🧹 大掃除日期」），"
+                   "前置作業會自動寫入各區薪資表 B2006～B2008。")
+except Exception:
+    pass
 
 
 # ═══════════════════════════════════════════════════════════
@@ -2069,6 +2087,60 @@ for i, region in enumerate(regions):
 
 st.markdown('</div>', unsafe_allow_html=True)
 
+
+# ═══════════════════════════════════════════════════════════
+# █ 區塊10-B：UI — 大掃除日期
+# ═══════════════════════════════════════════════════════════
+with st.expander("🧹 大掃除日期"):
+    st.caption(
+        "前置作業執行時，自動寫入各區清潔承攬檔「薪資表」「專案薪資表」的 B2006～B2008。"
+        "大掃除最後一天當天仍算大掃除，隔天起恢復一般費率。"
+    )
+    try:
+        from modules import cleanup_dates as _cd
+        from modules.master_sheet import MASTER_SHEET_ID as _cd_sheet
+        _cd_current = _load_cleanup_dates()
+        if _cd_current:
+            st.info(
+                f"目前設定：大掃除1 {_cd._fmt(_cd_current.stage1_start)} 起、"
+                f"大掃除2 {_cd._fmt(_cd_current.stage2_start)} 起、"
+                f"最後一天 {_cd._fmt(_cd_current.last_day)}"
+            )
+        _cd_today = datetime.now(ZoneInfo("Asia/Taipei")).date()
+        _cd_default_year = _cd_today.year if _cd_today.month >= 6 else _cd_today.year - 1
+        d1, d2, d3 = st.columns(3)
+        with d1:
+            _cd_s1 = st.date_input(
+                "大掃除1開始（B2006）",
+                value=_cd_current.stage1_start if _cd_current else date(_cd_default_year, 12, 15),
+                key="cleanup_stage1",
+            )
+        with d2:
+            _cd_s2 = st.date_input(
+                "大掃除2開始（B2007）",
+                value=_cd_current.stage2_start if _cd_current else date(_cd_default_year + 1, 1, 21),
+                key="cleanup_stage2",
+            )
+        with d3:
+            _cd_last = st.date_input(
+                "大掃除最後一天（B2008）",
+                value=_cd_current.last_day if _cd_current else date(_cd_default_year + 1, 2, 4),
+                key="cleanup_last",
+            )
+        if st.button("💾 儲存大掃除日期", use_container_width=True):
+            _cd_new = _cd.CleanupDates(_cd_s1, _cd_s2, _cd_last)
+            if _cd_new.errors():
+                st.error("；".join(_cd_new.errors()))
+            else:
+                _cd.save(_cd_sheet, _cd_new)
+                _load_cleanup_dates.clear()
+                add_log(
+                    f"大掃除日期已儲存：{_cd._fmt(_cd_s1)}／{_cd._fmt(_cd_s2)}／{_cd._fmt(_cd_last)}",
+                    "success",
+                )
+                st.success("✅ 已儲存，下次各區前置作業會自動寫入")
+    except Exception as e:
+        st.error(f"大掃除日期讀取／儲存失敗：{e}")
 
 # ═══════════════════════════════════════════════════════════
 # █ 區塊11：UI — 系統維護
