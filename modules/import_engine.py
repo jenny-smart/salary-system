@@ -46,7 +46,10 @@ LOG_HEADER = [
 ]
 
 REPORT_SHEET_PREFIX = "Python匯入-"
-REPORT_HEADER = ["執行時間", "地區", "作業", "寫入列數", "讀回核對", "寫入位置", "連結"]
+REPORT_HEADER = [
+    "執行時間", "地區", "作業", "匯入方式", "結果", "IMPORTRANGE列數", "Python列數",
+    "差異格數", "差異摘要", "寫入位置", "連結",
+]
 
 _CACHE_TTL_SECONDS = 60
 _cache: dict = {"at": 0.0, "map": None}
@@ -262,6 +265,11 @@ def run_import(
                 region, period, task_key, engine, "退回IMPORTRANGE",
                 importrange_count=num_rows, note=f"Python 讀取失敗：{e}", log=log,
             )
+            append_report(
+                region, period, task_key, engine, "❌ Python失敗，已改用IMPORTRANGE",
+                ws, start_row, start_col, importrange_count=num_rows,
+                diff_summary=f"Python 讀取失敗：{e}", log=log,
+            )
             return num_rows
         if python_write is not None:
             num_rows = python_write(rows)
@@ -271,8 +279,9 @@ def run_import(
             region, period, task_key, engine, "完成", python_count=num_rows,
             note=f"寫入 {col_letter(start_col)}{start_row} 起", log=log,
         )
-        append_python_report(
-            region, period, task_key, ws, start_row, start_col, num_rows, log=log,
+        append_report(
+            region, period, task_key, engine, "✅ Python寫入完成（讀回一致）",
+            ws, start_row, start_col, python_count=num_rows, log=log,
         )
         return num_rows
 
@@ -301,11 +310,23 @@ def run_import(
                 diff_summary=summarize_diffs(diffs, start_row, start_col=start_col),
                 log=log,
             )
+            append_report(
+                region, period, task_key, engine,
+                "✅ 一致，可切換 PYTHON" if not diffs else "❌ 不一致，先不要切換",
+                ws, start_row, start_col, importrange_count=num_rows,
+                python_count=len(py_rows), diff_count=len(diffs),
+                diff_summary=summarize_diffs(diffs, start_row, start_col=start_col), log=log,
+            )
         except Exception as e:
             log.append(f"    ⚠️ 比對失敗（不影響匯入結果）：{e}")
             append_engine_log(
                 region, period, task_key, engine, "比對失敗",
                 importrange_count=num_rows, note=str(e), log=log,
+            )
+            append_report(
+                region, period, task_key, engine, "❌ Python比對失敗，先不要切換",
+                ws, start_row, start_col, importrange_count=num_rows,
+                diff_summary=str(e), log=log,
             )
     return num_rows
 
@@ -344,14 +365,19 @@ def sheet_url(spreadsheet_id: str, gid=None, cell: str = "") -> str:
     return url
 
 
-def append_python_report(
-    region: str, period: str, task_key: str, ws, start_row: int, start_col: int,
-    num_rows: int, log: List[str] | None = None,
+def append_report(
+    region: str, period: str, task_key: str, engine: str, result: str,
+    ws, start_row: int, start_col: int,
+    importrange_count="", python_count="", diff_count="", diff_summary="",
+    log: List[str] | None = None,
 ) -> str:
     """
-    PYTHON 寫入完成後，記到主控試算表「Python匯入-{期別}」分頁（不存在自動新增），
-    並在日誌顯示分頁連結與寫入位置連結。回傳分頁連結；失敗只記日誌，不中斷流程。
+    試跑比對／PYTHON 每次匯入都記到主控試算表「Python匯入-{期別}」分頁（不存在自動新增），
+    並在日誌顯示結果、寫入位置連結與紀錄分頁連結。失敗只記日誌，不中斷流程。
     """
+    label = "試跑比對" if engine == ENGINE_COMPARE else engine
+    if log is not None:
+        log.append(f"    {result}（{label}）")
     try:
         from modules.auth import open_spreadsheet
         from modules.master_sheet import MASTER_SHEET_ID, _get_or_create_log_sheet
@@ -362,13 +388,14 @@ def append_python_report(
         report = _get_or_create_log_sheet(ss, f"{REPORT_SHEET_PREFIX}{period}", REPORT_HEADER)
         report.append_row([
             datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %H:%M:%S"),
-            region, task_key, num_rows, "一致", f"{ws.title}!{cell} 起",
+            region, task_key, label, result, importrange_count, python_count,
+            diff_count, diff_summary, f"{ws.title}!{cell} 起",
             f'=HYPERLINK("{target_url}","開啟{ws.title}")',
         ], value_input_option="USER_ENTERED")
         report_url = sheet_url(MASTER_SHEET_ID, report.id)
         if log is not None:
-            log.append(f"    🔗 請確認 Python 匯入結果（{num_rows} 列）：{target_url}")
-            log.append(f"    🔗 本期 Python 匯入紀錄：{report_url}")
+            log.append(f"    🔗 寫入位置：{target_url}")
+            log.append(f"    🔗 本期匯入紀錄：{report_url}")
         return report_url
     except Exception as e:
         if log is not None:
