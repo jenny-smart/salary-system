@@ -13,9 +13,15 @@ ROOT = {"台北": "1kJTGZYpgXBPlyR4SjRKoP0-sK30MhAfW", "台中": "1peMrCBDFJ2-sS
 PERIODS = [f"2026{m:02d}-{h}" for m in range(1, 12) for h in (1, 2)][:-1]
 
 gc = auth.get_gspread_client()
+jgc = auth.get_jenny_gspread_client()
 for region, rid in REPORT.items():
     print(f"\n===== {region} 申報檔 =====")
-    ss = gc.open_by_key(rid)
+    try:
+        ss = gc.open_by_key(rid)
+        print("Service Account 可讀")
+    except Exception:
+        print("Service Account 無權限，改用 Jenny 帳號")
+        ss = jgc.open_by_key(rid)
     print("分頁：", [w.title for w in ss.worksheets()])
     for tab, rng in (("清潔各月", "A1:AL3"), ("水洗", "A1:AD3")):
         try:
@@ -27,7 +33,7 @@ for region, rid in REPORT.items():
         for r, row in enumerate(ws.get(rng, value_render_option="FORMULA") or [], 1):
             print(f"   R{r}:", [str(v)[:70] for v in row])
         colA = ws.col_values(1)[:20]
-        print(f"   A1:A20：", [str(v)[:45] for v in colA])
+        print("   A1:A20：", [str(v)[:45] for v in colA])
 
 for region, root in ROOT.items():
     print(f"\n===== {region} 各期檔案 =====")
