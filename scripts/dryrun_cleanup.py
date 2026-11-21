@@ -1,50 +1,169 @@
-"""唯讀：台北水洗申報已填金額 vs 各期其他承攬 水洗薪資表 第279／285列（只印姓名與金額）。"""
+"""
+2026 承攬費申報補跑（台北／台中，202601～202611-1）。WRITE=1 才寫入；寫入前先備份申報檔。
+- 清潔：台中 清潔各月 第1列每 3 欄寫入該月清潔檔 ID（1～10月用 -2 檔，11月用 202611-1）；
+        台北 期別 B 欄為 importrange 自動帶入，只核對不寫。
+- 水洗：其他承攬「薪資總表」B=姓名、E=-1 金額、F=-2 金額；
+        第一階段＝當月 -1 檔 E，第二階段＝當月 -2 檔 F；申報檔沒有的姓名新增在最後一列（只填姓名）。
+- 其他承攬 202611-1：台北／台中／新竹／桃園 沒有「薪資總表」時，從台北複製並清空 H 欄以後的個資。
+不印身分證、地址、帳號。
+"""
 import os
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.getcwd())
+from gspread.utils import rowcol_to_a1  # noqa: E402
 from modules import auth  # noqa: E402
+from modules.cleaning_process_1 import find_cleaning_file  # noqa: E402
+from modules.other_contract_process import _find_other_file  # noqa: E402
 
-OTHER = {  # 台北 其他承攬
- "202601-1":"1Oh-096BA6YlrQmMUWVEvIf1khOaltJLDVihlSiarVMs","202601-2":"18wDCMp2gL2r8PkZuw3k4FtU_hV1TMLG9ySqBo4RdQt4",
- "202602-1":"10Rq8LI4W6KorpBhYBZ4lgBItYmPjRVyLULDnuSPDUV0","202602-2":"1tS0DTOMBtfTpaAnBzrTeR9zo2GqpEu_qbN2oCbGjHsg",
- "202603-1":"1VrowA-JgopWWkVlcBHl6y6n8AETGiUCivIFQXuwQJt4","202603-2":"1Pi6a3xKBdg78WcBF6Y0NctmBgKg_FIlnuktoUo347Tc",
- "202604-1":"1e3CC_2u_MBOvoxGph3gyenCPWvumW2nSJjjBoeEQxgk","202604-2":"1yPPnSNGtWlrkPHLLMbRBlYX6ihRGTKsgBcMs0Clx5_4",
- "202605-1":"1tusqKwELM2AZCZ_zy2Ck3iKrTwFPhKwIvEzMAd4F6E4",
- "202606-1":"1x1gb1IEZyNvXSue4R8nonIART1dRPTXKi6mXw_9UHgs","202606-2":"1MjePwTbA7wWmgkaWaju2z6yWBsAFJOD1ImmUzsQOvOc",
- "202607-1":"1l4OPDog2RifPzYHftrFDb86o96EaHtg-l3rlgpDIe0s","202607-2":"1kV8xaS0krMmGCPXGXxlzJ1zBxwqdK3sNh7T9I91XMGg",
- "202608-1":"16FxRNJLCgfhJLt2qoIsLYWzJe9R-JFuUmhNKCzmwvJE","202608-2":"1kaUNPLt8Q0Xc-FUIdxhY6hmzFCuAIj8Vwk033Ixrvuo",
- "202609-1":"12nwdgbNSU29HydyI3YFO9-KR_NlIzJfx2rEiq6MKm-0","202609-2":"18DiRYUDZLncR-h79GODMCbChQdm2B2Yyq9KMhYQGhhs",
- "202610-1":"1UJX5YADf_xtQO6Pv-_Y8PYqfuCNrHdWXAJF7HleA4c0","202610-2":"1KDtOAumMI7kMPzw1PF6UZoYJ0wh0fmjIAXRsvqArnQA",
- "202611-1":"1uTLOYiwrkqM_Vz-EoM3HkVQur1j6ecVFhxl-NavUwuE",
-}
+WRITE = os.environ.get("WRITE") == "1"
+ROOT = {"台北": "1kJTGZYpgXBPlyR4SjRKoP0-sK30MhAfW", "台中": "1peMrCBDFJ2-sSKUzuc0X5p0Mc3g0VPrG",
+        "桃園": "18Patt1SGG_6CWCqSaNgYNoDC4O0p5Vpm", "新竹": "1rnCtWrw3AUvn1PCj1NKsLtbM5UrWKuiI"}
+REPORT = {"台北": "1PYUvL9bz3a-8f1r2WA0qEfy6O5rMKWEOytGJ-lRm9fg",
+          "台中": "1eAt1gczhwHPOpVX2uFQumJ6xnvTWnij8N1w0IBY5qkk"}
+# 水洗分頁版面：第一個月「第一階段」欄（0-based）、每月欄寬、人員起始列
+WASH_LAYOUT = {"台北": (6, 4, 4), "台中": (5, 2, 4)}
+PERIODS = [f"2026{m:02d}-{h}" for m in range(1, 12) for h in (1, 2)][:-1]
+
 gc = auth.get_gspread_client()
 jgc = auth.get_jenny_gspread_client()
-ws = jgc.open_by_key("1PYUvL9bz3a-8f1r2WA0qEfy6O5rMKWEOytGJ-lRm9fg").worksheet("水洗")
-hdr = ws.get("A1:AZ2") or [[], []]
-names = [r[0] if r else "" for r in (ws.get("A4:A30") or [])]
-vals = ws.get("A4:AZ30", value_render_option="UNFORMATTED_VALUE") or []
-print("台北水洗申報 R1:", [str(v)[:8] for v in hdr[0]])
-print("台北水洗申報 R2:", [str(v)[:8] for v in (hdr[1] if len(hdr) > 1 else [])])
-for n, row in zip(names, vals):
-    if n:
-        print(f"  申報已填 {n}:", ["" if v == "" else v for v in row[6:50]])
+jdrive = auth.get_jenny_drive_service()
+print("模式：", "寫入" if WRITE else "預演（不寫入）")
 
-for p, oid in OTHER.items():
+
+def num(v):
     try:
-        sh = gc.open_by_key(oid).worksheet("水洗薪資表")
-        r1 = (sh.get("J1:Z1") or [[]])[0]
-        r279 = (sh.get("J279:Z279", value_render_option="UNFORMATTED_VALUE") or [[]])[0]
-        r285 = (sh.get("J285:Z285", value_render_option="UNFORMATTED_VALUE") or [[]])[0]
-        ad1 = (sh.spreadsheet.worksheet("水洗薪資單").get("AD1") or [[""]])[0][0]
-        out = []
-        for i, n in enumerate(r1):
-            if not str(n).strip():
-                continue
-            a = r279[i] if i < len(r279) else ""
-            b = r285[i] if i < len(r285) else ""
-            if a not in ("", 0) or b not in ("", 0):
-                out.append(f"{n} 279={a} 285={b}")
-        print(f"{p}（水洗薪資單AD1={ad1}）:", "；".join(out) or "全部 0")
+        return float(str(v).replace(",", "")) if str(v).strip() not in ("", "#N/A") else 0.0
+    except ValueError:
+        return 0.0
+
+
+# ── 找各期檔案 ──
+files = {}
+for region in ("台北", "台中"):
+    for p in PERIODS:
+        for kind, fn in (("清潔", find_cleaning_file), ("其他", _find_other_file)):
+            try:
+                files[(region, p, kind)] = fn(ROOT[region], p, region)
+            except Exception:
+                files[(region, p, kind)] = None
+
+# ── 其他承攬 202611-1 補「薪資總表」 ──
+src_other = gc.open_by_key(_find_other_file(ROOT["台北"], "202611-1", "台北"))
+src_sheet = src_other.worksheet("薪資總表")
+for region in ("台北", "台中", "新竹", "桃園"):
+    try:
+        oid = _find_other_file(ROOT[region], "202611-1", region)
     except Exception as e:
-        print(f"{p}: 讀取失敗 {e}")
+        print(f"[薪資總表] {region} 202611-1 其他承攬找不到：{e}")
+        continue
+    ss = gc.open_by_key(oid)
+    titles = [w.title for w in ss.worksheets()]
+    if "薪資總表" in titles:
+        print(f"[薪資總表] {region}：已有")
+        continue
+    print(f"[薪資總表] {region}：沒有 → {'從台北複製' if WRITE else '將從台北複製'}")
+    if WRITE:
+        res = src_sheet.copy_to(oid)
+        new = ss.get_worksheet_by_id(res["sheetId"])
+        new.update_title("薪資總表")
+        new.batch_clear([f"H3:{rowcol_to_a1(new.row_count, new.col_count)}"])  # 清掉台北人員個資
+        print(f"    已新增 薪資總表 並清空 H3 以後")
+
+# ── 讀水洗金額（薪資總表）──
+wash = {r: {} for r in ("台北", "台中")}   # wash[region][(name, month, stage)] = amount
+for region in ("台北", "台中"):
+    for p in PERIODS:
+        oid = files[(region, p, "其他")]
+        m, half = int(p[4:6]), p[-1]
+        if not oid:
+            print(f"[水洗] {region} {p} 其他承攬找不到 → 該階段不填")
+            continue
+        try:
+            rows = gc.open_by_key(oid).worksheet("薪資總表").get("A3:F60", value_render_option="UNFORMATTED_VALUE") or []
+        except Exception as e:
+            print(f"[水洗] {region} {p} 薪資總表讀取失敗：{e}")
+            continue
+        col = 4 if half == "1" else 5
+        for r in rows:
+            r = list(r) + [""] * 6
+            if str(r[0]).strip() != "水洗" or not str(r[1]).strip() or str(r[1]).strip() == "0":
+                continue
+            wash[region][(str(r[1]).strip(), m, half)] = num(r[col])
+
+# ── 備份申報檔 ──
+stamp = datetime.now().strftime("%Y%m%d-%H%M")
+if WRITE:
+    for region, rid in REPORT.items():
+        meta = jdrive.files().get(fileId=rid, fields="name,parents", supportsAllDrives=True).execute()
+        cp = jdrive.files().copy(fileId=rid, supportsAllDrives=True, body={
+            "name": f"[備份{stamp}]{meta['name']}", "parents": meta.get("parents", [])}).execute()
+        print(f"[備份] {region} → {cp['id']}")
+
+# ── 清潔 ──
+tc = jgc.open_by_key(REPORT["台中"])
+ws = tc.worksheet("清潔各月")
+row1 = (ws.get("A1:AI1") or [[]])[0] + [""] * 40
+updates = []
+for m in range(1, 12):
+    p = f"2026{m:02d}-2" if m < 11 else "202611-1"
+    fid = files[("台中", p, "清潔")]
+    c = 3 * (m - 1)
+    want = [fid or "", f"2026{m:02d}-1", f"2026{m:02d}-2"]
+    have = [str(row1[c]).rstrip("/"), row1[c + 1], row1[c + 2]]
+    if want != have:
+        print(f"[清潔] 台中 {m}月 {rowcol_to_a1(1, c + 1)}：{str(have[0])[:12]}…/{have[1]} → {str(want[0])[:12]}…（{p}）/{want[1]}")
+        updates.append({"range": f"{rowcol_to_a1(1, c + 1)}:{rowcol_to_a1(1, c + 3)}", "values": [want]})
+if WRITE and updates:
+    ws.batch_update(updates, value_input_option="RAW")
+    print(f"    台中 清潔各月 已更新 {len(updates)} 個月")
+
+tp = jgc.open_by_key(REPORT["台北"])
+qb = tp.worksheet("期別").get("A2:B13") or []
+for i, r in enumerate(qb[:11], 1):
+    r = list(r) + ["", ""]
+    p = f"2026{i:02d}-2"
+    fid = files[("台北", p, "清潔")]
+    ok = "一致" if str(r[1]).strip() == (fid or "") else f"不一致（期別表={str(r[1])[:15]}…，程式找到={str(fid)[:15]}…）"
+    print(f"[清潔] 台北 {r[0]}：{ok}")
+
+# ── 水洗 ──
+for region in ("台北", "台中"):
+    first, width, start = WASH_LAYOUT[region]
+    ss = tp if region == "台北" else tc
+    w = ss.worksheet("水洗")
+    names = [str(x[0]).strip() if x else "" for x in (w.get(f"A{start}:A400") or [])]
+    row_of = {n: start + i for i, n in enumerate(names) if n}
+    last = start + max([i for i, n in enumerate(names) if n], default=-1)
+    people = sorted({k[0] for k in wash[region]})
+    data, new_rows = [], []
+    for n in people:
+        if n not in row_of:
+            last += 1
+            row_of[n] = last
+            new_rows.append({"range": f"A{last}", "values": [[n]]})
+            print(f"[水洗] {region} 新增人員 {n} → 第{last}列")
+    cur = {}
+    if row_of:
+        top, bot = min(row_of.values()), max(row_of.values())
+        grid = w.get(f"A{top}:{rowcol_to_a1(bot, first + width * 11)}", value_render_option="UNFORMATTED_VALUE") or []
+        for r_i, row in enumerate(grid):
+            cur[top + r_i] = list(row)
+    for (n, m, half), amt in sorted(wash[region].items(), key=lambda k: (k[0][0], k[0][1], k[0][2])):
+        c = first + width * (m - 1) + (0 if half == "1" else 1)
+        r = row_of[n]
+        old = (cur.get(r, []) + [""] * 200)[c]
+        new = int(amt) if float(amt).is_integer() else amt
+        if num(old) != num(new) or (old == "" and new != 0):
+            if old == "" and new == 0:
+                continue
+            print(f"[水洗] {region} {n} {m}月{'第一' if half == '1' else '第二'}階段 {rowcol_to_a1(r, c + 1)}：{old!r} → {new}")
+            data.append({"range": rowcol_to_a1(r, c + 1), "values": [[new]]})
+    if WRITE:
+        if new_rows:
+            w.batch_update(new_rows, value_input_option="RAW")
+        if data:
+            w.batch_update(data, value_input_option="RAW")
+        print(f"    {region} 水洗 已寫入 {len(data)} 格、新增 {len(new_rows)} 人")
+print("完成")
