@@ -549,3 +549,76 @@ class CleanupDatesTest(unittest.TestCase):
             self.cd.apply_from_settings(ss, log)
         sheets["薪資表"].update.assert_not_called()
         self.assertIn("quota", log[-1])
+
+
+class ImportMethodOverrideTest(unittest.TestCase):
+    """網頁選的匯入方式優先；沒選時沿用設定分頁；設定分頁不存在不自動建立。"""
+
+    def tearDown(self):
+        engine.set_engine_override(None)
+        engine._cache.update(at=0.0, map=None)
+
+    def test_web_choice_wins(self):
+        engine.set_engine_override("python")
+        with mock.patch.object(engine, "_load_settings", return_value={"01專員請款": "COMPARE"}):
+            self.assertEqual(engine.get_engine("01專員請款"), engine.ENGINE_PYTHON)
+        engine.set_engine_override(None)
+        with mock.patch.object(engine, "_load_settings", return_value={"01專員請款": "COMPARE"}):
+            self.assertEqual(engine.get_engine("01專員請款"), engine.ENGINE_COMPARE)
+        engine.set_engine_override("亂填")
+        with mock.patch.object(engine, "_load_settings", return_value={}):
+            self.assertEqual(engine.get_engine("01專員請款"), engine.ENGINE_IMPORTRANGE)
+
+    def test_missing_settings_sheet_is_not_created(self):
+        import sys
+        import types
+        ss = mock.MagicMock()
+        ss.worksheet.side_effect = Exception("not found")
+        auth = types.ModuleType("modules.auth")
+        auth.open_spreadsheet = lambda *_: ss
+        master = types.ModuleType("modules.master_sheet")
+        master.MASTER_SHEET_ID = "M"
+        with mock.patch.dict(sys.modules, {"modules.auth": auth, "modules.master_sheet": master}):
+            self.assertEqual(engine.get_engine("00調薪"), engine.ENGINE_IMPORTRANGE)
+        ss.add_worksheet.assert_not_called()
+
+    def test_python_run_writes_report_and_logs_links(self):
+        import sys
+        import types
+        report = mock.MagicMock(id=99)
+        ss = mock.MagicMock()
+        auth = types.ModuleType("modules.auth")
+        auth.open_spreadsheet = lambda *_: ss
+        master = types.ModuleType("modules.master_sheet")
+        master.MASTER_SHEET_ID = "MASTER"
+        created = []
+        master._get_or_create_log_sheet = lambda _ss, title, header: created.append(title) or report
+        ws = mock.MagicMock(id=7, title="01專員請款")
+        ws.spreadsheet.id = "REGION"
+        log = []
+        engine.set_engine_override("PYTHON")
+        with mock.patch.dict(sys.modules, {"modules.auth": auth, "modules.master_sheet": master}), \
+             mock.patch.object(engine, "append_engine_log"):
+            n = engine.run_import(
+                "01專員請款", "台北", "202611-2", log, ws=ws, start_row=5, width=2,
+                importrange=lambda: self.fail("不應執行 IMPORTRANGE"),
+                python_rows=lambda: [["a", 1]], python_write=lambda rows: len(rows),
+            )
+        self.assertEqual(n, 1)
+        self.assertEqual(created, ["Python匯入-202611-2"])
+        row = report.append_row.call_args[0][0]
+        self.assertEqual(row[1:5], ["台北", "01專員請款", 1, "一致"])
+        self.assertIn("REGION/edit#gid=7&range=A5", row[6])
+        self.assertTrue(any("REGION/edit#gid=7&range=A5" in m for m in log))
+        self.assertTrue(any("MASTER/edit#gid=99" in m for m in log))
+
+    def test_report_failure_does_not_break_import(self):
+        log = []
+        engine.set_engine_override("PYTHON")
+        with mock.patch.object(engine, "append_engine_log"):
+            n = engine.run_import(
+                "01專員請款", "台北", "202611-2", log, ws=None, start_row=5, width=2,
+                importrange=lambda: 0, python_rows=lambda: [[1]], python_write=lambda rows: 1,
+            )
+        self.assertEqual(n, 1)
+        self.assertTrue(any("不影響匯入結果" in m for m in log))
