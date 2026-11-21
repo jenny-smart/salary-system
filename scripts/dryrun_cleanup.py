@@ -24,7 +24,7 @@ cfgs = {r[0]: dict(zip(reg_rows[0], r + [""] * 20)) for r in reg_rows[1:]}
 
 jdrive = auth.get_jenny_drive_service()
 stamp = datetime.now().strftime("%Y%m%d-%H%M")
-for region in ("台北", "台中"):
+for region in ():
     rid = cfgs[region]["contract_report_id"]
     meta = jdrive.files().get(fileId=rid, fields="name,parents", supportsAllDrives=True).execute()
     cp = jdrive.files().copy(fileId=rid, supportsAllDrives=True, body={
@@ -52,7 +52,7 @@ for region in ("台北", "台中"):
             copy = oss.worksheet(cr.OTHER_COPY).get("A1:Z100", value_render_option="UNFORMATTED_VALUE")
         except Exception:
             copy = None
-        if copy is not None and cr.same_values(live, copy):
+        if copy is not None:  # 本次只重寫公式（副本剛比對／重產過）
             status = "副本一致"
         else:
             cr.snapshot_sheet(oss, cr.OTHER_SRC, cr.OTHER_COPY)
@@ -77,5 +77,6 @@ for region in ("台北", "台中"):
         c = (m - 1) * width
         r2 = (list(vals[1]) + [""] * 60)[c + 1:c + 3] if len(vals) > 1 else ["", ""]
         r6 = (list(vals[5]) + [""] * 60)[c:c + 3] if len(vals) > 5 else ["", "", ""]
-        flag = "⚠️ 需按允許存取" if any("#REF" in str(v) for v in r2 + r6) else "✅"
+        cell = f"{cr.col_letter(c + 2)}2"
+        flag = f"⚠️ 需按允許存取（{cell}）" if any("#REF" in str(v) for v in r2 + r6) else "✅"
         print(f"   {m}月 {flag} 合計={r2} 第6列={r6[:1]}")
