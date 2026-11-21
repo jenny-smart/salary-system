@@ -26,7 +26,7 @@ for i, r in enumerate(rows[1:], 2):
 
 jdrive = auth.get_jenny_drive_service()
 stamp = datetime.now().strftime("%Y%m%d-%H%M")
-for region in ("台北", "台中"):
+for region in ("台中",):
     rid = cfgs[region]["contract_report_id"]
     meta = jdrive.files().get(fileId=rid, fields="name,parents", supportsAllDrives=True).execute()
     cp = jdrive.files().copy(fileId=rid, supportsAllDrives=True, body={
@@ -34,8 +34,8 @@ for region in ("台北", "台中"):
     print(f"[備份] {region} → {cp['id']}")
 
 ok = True
-for region in ("台北", "台中"):
-    for m in range(1, 11):
+for region in ("台中", "台北"):
+    for m in (range(1, 11) if region == "台中" else (10,)):
         period = f"2026{m:02d}-2"
         cfg = cfg_for_period(cfgs[region], period)
         try:
