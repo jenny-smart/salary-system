@@ -101,12 +101,20 @@ def col_letter(n: int) -> str:
 # ──────────────────────────────────────────────────────────────
 
 def _open(spreadsheet_id: str):
-    """Service Account 優先；沒權限時改用 Jenny 帳號（台北申報檔只分享給 Jenny）。"""
+    """Jenny 帳號優先（申報檔與期別檔的擁有者，可寫入）；不可用時改用 Service Account。"""
     from modules.auth import get_gspread_client, open_jenny_spreadsheet
     try:
-        return get_gspread_client().open_by_key(spreadsheet_id)
-    except Exception:
         return open_jenny_spreadsheet(spreadsheet_id)
+    except Exception:
+        return get_gspread_client().open_by_key(spreadsheet_id)
+
+
+def trim_rows(values: list) -> list:
+    """去掉尾端整列空白（含只有核取方塊 FALSE）的列。"""
+    rows = [list(r) for r in (values or [])]
+    while rows and all(str(v).strip() in ("", "FALSE") for v in rows[-1]):
+        rows.pop()
+    return rows
 
 
 def _sheet(ss, title: str, rows: int = 1000, cols: int = 26, create: bool = True):
@@ -242,7 +250,7 @@ def run_contract_report_all(
     # 新訓退訓實境費用
     salary_id = str(cfg.get("salary_id", "") or "").strip()
     try:
-        src = _open(salary_id).worksheet(TRAINING_SHEET).get_all_values()
+        src = trim_rows(_open(salary_id).worksheet(TRAINING_SHEET).get_all_values())
         ws_t = _sheet(report, TRAINING_SHEET, rows=max(len(src) + 10, 100),
                       cols=max((len(r) for r in src), default=6))
         ws_t.clear()

@@ -48,3 +48,8 @@ def test_write_month_block_keeps_period_reference_and_clears_old_people():
     assert data[0] == {"range": "E1:G1", "values": [["='期別'!B3", "11502-1", "11502-2"]]}
     assert data[1] == {"range": "F2:G2", "values": [[10, 20]]}
     assert {"range": "E6:H6", "values": [["王", 1, 2, 3]]} in data
+
+
+def test_trim_rows_drops_trailing_blank_and_checkbox_rows():
+    rows = [["姓名", "金額", "FALSE"], ["王", 800, "TRUE"], ["", "", "FALSE"], ["", "", ""]]
+    assert cr.trim_rows(rows) == [["姓名", "金額", "FALSE"], ["王", 800, "TRUE"]]
