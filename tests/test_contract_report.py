@@ -60,6 +60,8 @@ def test_wash_formulas_point_to_copy_and_period_column():
     assert f["id"] == "='期別'!C3"
     assert 'IMPORTRANGE(E$1,"「薪資總表」的副本!E2:F2")' in f["totals"]
     assert '="水洗"' in f["people"] and "B3:B80" in f["people"] and "E3:F80" in f["people"]
+    assert "IFERROR" not in f["totals"] + f["people"]  # 保留 #REF! 讓使用者按允許存取
+    assert f["people"].startswith("=IFNA(FILTER(")
 
 
 def test_write_wash_formula_block_layout():

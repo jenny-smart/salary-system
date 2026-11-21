@@ -182,8 +182,9 @@ def wash_formulas(month: int, width: int, period_row: int) -> dict:
 
     return {
         "id": f"='{PERIOD_SHEET}'!C{period_row}",
-        "totals": f'=IFERROR({imp("E2:F2")},"")',
-        "people": (f'=IFERROR(FILTER({{{imp("B3:B80")},{imp("E3:F80")}}},'
+        # 不包 IFERROR：未授權時要顯示 #REF! 才能按「允許存取」；只把 FILTER 找不到（#N/A）轉空白
+        "totals": f"={imp('E2:F2')}",
+        "people": (f'=IFNA(FILTER({{{imp("B3:B80")},{imp("E3:F80")}}},'
                    f'{imp("A3:A80")}="水洗",{imp("B3:B80")}<>"",{imp("B3:B80")}<>0),"")'),
     }
 
