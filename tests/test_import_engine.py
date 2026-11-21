@@ -310,3 +310,27 @@ class RunImportTest(unittest.TestCase):
             )
         self.assertEqual(n, 2)
         writer.assert_called_once_with([[1], [2]])
+
+
+class AdjustFormulaTest(unittest.TestCase):
+    def setUp(self):
+        self.cp1, patcher = _isolated_import("modules.cleaning_process_1")
+        self.addCleanup(patcher.stop)
+
+    def test_formulas_lookup_by_name(self):
+        ws = mock.MagicMock()
+        with mock.patch.object(self.cp1.time, "sleep"):
+            self.cp1._adj_import_salary_k_r(ws, "SID", "202611", [])
+            self.cp1._adj_import_salary_aa_af(ws, "SID", "202611", [])
+        (r1, c1, f1), (r2, c2, f2) = [c.args for c in ws.update_cell.call_args_list]
+        self.assertEqual((r1, c1, r2, c2), (3, 25, 3, 33))
+        self.assertEqual(
+            f1,
+            '=ARRAYFORMULA(IF(S3:S300="",,VLOOKUP(S3:S300,'
+            'IMPORTRANGE("SID","202611調薪資料!B3:R300"),{10,11,12,13,14,15,16,17},FALSE)))',
+        )
+        self.assertEqual(
+            f2,
+            '=ARRAYFORMULA(IF(S3:S300="",,VLOOKUP(S3:S300,'
+            'IMPORTRANGE("SID","202611調薪資料!B3:AF300"),{26,27,28,29,30,31},FALSE)))',
+        )

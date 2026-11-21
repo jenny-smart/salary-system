@@ -845,9 +845,7 @@ def _adj_build_block(roster_raw: List[list], salary_raw: List[list]) -> List[lis
       Y:AF  = 調薪資料 K:R    ┐ 依 S 欄姓名，到調薪資料 B 欄找「同名」的列
       AG:AL = 調薪資料 AA:AF  ┘（同名多列時取第一列，與 VLOOKUP 相同）
 
-    與原 IMPORTRANGE 公式的差異：原公式用 調薪資料!B3:B300=S3:S300「同一列對同一列」比對，
-    名冊與調薪資料人員順序不同時，資料會放錯列且不會報錯。這裡改用姓名對應；
-    順序一致時兩者結果相同，順序不一致時 COMPARE 會顯示「不一致」指出錯位的格子。
+    與 IMPORTRANGE 版（_adj_salary_lookup_formula 的 VLOOKUP）邏輯相同，兩種引擎結果應一致。
     名冊上的姓名在調薪資料找不到時直接停止並列出姓名。
     roster_raw：名冊!B2:F300（UNFORMATTED）；salary_raw：調薪資料!B3:AF300（UNFORMATTED）。
     """
@@ -948,19 +946,29 @@ def _adj_import_roster(
 
 # ── 步驟3：匯入調薪資料 K:R ──────────────────────────────────
 
+def _adj_salary_lookup_formula(salary_id: str, yyyymm: str, last_col: str, cols: range) -> str:
+    """
+    依 S 欄姓名到「調薪資料」B 欄找同名列（VLOOKUP，同名取第一列），取 cols 指定的欄。
+    找不到姓名時保留 #N/A，讓轉值前的錯誤檢查擋下（不會默默留空白）。
+    """
+    idx = ",".join(str(c) for c in cols)
+    return (
+        f'=ARRAYFORMULA(IF(S3:S300="",,VLOOKUP(S3:S300,'
+        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!B3:{last_col}300"),'
+        f'{{{idx}}},FALSE)))'
+    )
+
+
 def _adj_import_salary_k_r(
     ws_adjust: gspread.Worksheet,
     salary_id: str,
     yyyymm: str,
     log: List[str],
 ):
-    formula = (
-        f'=ARRAYFORMULA(IF(S3:S300="",,FILTER('
-        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!K3:R300"),'
-        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!B3:B300")=S3:S300)))'
-    )
+    # 調薪資料 B3:R300：B=第1欄 … K=第10欄、R=第17欄
+    formula = _adj_salary_lookup_formula(salary_id, yyyymm, "R", range(10, 18))
     ws_adjust.update_cell(3, 25, formula)  # Y3 = row 3, col 25
-    _log(log, "    Y3 IMPORTRANGE 已寫入（調薪 K:R）")
+    _log(log, "    Y3 IMPORTRANGE 已寫入（調薪 K:R，依姓名對應）")
     time.sleep(5)
 
 
@@ -972,13 +980,10 @@ def _adj_import_salary_aa_af(
     yyyymm: str,
     log: List[str],
 ):
-    formula = (
-        f'=ARRAYFORMULA(IF(S3:S300="",,FILTER('
-        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!AA3:AF300"),'
-        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!B3:B300")=S3:S300)))'
-    )
+    # 調薪資料 B3:AF300：AA=第26欄、AF=第31欄
+    formula = _adj_salary_lookup_formula(salary_id, yyyymm, "AF", range(26, 32))
     ws_adjust.update_cell(3, 33, formula)  # AG3 = row 3, col 33
-    _log(log, "    AG3 IMPORTRANGE 已寫入（調薪 AA:AF）")
+    _log(log, "    AG3 IMPORTRANGE 已寫入（調薪 AA:AF，依姓名對應）")
     time.sleep(5)
 
 
