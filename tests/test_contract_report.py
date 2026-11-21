@@ -58,3 +58,4 @@ def test_trim_rows_drops_trailing_blank_and_checkbox_rows():
 def test_same_values_ignores_trailing_blanks():
     assert cr.same_values([["a", 1, ""], ["", ""]], [["a", "1"]])
     assert not cr.same_values([["a", 1]], [["a", 2]])
+
