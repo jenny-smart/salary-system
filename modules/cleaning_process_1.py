@@ -36,6 +36,7 @@ from modules.project_salary import project_people
 from modules.auth import get_gspread_client
 from modules.period_utils import format_taipei_time
 from modules.master_sheet import record_execution
+from modules import import_engine as _engine
 
 
 # ──────────────────────────────────────────────────────────────
@@ -768,21 +769,11 @@ def run_adjustment(
         # ── 步驟1（已移至 _adj_import_roster 統一處理）─────────
         # S3:AP 清空在寫入公式前由 _adj_import_roster 執行
 
-        # ── 步驟2：匯入專員名冊 → S3:W ──────────────────────
+        # ── 步驟2～5：匯入名冊 S3:W、調薪 Y3:AF／AG3:AL 並轉靜態值 ──
         _log(log, "  步驟2：匯入專員名冊 S3:W")
-        _adj_import_roster(ws_adjust, roster_id, yyyymm, log)
-
-        # ── 步驟3：匯入調薪資料 → Y3:AF ─────────────────────
-        _log(log, "  步驟3：匯入調薪資料 Y3:AF")
-        _adj_import_salary_k_r(ws_adjust, salary_id, yyyymm, log)
-
-        # ── 步驟4：匯入調薪資料 → AG3:AL ────────────────────
-        _log(log, "  步驟4：匯入調薪資料 AG3:AL")
-        _adj_import_salary_aa_af(ws_adjust, salary_id, yyyymm, log)
-
-        # ── 步驟5：轉為靜態值 ────────────────────────────────
-        _log(log, "  步驟5：S3:AL 轉為靜態值")
-        num_rows = _adj_convert_to_values(ws_adjust, log)
+        num_rows = _adj_import_all(
+            gc, ws_adjust, roster_id, salary_id, yyyymm, region, period, log,
+        )
         if num_rows == 0:
             raise ValueError("00調薪 S 欄無有效資料，請確認 IMPORTRANGE 已授權")
 
@@ -838,6 +829,104 @@ def run_adjustment(
 
 # ── 步驟2：匯入專員名冊 ──────────────────────────────────────
 
+ADJUST_TASK = "00調薪"
+ADJUST_START_ROW = 3
+ADJUST_START_COL = 19          # S
+ADJUST_WIDTH = 20              # S:AL = 名冊 S:W(5) + X 空白(1) + K:R(8) + AA:AF(6)
+_ADJ_ROSTER_ROWS = 299         # 名冊!B2:F300
+_ADJ_SALARY_ROWS = 298         # 調薪資料!B3:R300、AA3:AF300；比對 S3:S300
+
+
+def _adj_build_block(roster_raw: List[list], salary_raw: List[list]) -> List[list]:
+    """
+    Python 版 S3:AL：
+
+      S:W   = 名冊!B2:F300（S 欄從 S3 起連續有姓名的列）
+      Y:AF  = 調薪資料 K:R    ┐ 依 S 欄姓名，到調薪資料 B 欄找「同名」的列
+      AG:AL = 調薪資料 AA:AF  ┘（同名多列時取第一列，與 VLOOKUP 相同）
+
+    與 IMPORTRANGE 版（_adj_salary_lookup_formula 的 VLOOKUP）邏輯相同，兩種引擎結果應一致。
+    名冊上的姓名在調薪資料找不到時直接停止並列出姓名。
+    roster_raw：名冊!B2:F300（UNFORMATTED）；salary_raw：調薪資料!B3:AF300（UNFORMATTED）。
+    """
+    roster = _engine.pad_rows(roster_raw, 5)
+    roster += [[""] * 5] * (_ADJ_ROSTER_ROWS - len(roster))
+    salary = _engine.pad_rows(salary_raw, 31)          # B..AF；B=0、K..R=9..16、AA..AF=25..30
+    salary += [[""] * 31] * (_ADJ_SALARY_ROWS - len(salary))
+
+    names = [row[0] for row in roster]
+    num_rows = 0
+    for value in names:
+        if not str(value).strip() or _engine.is_sheet_error(value):
+            break
+        num_rows += 1
+    if num_rows == 0:
+        raise ValueError("00調薪 名冊 S 欄無有效資料")
+
+    by_name = {}
+    for row in salary:
+        key = str(row[0]).casefold()          # 與 Sheets 比對相同：不分大小寫、不去空白
+        if str(row[0]).strip() and key not in by_name:
+            by_name[key] = row
+
+    missing = [names[r] for r in range(num_rows) if str(names[r]).casefold() not in by_name]
+    if missing:
+        raise RuntimeError(
+            "00調薪 名冊上的專員在調薪資料找不到：" + "、".join(map(str, missing[:10]))
+            + (f" 等共 {len(missing)} 人" if len(missing) > 10 else "")
+        )
+
+    block = []
+    for r in range(num_rows):
+        src = by_name[str(names[r]).casefold()]
+        block.append(roster[r] + [""] + src[9:17] + src[25:31])
+    if any(_engine.is_sheet_error(v) for row in block for v in row):
+        raise RuntimeError("00調薪 來源資料含試算表錯誤值，已停止")
+    return block
+
+
+def _adj_python_rows(gc, roster_id: str, salary_id: str, yyyymm: str) -> List[list]:
+    roster_raw = gc.open_by_key(roster_id).worksheet(f"{yyyymm}專員名冊").get(
+        "B2:F300", value_render_option="UNFORMATTED_VALUE") or []
+    salary_raw = gc.open_by_key(salary_id).worksheet(f"{yyyymm}調薪資料").get(
+        "B3:AF300", value_render_option="UNFORMATTED_VALUE") or []
+    return _adj_build_block(roster_raw, salary_raw)
+
+
+def _adj_importrange(ws_adjust, roster_id: str, salary_id: str, yyyymm: str, log: List[str]) -> int:
+    """原本做法：三個 IMPORTRANGE → 等載入 → S3:AL 轉靜態值。"""
+    _adj_import_roster(ws_adjust, roster_id, yyyymm, log)
+    _log(log, "  步驟3：匯入調薪資料 Y3:AF")
+    _adj_import_salary_k_r(ws_adjust, salary_id, yyyymm, log)
+    _log(log, "  步驟4：匯入調薪資料 AG3:AL")
+    _adj_import_salary_aa_af(ws_adjust, salary_id, yyyymm, log)
+    _log(log, "  步驟5：S3:AL 轉為靜態值")
+    return _adj_convert_to_values(ws_adjust, log)
+
+
+def _adj_python_write(ws_adjust, rows: List[list], log: List[str]) -> int:
+    ws_adjust.batch_clear(["S3:AL"])
+    _log(log, "    S3:AL 已清空")
+    return _engine.write_static_block(
+        ws_adjust, ADJUST_START_ROW, rows, ADJUST_WIDTH, log, start_col=ADJUST_START_COL,
+    )
+
+
+def _adj_import_all(
+    gc, ws_adjust, roster_id: str, salary_id: str, yyyymm: str,
+    region: str, period: str, log: List[str],
+) -> int:
+    """步驟2～5：依「匯入引擎設定」匯入名冊與調薪資料到 S3:AL 並轉靜態值，回傳人數。"""
+    return _engine.run_import(
+        ADJUST_TASK, region, period, log,
+        ws=ws_adjust, start_row=ADJUST_START_ROW,
+        width=ADJUST_WIDTH, start_col=ADJUST_START_COL,
+        importrange=lambda: _adj_importrange(ws_adjust, roster_id, salary_id, yyyymm, log),
+        python_rows=lambda: _adj_python_rows(gc, roster_id, salary_id, yyyymm),
+        python_write=lambda rows: _adj_python_write(ws_adjust, rows, log),
+    )
+
+
 def _adj_import_roster(
     ws_adjust: gspread.Worksheet,
     roster_id: str,
@@ -857,19 +946,29 @@ def _adj_import_roster(
 
 # ── 步驟3：匯入調薪資料 K:R ──────────────────────────────────
 
+def _adj_salary_lookup_formula(salary_id: str, yyyymm: str, last_col: str, cols: range) -> str:
+    """
+    依 S 欄姓名到「調薪資料」B 欄找同名列（VLOOKUP，同名取第一列），取 cols 指定的欄。
+    找不到姓名時保留 #N/A，讓轉值前的錯誤檢查擋下（不會默默留空白）。
+    """
+    idx = ",".join(str(c) for c in cols)
+    return (
+        f'=ARRAYFORMULA(IF(S3:S300="",,VLOOKUP(S3:S300,'
+        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!B3:{last_col}300"),'
+        f'{{{idx}}},FALSE)))'
+    )
+
+
 def _adj_import_salary_k_r(
     ws_adjust: gspread.Worksheet,
     salary_id: str,
     yyyymm: str,
     log: List[str],
 ):
-    formula = (
-        f'=ARRAYFORMULA(IF(S3:S300="",,FILTER('
-        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!K3:R300"),'
-        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!B3:B300")=S3:S300)))'
-    )
+    # 調薪資料 B3:R300：B=第1欄 … K=第10欄、R=第17欄
+    formula = _adj_salary_lookup_formula(salary_id, yyyymm, "R", range(10, 18))
     ws_adjust.update_cell(3, 25, formula)  # Y3 = row 3, col 25
-    _log(log, "    Y3 IMPORTRANGE 已寫入（調薪 K:R）")
+    _log(log, "    Y3 IMPORTRANGE 已寫入（調薪 K:R，依姓名對應）")
     time.sleep(5)
 
 
@@ -881,13 +980,10 @@ def _adj_import_salary_aa_af(
     yyyymm: str,
     log: List[str],
 ):
-    formula = (
-        f'=ARRAYFORMULA(IF(S3:S300="",,FILTER('
-        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!AA3:AF300"),'
-        f'IMPORTRANGE("{salary_id}","{yyyymm}調薪資料!B3:B300")=S3:S300)))'
-    )
+    # 調薪資料 B3:AF300：AA=第26欄、AF=第31欄
+    formula = _adj_salary_lookup_formula(salary_id, yyyymm, "AF", range(26, 32))
     ws_adjust.update_cell(3, 33, formula)  # AG3 = row 3, col 33
-    _log(log, "    AG3 IMPORTRANGE 已寫入（調薪 AA:AF）")
+    _log(log, "    AG3 IMPORTRANGE 已寫入（調薪 AA:AF，依姓名對應）")
     time.sleep(5)
 
 
