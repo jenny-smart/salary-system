@@ -735,11 +735,12 @@ execution_engine = st.selectbox(
     help="尚未完成 Python 驗證的功能可切回 GAS；複選功能或地區時僅能使用 PYTHON。",
 )
 
-_IMPORT_FUNCS = ("② 00調薪", "③ 01專員請款", "④ 02儲值獎金", "⑩ 一鍵執行")
+_IMPORT_FUNCS = ("② 00調薪", "③ 01專員請款", "④ 02儲值獎金", "⑤ 03新人實境",
+                 "⑥ 04新人實習", "⑦ 05組長津貼", "⑩ 一鍵執行")
 if (system == "🧹 清潔承攬" and execution_engine == "PYTHON"
         and any(f in selected_functions for f in _IMPORT_FUNCS)):
     _import_label = st.radio(
-        "📥 00調薪／01專員請款／02儲值獎金 匯入方式",
+        "📥 00～05 匯入方式",
         ["IMPORTRANGE", "試跑比對", "PYTHON"],
         index=0, horizontal=True, key="import_method",
         help="IMPORTRANGE：原本做法（預設）。"
@@ -1959,7 +1960,6 @@ st.markdown('</div>', unsafe_allow_html=True)
 # ═══════════════════════════════════════════════════════════
 # █ 區塊10：UI — 地區設定
 # ═══════════════════════════════════════════════════════════
-st.markdown('<div class="card"><div class="card-title">⚙️ 地區設定</div>', unsafe_allow_html=True)
 
 REGION_FIELDS = [
     ("root_folder_id",        "根目錄 ID"),
@@ -1972,148 +1972,148 @@ REGION_FIELDS = [
     ("revenue_summary_id",    "營收總表 ID"),
 ]
 
-col_hdr, col_add = st.columns([3, 1])
-with col_add:
-    if st.button("➕ 新增地區", use_container_width=True):
-        st.session_state.adding_region  = True
-        st.session_state.editing_region = None
+with st.expander("⚙️ 地區設定", expanded=False):
+    col_hdr, col_add = st.columns([3, 1])
+    with col_add:
+        if st.button("➕ 新增地區", use_container_width=True):
+            st.session_state.adding_region  = True
+            st.session_state.editing_region = None
 
-if st.session_state.adding_region:
-    with st.form("add_region_form"):
-        st.markdown("**新增地區**")
-        new_name      = st.text_input("地區名稱", placeholder="台北")
-        new_root      = st.text_input("根目錄 ID")
-        new_allowance = st.text_input("請款 ID")
-        new_salary    = st.text_input("薪資 ID")
-        new_roster    = st.text_input("名冊 ID")
-        new_mail      = st.text_input("承攬服務費 mail ID")
-        new_contract_report_id    = st.text_input("承攬費申報試算表 ID")
-        new_contract_report_sheet = st.text_input("承攬費申報工作表名稱")
-        new_revenue_summary_id     = st.text_input("營收總表 ID")
+    if st.session_state.adding_region:
+        with st.form("add_region_form"):
+            st.markdown("**新增地區**")
+            new_name      = st.text_input("地區名稱", placeholder="台北")
+            new_root      = st.text_input("根目錄 ID")
+            new_allowance = st.text_input("請款 ID")
+            new_salary    = st.text_input("薪資 ID")
+            new_roster    = st.text_input("名冊 ID")
+            new_mail      = st.text_input("承攬服務費 mail ID")
+            new_contract_report_id    = st.text_input("承攬費申報試算表 ID")
+            new_contract_report_sheet = st.text_input("承攬費申報工作表名稱")
+            new_revenue_summary_id     = st.text_input("營收總表 ID")
 
-        s1, s2 = st.columns(2)
-        with s1:
-            submitted = st.form_submit_button("💾 儲存", use_container_width=True)
-        with s2:
-            cancelled = st.form_submit_button("✕ 取消", use_container_width=True)
+            s1, s2 = st.columns(2)
+            with s1:
+                submitted = st.form_submit_button("💾 儲存", use_container_width=True)
+            with s2:
+                cancelled = st.form_submit_button("✕ 取消", use_container_width=True)
 
-        if submitted:
-            if not new_name or not new_root:
-                st.error("地區名稱和根目錄 ID 為必填")
-            elif any(r["name"] == new_name for r in regions):
-                st.error(f"地區「{new_name}」已存在，請勿重複新增")
-            else:
-                with st.spinner(f"儲存地區「{new_name}」中..."):
-                    regions.append({
-                        "name":           new_name,
-                        "root_folder_id": new_root,
-                        "allowance_id":   new_allowance,
-                        "salary_id":      new_salary,
-                        "roster_id":      new_roster,
-                        "mail_id":        new_mail,
-                        "contract_report_id":    new_contract_report_id,
-                        "contract_report_sheet": new_contract_report_sheet,
-                        "revenue_summary_id":     new_revenue_summary_id,
-                    })
-                    config["regions"] = regions
-                    save_config(config)
-                    init_msg = ""
-                    try:
-                        from modules.master_sheet import init_region_sheet
-                        is_new   = init_region_sheet(new_name)
-                        init_msg = f"主控試算表：【{new_name}】工作表{'已建立' if is_new else '已存在'}"
-                    except Exception as e:
-                        init_msg = f"主控試算表初始化失敗：{e}"
-                add_log(f"新增地區：{new_name}", "success")
-                add_log(init_msg, "success" if "已建立" in init_msg or "已存在" in init_msg else "warning")
-                st.success(f"✅ 地區「{new_name}」已儲存")
+            if submitted:
+                if not new_name or not new_root:
+                    st.error("地區名稱和根目錄 ID 為必填")
+                elif any(r["name"] == new_name for r in regions):
+                    st.error(f"地區「{new_name}」已存在，請勿重複新增")
+                else:
+                    with st.spinner(f"儲存地區「{new_name}」中..."):
+                        regions.append({
+                            "name":           new_name,
+                            "root_folder_id": new_root,
+                            "allowance_id":   new_allowance,
+                            "salary_id":      new_salary,
+                            "roster_id":      new_roster,
+                            "mail_id":        new_mail,
+                            "contract_report_id":    new_contract_report_id,
+                            "contract_report_sheet": new_contract_report_sheet,
+                            "revenue_summary_id":     new_revenue_summary_id,
+                        })
+                        config["regions"] = regions
+                        save_config(config)
+                        init_msg = ""
+                        try:
+                            from modules.master_sheet import init_region_sheet
+                            is_new   = init_region_sheet(new_name)
+                            init_msg = f"主控試算表：【{new_name}】工作表{'已建立' if is_new else '已存在'}"
+                        except Exception as e:
+                            init_msg = f"主控試算表初始化失敗：{e}"
+                    add_log(f"新增地區：{new_name}", "success")
+                    add_log(init_msg, "success" if "已建立" in init_msg or "已存在" in init_msg else "warning")
+                    st.success(f"✅ 地區「{new_name}」已儲存")
+                    st.session_state.adding_region = False
+                    st.rerun()
+
+            if cancelled:
                 st.session_state.adding_region = False
                 st.rerun()
 
-        if cancelled:
-            st.session_state.adding_region = False
-            st.rerun()
+    for i, region in enumerate(regions):
+        name    = region.get("name", f"地區{i+1}")
+        all_set = all(region.get(f) for f, _ in REGION_FIELDS)
+        badge   = '<span class="badge-ok">已設定</span>' if all_set else '<span class="badge-err">未完整</span>'
 
-for i, region in enumerate(regions):
-    name    = region.get("name", f"地區{i+1}")
-    all_set = all(region.get(f) for f, _ in REGION_FIELDS)
-    badge   = '<span class="badge-ok">已設定</span>' if all_set else '<span class="badge-err">未完整</span>'
+        if st.session_state.editing_region == name:
+            with st.form(f"edit_{name}_{i}"):
+                st.markdown(f"**編輯：{name}**")
+                e_name      = st.text_input("地區名稱", value=name)
+                e_root      = st.text_input("根目錄 ID",  value=region.get("root_folder_id", ""))
+                e_allowance = st.text_input("請款 ID",    value=region.get("allowance_id",   ""))
+                e_salary    = st.text_input("薪資 ID",    value=region.get("salary_id",      ""))
+                e_roster    = st.text_input("名冊 ID",    value=region.get("roster_id",      ""))
+                e_mail      = st.text_input("承攬服務費 mail ID", value=region.get("mail_id", ""))
+                e_contract_report_id    = st.text_input(
+                    "承攬費申報試算表 ID", value=region.get("contract_report_id", ""))
+                e_contract_report_sheet = st.text_input(
+                    "承攬費申報工作表名稱", value=region.get("contract_report_sheet", ""))
+                e_revenue_summary_id = st.text_input(
+                    "營收總表 ID", value=region.get("revenue_summary_id", ""))
 
-    if st.session_state.editing_region == name:
-        with st.form(f"edit_{name}_{i}"):
-            st.markdown(f"**編輯：{name}**")
-            e_name      = st.text_input("地區名稱", value=name)
-            e_root      = st.text_input("根目錄 ID",  value=region.get("root_folder_id", ""))
-            e_allowance = st.text_input("請款 ID",    value=region.get("allowance_id",   ""))
-            e_salary    = st.text_input("薪資 ID",    value=region.get("salary_id",      ""))
-            e_roster    = st.text_input("名冊 ID",    value=region.get("roster_id",      ""))
-            e_mail      = st.text_input("承攬服務費 mail ID", value=region.get("mail_id", ""))
-            e_contract_report_id    = st.text_input(
-                "承攬費申報試算表 ID", value=region.get("contract_report_id", ""))
-            e_contract_report_sheet = st.text_input(
-                "承攬費申報工作表名稱", value=region.get("contract_report_sheet", ""))
-            e_revenue_summary_id = st.text_input(
-                "營收總表 ID", value=region.get("revenue_summary_id", ""))
+                es1, es2 = st.columns(2)
+                with es1:
+                    save_edit   = st.form_submit_button("💾 儲存", use_container_width=True)
+                with es2:
+                    cancel_edit = st.form_submit_button("✕ 取消", use_container_width=True)
 
-            es1, es2 = st.columns(2)
-            with es1:
-                save_edit   = st.form_submit_button("💾 儲存", use_container_width=True)
-            with es2:
-                cancel_edit = st.form_submit_button("✕ 取消", use_container_width=True)
+                if save_edit:
+                    regions[i] = {
+                        "name":           e_name,
+                        "root_folder_id": e_root,
+                        "allowance_id":   e_allowance,
+                        "salary_id":      e_salary,
+                        "roster_id":      e_roster,
+                        "mail_id":        e_mail,
+                        "contract_report_id":    e_contract_report_id,
+                        "contract_report_sheet": e_contract_report_sheet,
+                        "revenue_summary_id":     e_revenue_summary_id,
+                    }
+                    config["regions"] = regions
+                    save_config(config)
+                    add_log(f"更新地區：{e_name}", "success")
+                    st.session_state.editing_region = None
+                    st.rerun()
 
-            if save_edit:
-                regions[i] = {
-                    "name":           e_name,
-                    "root_folder_id": e_root,
-                    "allowance_id":   e_allowance,
-                    "salary_id":      e_salary,
-                    "roster_id":      e_roster,
-                    "mail_id":        e_mail,
-                    "contract_report_id":    e_contract_report_id,
-                    "contract_report_sheet": e_contract_report_sheet,
-                    "revenue_summary_id":     e_revenue_summary_id,
-                }
-                config["regions"] = regions
-                save_config(config)
-                add_log(f"更新地區：{e_name}", "success")
-                st.session_state.editing_region = None
-                st.rerun()
+                if cancel_edit:
+                    st.session_state.editing_region = None
+                    st.rerun()
+        else:
+            detail_html = ""
+            for field, label in REGION_FIELDS:
+                val    = region.get(field, "")
+                status = "✅" if val else "❌ 未設定"
+                short  = val[:22] + "..." if len(val) > 22 else val
+                detail_html += f'<div class="detail-row"><strong>{label}</strong>：{status} {short}</div>'
 
-            if cancel_edit:
-                st.session_state.editing_region = None
-                st.rerun()
-    else:
-        detail_html = ""
-        for field, label in REGION_FIELDS:
-            val    = region.get(field, "")
-            status = "✅" if val else "❌ 未設定"
-            short  = val[:22] + "..." if len(val) > 22 else val
-            detail_html += f'<div class="detail-row"><strong>{label}</strong>：{status} {short}</div>'
+            st.markdown(f"""
+            <div class="region-card">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <strong style="color:#0a4b6e;">🏷️ {name}</strong>{badge}
+              </div>
+              {detail_html}
+            </div>
+            """, unsafe_allow_html=True)
 
-        st.markdown(f"""
-        <div class="region-card">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-            <strong style="color:#0a4b6e;">🏷️ {name}</strong>{badge}
-          </div>
-          {detail_html}
-        </div>
-        """, unsafe_allow_html=True)
+            rc1, rc2, rc3 = st.columns([3, 1, 1])
+            with rc2:
+                if st.button("📝 編輯", key=f"edit_{i}", use_container_width=True):
+                    st.session_state.editing_region = name
+                    st.session_state.adding_region  = False
+                    st.rerun()
+            with rc3:
+                if st.button("🗑️ 刪除", key=f"del_{i}", use_container_width=True):
+                    regions.pop(i)
+                    config["regions"] = regions
+                    save_config(config)
+                    add_log(f"刪除地區：{name}", "warning")
+                    st.rerun()
 
-        rc1, rc2, rc3 = st.columns([3, 1, 1])
-        with rc2:
-            if st.button("📝 編輯", key=f"edit_{i}", use_container_width=True):
-                st.session_state.editing_region = name
-                st.session_state.adding_region  = False
-                st.rerun()
-        with rc3:
-            if st.button("🗑️ 刪除", key=f"del_{i}", use_container_width=True):
-                regions.pop(i)
-                config["regions"] = regions
-                save_config(config)
-                add_log(f"刪除地區：{name}", "warning")
-                st.rerun()
-
-st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════
