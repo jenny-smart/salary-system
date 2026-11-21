@@ -1,62 +1,53 @@
-"""唯讀盤點：承攬費申報檔版面、各期清潔／其他承攬檔案 ID（不寫入任何檔案）。"""
+"""唯讀盤點 2：台北期別分頁、水洗申報內容、其他承攬水洗金額位置（不寫入；不印身分證／地址欄）。"""
 import os
 import sys
 
 sys.path.insert(0, os.getcwd())
 from modules import auth  # noqa: E402
-from modules.cleaning_process_1 import find_cleaning_file  # noqa: E402
-from modules.other_contract_process import _find_other_file  # noqa: E402
 
-REPORT = {"台北": "1PYUvL9bz3a-8f1r2WA0qEfy6O5rMKWEOytGJ-lRm9fg",
-          "台中": "1eAt1gczhwHPOpVX2uFQumJ6xnvTWnij8N1w0IBY5qkk"}
-ROOT = {"台北": "1kJTGZYpgXBPlyR4SjRKoP0-sK30MhAfW", "台中": "1peMrCBDFJ2-sSKUzuc0X5p0Mc3g0VPrG"}
-PERIODS = [f"2026{m:02d}-{h}" for m in range(1, 12) for h in (1, 2)][:-1]
-
-gc = auth.get_gspread_client()
 jgc = auth.get_jenny_gspread_client()
-for region, rid in REPORT.items():
-    print(f"\n===== {region} 申報檔 =====")
-    try:
-        ss = gc.open_by_key(rid)
-        print("Service Account 可讀")
-    except Exception:
-        print("Service Account 無權限，改用 Jenny 帳號")
-        ss = jgc.open_by_key(rid)
-    print("分頁：", [w.title for w in ss.worksheets()])
-    for tab, rng in (("清潔各月", "A1:AL3"), ("水洗", "A1:AD3")):
-        try:
-            ws = ss.worksheet(tab)
-        except Exception as e:
-            print(f"  {tab}：無（{e}）")
-            continue
-        print(f"  {tab} 大小 {ws.row_count}x{ws.col_count}")
-        for r, row in enumerate(ws.get(rng, value_render_option="FORMULA") or [], 1):
-            print(f"   R{r}:", [str(v)[:70] for v in row])
-        colA = ws.col_values(1)[:20]
-        print("   A1:A20：", [str(v)[:45] for v in colA])
+gc = auth.get_gspread_client()
 
-for region, root in ROOT.items():
-    print(f"\n===== {region} 各期檔案 =====")
-    for p in PERIODS:
-        try:
-            c = find_cleaning_file(root, p, region)
-        except Exception as e:
-            c = f"找不到（{str(e)[:60]}）"
-        try:
-            o = _find_other_file(root, p, region)
-        except Exception as e:
-            o = f"找不到（{str(e)[:60]}）"
-        print(f"  {p} 清潔={c} 其他={o}")
+tp = jgc.open_by_key("1PYUvL9bz3a-8f1r2WA0qEfy6O5rMKWEOytGJ-lRm9fg")
+print("== 台北 期別 A1:D14")
+for r in tp.worksheet("期別").get("A1:D14", value_render_option="FORMULA") or []:
+    print("  ", r)
+print("== 台北 清潔各月 A10:D14")
+for r in tp.worksheet("清潔各月").get("A10:D14", value_render_option="FORMULA") or []:
+    print("  ", [str(v)[:90] for v in r])
+ws = tp.worksheet("水洗")
+print("== 台北 水洗 A4:A20 與 D4:Q20（公式）")
+names = ws.get("A4:A20") or []
+vals = ws.get("D4:Q20", value_render_option="FORMULA") or []
+for i in range(max(len(names), len(vals))):
+    n = names[i][0] if i < len(names) and names[i] else ""
+    v = vals[i] if i < len(vals) else []
+    if n or any(str(x).strip() for x in v):
+        print(f"  R{i+4} {n} |", [str(x)[:80] for x in v])
 
-# 其他承攬檔版面（台中 202610-2）
-try:
-    oid = _find_other_file(ROOT["台中"], "202610-2", "台中")
+tc = gc.open_by_key("1eAt1gczhwHPOpVX2uFQumJ6xnvTWnij8N1w0IBY5qkk")
+print("== 台中 清潔 A1:A6, F4:H5 公式、清潔 E 欄")
+print("  ", tc.worksheet("清潔").get("D1:E5", value_render_option="FORMULA"))
+print("  ", tc.worksheet("清潔").get("I1:K4", value_render_option="FORMULA"))
+
+for label, oid in (("台中 202610-2", "11hzKVpKeFj83YChhyNHFiaVDHQ4tMxu0pp0mB_0Yneg"),
+                   ("台北 202610-2", "1KDtOAumMI7kMPzw1PF6UZoYJ0wh0fmjIAXRsvqArnQA"),
+                   ("台北 202610-1", "1UJX5YADf_xtQO6Pv-_Y8PYqfuCNrHdWXAJF7HleA4c0")):
     ss = gc.open_by_key(oid)
-    print("\n===== 台中 202610-2 其他承攬 分頁：", [w.title for w in ss.worksheets()])
+    print(f"== {label} 其他承攬")
     ws = ss.worksheet("水洗薪資表")
-    rows = ws.get("A1:C300", value_render_option="FORMULA") or []
-    for i, r in enumerate(rows, 1):
-        if r and any(str(v).strip() for v in r[:1]):
-            print(f"   A{i}: {str(r[0])[:50]} | B: {str(r[1])[:60] if len(r)>1 else ''}")
-except Exception as e:
-    print("其他承攬讀取失敗：", e)
+    print("   水洗薪資表 大小", ws.row_count, ws.col_count)
+    print("   R1 C1:L1:", (ws.get("A1:L1") or [[]])[0])
+    for r in range(276, 290):
+        row = (ws.get(f"A{r}:L{r}", value_render_option="UNFORMATTED_VALUE") or [[]])
+        row = row[0] if row else []
+        if row:
+            print(f"   R{r}:", [str(v)[:30] for v in row])
+    for tab in ("服務薪資總表", "薪資總表", "服務薪資年度總表"):
+        try:
+            t = ss.worksheet(tab)
+        except Exception:
+            continue
+        print(f"   {tab} 大小 {t.row_count}x{t.col_count}")
+        for i, row in enumerate(t.get("A1:P6", value_render_option="FORMULA") or [], 1):
+            print(f"     R{i}:", [str(v)[:60] for v in row])
