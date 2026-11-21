@@ -670,3 +670,40 @@ class ReportOutcomeTest(unittest.TestCase):
         (a, k), = self._run("PYTHON", [["a", 1]], boom)
         self.assertIn("已改用IMPORTRANGE", a[4])
         self.assertIn("沒權限", k["diff_summary"])
+
+
+class SalaryModuleSelectTest(unittest.TestCase):
+    """03／04：A=期別；05：另需 E 為日期且 TRIM(C) 在薪資表第 1 列。"""
+
+    def setUp(self):
+        self.cp2, patcher = _isolated_import("modules.cleaning_process_2")
+        self.addCleanup(patcher.stop)
+
+    def _row(self, a, c, e):
+        r = [""] * 12
+        r[0], r[2], r[4] = a, c, e
+        return r
+
+    def test_newcomer_and_intern_filter_by_period_only(self):
+        raw = [self._row("202611-2", "王小明", 46350), self._row("202611-1", "李", 46340),
+               self._row("", "陳", ""), ["202611-2"]]
+        got = self.cp2._salary_module_select(raw, "202611-2")
+        self.assertEqual([r[2] for r in got], ["王小明", ""])
+        self.assertTrue(all(len(r) == 12 for r in got))
+
+    def test_leader_needs_date_and_name_in_salary_sheet(self):
+        raw = [
+            self._row("202611-2", "王小明", 46350),        # 日期序號 → 保留
+            self._row("202611-2", " 王小明 ", "2026/11/20"),  # 文字日期、前後空白 → 保留
+            self._row("202611-2", "王小明", "待定"),        # 非日期 → 排除
+            self._row("202611-2", "外人", 46350),           # 不在薪資表 → 排除
+            self._row("202611-1", "王小明", 46350),         # 期別不同 → 排除
+        ]
+        got = self.cp2._salary_module_select(raw, "202611-2", {"王小明", "李大華"})
+        self.assertEqual(len(got), 2)
+
+    def test_all_three_use_import_engine(self):
+        import inspect
+        src = inspect.getsource(self.cp2._run_salary_module)
+        self.assertIn("_engine.run_import(", src)
+        self.assertIn("task_key", src)

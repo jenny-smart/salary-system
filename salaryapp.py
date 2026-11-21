@@ -735,11 +735,12 @@ execution_engine = st.selectbox(
     help="尚未完成 Python 驗證的功能可切回 GAS；複選功能或地區時僅能使用 PYTHON。",
 )
 
-_IMPORT_FUNCS = ("② 00調薪", "③ 01專員請款", "④ 02儲值獎金", "⑩ 一鍵執行")
+_IMPORT_FUNCS = ("② 00調薪", "③ 01專員請款", "④ 02儲值獎金", "⑤ 03新人實境",
+                 "⑥ 04新人實習", "⑦ 05組長津貼", "⑩ 一鍵執行")
 if (system == "🧹 清潔承攬" and execution_engine == "PYTHON"
         and any(f in selected_functions for f in _IMPORT_FUNCS)):
     _import_label = st.radio(
-        "📥 00調薪／01專員請款／02儲值獎金 匯入方式",
+        "📥 00～05 匯入方式",
         ["IMPORTRANGE", "試跑比對", "PYTHON"],
         index=0, horizontal=True, key="import_method",
         help="IMPORTRANGE：原本做法（預設）。"
