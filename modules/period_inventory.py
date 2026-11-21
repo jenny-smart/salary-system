@@ -53,7 +53,7 @@ ALIASES = {
     ("📨 承攬作業", "① 承攬費通知信"): ("承攬費通知信", "清潔承攬mail"),
 }
 # 沒有打卡、只能看 Python 執行紀錄的功能（避免功能名稱剛好等於別的打卡項目）
-NO_PUNCH = {"⑨ 搬運ATM", "⑩ 金流對帳彙總＋檢核", "⑩ 一鍵執行", "⑮ 產生PDF", "⑯ 產生專案PDF"}
+NO_PUNCH = {"⑨ 搬運ATM", "⑩ 金流對帳彙總＋檢核", "⑩ 一鍵執行", "⑪ 產生PDF", "⑫ 產生專案PDF"}
 
 
 def punch_keys(system: str, func: str) -> tuple[str, ...]:

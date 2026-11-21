@@ -577,12 +577,11 @@ FUNCTION_MAP = {
         "⑧ 06季獎金",
         "⑨ 結算作業",
         "⑩ 一鍵執行",
-        "⑪ 新人實境實習期別",
-        "⑫ 場次時數",
-        "⑬ 承攬費申報",
+        "⑪ 產生PDF",
+        "⑫ 產生專案PDF",
+        "⑬ 場次時數",
         "⑭ 工具包押金",
-        "⑮ 產生PDF",
-        "⑯ 產生專案PDF",
+        "⑮ 承攬費申報",
     ],
     "📦 其他承攬": [
         "① 執行前置作業",
@@ -1593,15 +1592,11 @@ if run_clicked and _run_engine == "PYTHON":
                             add_log("一鍵執行需從「▶ 執行」啟動", "warning")
                             success = False
 
-                        elif _func == "⑪ 新人實境實習期別":
-                            from modules.cleaning_process_2 import run_newcomer_label
-                            success = _run(run_newcomer_label)
-
-                        elif _func == "⑫ 場次時數":
+                        elif _func == "⑬ 場次時數":
                             from modules.cleaning_process_4 import run_session_hours
                             success = _run(run_session_hours)
 
-                        elif _func == "⑬ 承攬費申報":
+                        elif _func == "⑮ 承攬費申報":
                             from modules.cleaning_process_4 import run_contract_report
                             success = _run(run_contract_report)
 
@@ -1609,10 +1604,10 @@ if run_clicked and _run_engine == "PYTHON":
                             from modules.cleaning_process_4 import run_tool_deposit
                             success = _run(run_tool_deposit)
 
-                        elif _func in ("⑮ 產生PDF", "⑯ 產生專案PDF"):
+                        elif _func in ("⑪ 產生PDF", "⑫ 產生專案PDF"):
                             from modules.cleaning_pdf import run_pdf
                             root_id  = _region.get("root_folder_id", "")
-                            job_type = "CLEANING" if _func == "⑮ 產生PDF" else "PROJECT"
+                            job_type = "CLEANING" if _func == "⑪ 產生PDF" else "PROJECT"
                             live     = _make_live_log()
                             pdf_result = run_pdf(
                                 cleaning_file_id = cleaning_file_id,
@@ -1627,6 +1622,9 @@ if run_clicked and _run_engine == "PYTHON":
                             if isinstance(pdf_result, dict):
                                 _store_pdf_result(pdf_result)
                                 success = int(pdf_result.get("success_count") or len(pdf_result.get("pdfs", {}))) > 0
+                                if job_type == "PROJECT" and pdf_result.get("no_targets"):
+                                    add_log(f"【{_name}】本期無專案人員，略過產生專案PDF", "info")
+                                    success = True
                             else:
                                 # 舊版 run_pdf 回傳 bool，GitHub 尚未更新
                                 success = bool(pdf_result)

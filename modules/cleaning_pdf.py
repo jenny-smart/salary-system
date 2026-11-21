@@ -143,6 +143,7 @@ def run_pdf(
 
         if not targets:
             _log(log, f"    [{job['list_sheet']}] 無 H=Y 的待產出人員")
+            result["no_targets"] = True
             return result
 
         _log(log, f"    待產出：{len(targets)} 人")

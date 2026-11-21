@@ -54,7 +54,7 @@ def test_load_log_rows_reads_period_year_and_current_year():
 
 
 def test_punch_sheet_marks_done_including_gas_runs():
-    fmap = {"🧹 清潔承攬": ["① 前置作業", "② 00調薪", "⑮ 產生PDF"],
+    fmap = {"🧹 清潔承攬": ["① 前置作業", "② 00調薪", "⑪ 產生PDF"],
             "📦 其他承攬": ["① 執行前置作業"]}
     rows = [_row("2026-11-01 09:00:00", "🧹 清潔承攬", "② 00調薪", "台北", "202610-2", "失敗", msg="x")]
     punches = {"台北": {"前置作業": "2026/11/01 08:00:00", "00調薪": "2026/11/01 10:00:00",
@@ -64,7 +64,7 @@ def test_punch_sheet_marks_done_including_gas_runs():
     assert status[("台北", "🧹 清潔承攬", "① 前置作業")].message == "打卡：前置作業"
     assert status[("台北", "🧹 清潔承攬", "② 00調薪")].state == inv.DONE  # 打卡晚於失敗
     assert status[("台北", "📦 其他承攬", "① 執行前置作業")].state == inv.DONE
-    assert status[("台北", "🧹 清潔承攬", "⑮ 產生PDF")].state == inv.NONE  # 沒有打卡的功能不採計
+    assert status[("台北", "🧹 清潔承攬", "⑪ 產生PDF")].state == inv.NONE  # 沒有打卡的功能不採計
     assert status[("台中", "🧹 清潔承攬", "② 00調薪")].state == inv.DONE
 
 
