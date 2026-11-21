@@ -385,8 +385,28 @@ class FilterNoMatchTest(unittest.TestCase):
         ws.batch_clear.assert_not_called()
 
 
-class InternTemplateTest(unittest.TestCase):
-    """前置作業：薪資表 L 欄時數公式扣除實習時數。"""
+# 202611-1 台北 薪資表 L 欄實際的舊版公式（含換行）
+REAL_OLD = {
+    "L1996": "=SUM(L2003:L2012)-L2015",
+    "L2006": '=IFERROR(\n  SUM(FILTER(L$2:L$1995,\n    (($B$2:$B$1995<$B$2006)+($B$2:$B$1995>$B$2008))*\n    ($C$2:$C$1995<>"六")*\n    ($C$2:$C$1995<>"日")*\n    ($D$2:$D$1995<>"19:00-21:00")*\n    ($D$2:$D$1995<>"19:00-22:00")*\n    ($D$2:$D$1995<>"19:00-23:00")\n  )),\n0)',
+    "L2008": '=IFERROR(\n  SUM(FILTER(L$2:L$1995,\n    (($B$2:$B$1995<$B$2006)+($B$2:$B$1995>$B$2008))*\n    (($C$2:$C$1995="六")+($C$2:$C$1995="日"))*\n    ($D$2:$D$1995<>"19:00-21:00")*\n    ($D$2:$D$1995<>"19:00-22:00")*\n    ($D$2:$D$1995<>"19:00-23:00")\n  )),\n0)\n',
+    "L2009": '=IFERROR(\n  SUM(FILTER(L$2:L$1995,\n    ($B$2:$B$1995>=$B$2006)*($B$2:$B$1995<=$B$2007)*\n    ($C$2:$C$1995<>"六")*($C$2:$C$1995<>"日")\n  )),\n0)\n',
+    "L2010": '=IFERROR(\n  SUM(FILTER(L$2:L$1995,\n    ($B$2:$B$1995>=$B$2006)*($B$2:$B$1995<=$B$2007)*\n    (\n      ($D$2:$D$1995="19:00-21:00")+($D$2:$D$1995="19:00-22:00")+($D$2:$D$1995="19:00-23:00")\n    )\n  )),\n0)\n',
+    "L2011": '=IFERROR(\n  SUM(FILTER(L$2:L$1995,\n    ($B$2:$B$1995>=$B$2006)*($B$2:$B$1995<$B$2007)*\n    (\n      ($C$2:$C$1995="六")+($C$2:$C$1995="日")\n    )\n  )),\n0)\n',
+    "L2012": '=IFERROR(\n  SUM(FILTER(L$2:L$1995,\n    ($B$2:$B$1995>=$B$2007)*($B$2:$B$1995<=$B$2008)\n  )),\n0)\n',
+    "L2013": "", "L2014": "",
+    "L2021": "=VLOOKUP(L$1,'00調薪'!$A:$M,10,false)",
+    "L2022": "=VLOOKUP(L$1,'00調薪'!$A:$M,11,false)",
+    "L2023": "=VLOOKUP(L$1,'00調薪'!$A:$M,12,false)",
+    "L2024": "=VLOOKUP(L$1,'00調薪'!$A:$M,13,false)",
+    "L2025": "=VLOOKUP(L$1,'00調薪'!$A:$M,14,false)",
+    "L2026": "=VLOOKUP(L$1,'00調薪'!$A:$M,15,false)",
+    "L2027": "=L2002*L2016+L2003*L2017+L2004*L2016+L2005*L2017+L2006*L2018+L2007*L2019+L2008*L2020+L2009*L2021+L2010*L2022+L2011*L2023+L2012*L2024",
+}
+
+
+class SalaryTemplateTest(unittest.TestCase):
+    """前置作業：薪資表 L 欄範本（實習扣除、大掃除分類）。"""
 
     def setUp(self):
         self.cp1, patcher = _isolated_import("modules.cleaning_process_1")
@@ -394,7 +414,10 @@ class InternTemplateTest(unittest.TestCase):
 
     def _ws(self, cells):
         ws = mock.MagicMock()
-        ws.acell.side_effect = lambda label, **k: mock.MagicMock(value=cells.get(label, ""))
+        ws.title = "薪資表"
+        ws.batch_get.side_effect = lambda ranges, **k: [
+            [[cells[r]]] if cells.get(r) else [] for r in ranges
+        ]
         return ws
 
     def _written(self, ws):
@@ -402,49 +425,69 @@ class InternTemplateTest(unittest.TestCase):
             return {}
         return {d["range"]: d["values"][0][0] for d in ws.batch_update.call_args[0][0]}
 
-    OLD = {
-        "L2006": "=IFERROR(SUM(FILTER(L$2:L$1995,1)),0)",
-        "L2008": "=IFERROR(SUM(FILTER(L$2:L$1995,2)),0)\n",
-        "L2009": "=IFERROR(SUM(FILTER(L$2:L$1995,3)),0)",
-        "L2011": "=IFERROR(SUM(FILTER(L$2:L$1995,4)),0)",
-        "L2012": "=IFERROR(SUM(FILTER(L$2:L$1995,5)),0)",
-    }
+    def _new_cells(self):
+        cp = self.cp1
+        cells = {f"L{r}": f for r, (f, _) in cp._CLEANUP_ROWS.items()}
+        cells["L1996"] = cp._CHECK_1996[0]
+        cells["L2006"] = REAL_OLD["L2006"] + cp._INTERN_SUFFIX[2006]
+        cells["L2008"] = REAL_OLD["L2008"] + cp._INTERN_SUFFIX[2008]
+        return cells
 
-    def test_adds_deductions_and_leaves_pricing_rows_alone(self):
-        ws = self._ws(self.OLD)
+    def test_upgrades_real_old_template(self):
+        ws = self._ws(REAL_OLD)
         log = []
-        self.cp1._ensure_intern_template(ws, log)
+        self.cp1._ensure_salary_template(ws, log)
         w = self._written(ws)
-        self.assertEqual(set(w), {"L2006", "L2008", "L2009", "L2011", "L2012"})
-        # 2004／2005 會乘以 200 計價、1996 檢查維持原公式 → 都不可以寫入
-        ws.acell.assert_any_call("L2006", value_render_option="FORMULA")
+        self.assertEqual(set(w), {f"L{r}" for r in (1996, 2006, 2008, *range(2009, 2015), *range(2021, 2028))})
         self.assertNotIn("L2004", w)
         self.assertNotIn("L2005", w)
-        self.assertNotIn("L1996", w)
-        e = "'04新人實習'!$E$2:$E$500"
-        self.assertIn(f"WEEKDAY({e},2)<=5)*(({e}<$B$2006)+({e}>$B$2008))", w["L2006"])
-        self.assertIn(f"WEEKDAY({e},2)>5)*(({e}<$B$2006)+({e}>$B$2008))", w["L2008"])
-        self.assertIn(f"({e}<=$B$2007)*(WEEKDAY({e},2)<=5)", w["L2009"])
-        self.assertIn(f"({e}<$B$2007)*(WEEKDAY({e},2)>5)", w["L2011"])
-        self.assertIn(f"({e}>=$B$2007)*({e}<=$B$2008)", w["L2012"])
-        self.assertTrue(w["L2006"].startswith("=IFERROR(SUM(FILTER(L$2:L$1995,1)),0)-SUMPRODUCT("))
+        b, e = "$B$2:$B$1995", "'04新人實習'!$E$2:$E$500"
+        # 大掃除1 結束改為 < B2007（B2007 當天只屬於大掃除2）
+        self.assertIn(f"({b}<$B$2007)", w["L2009"])
+        self.assertIn(f"({b}<$B$2007)", w["L2010"])
+        # 大掃除2 分平日／晚間／週末
+        self.assertIn('($C$2:$C$1995<>"六")', w["L2012"])
+        self.assertIn('($D$2:$D$1995="19:00-21:00")', w["L2013"])
+        self.assertIn('(($C$2:$C$1995="六")+($C$2:$C$1995="日"))', w["L2014"])
+        # 實習扣除
+        for r in ("L2009", "L2011", "L2012", "L2014"):
+            self.assertIn("'04新人實習'", w[r])
+        self.assertNotIn("'04新人實習'", w["L2010"])
+        self.assertNotIn("'04新人實習'", w["L2013"])
+        self.assertIn(f"({e}<$B$2007)*(WEEKDAY({e},2)<=5)", w["L2009"])
+        self.assertIn(f"({e}<=$B$2008)*(WEEKDAY({e},2)>5)", w["L2014"])
+        # 費率：00調薪 J:O，大掃除1 晚間／週末對調修正、大掃除2 #REF! 修正
+        self.assertEqual(w["L2022"], "=VLOOKUP(L$1,'00調薪'!$A:$O,12,false)")
+        self.assertEqual(w["L2023"], "=VLOOKUP(L$1,'00調薪'!$A:$O,11,false)")
+        self.assertEqual(w["L2025"], "=VLOOKUP(L$1,'00調薪'!$A:$O,15,false)")
+        self.assertEqual(w["L2026"], "=VLOOKUP(L$1,'00調薪'!$A:$O,14,false)")
+        self.assertTrue(w["L2027"].endswith("+L2012*L2024+L2013*L2025+L2014*L2026"))
+        self.assertEqual(w["L1996"], "=SUM(L2003:L2014)-L2015")
         self.assertIn("已更新", log[-1])
 
-    def test_already_applied_writes_nothing(self):
-        d = self.cp1._INTERN_DEDUCT
-        ws = self._ws({f"L{r}": "=SUM(X)" + d[r] for r in d})
-        self.cp1._ensure_intern_template(ws, [])
+    def test_already_new_writes_nothing(self):
+        ws = self._ws(self._new_cells())
+        self.cp1._ensure_salary_template(ws, [])
         ws.batch_update.assert_not_called()
 
-    def test_manual_minus_2003_is_replaced(self):
-        suffix = self.cp1._INTERN_DEDUCT[2006]
-        self.assertEqual(self.cp1._with_suffix("=SUM(X)-L2003", suffix), "=SUM(X)" + suffix)
-        self.assertEqual(self.cp1._with_suffix("=SUM(X) - L2003 ", suffix), "=SUM(X)" + suffix)
-
-    def test_non_formula_is_left_alone(self):
-        cells = dict(self.OLD, L2009="5")
+    def test_unexpected_cleanup_row_skips_whole_cleanup_group(self):
+        cells = dict(REAL_OLD, L2012="=自訂公式")
         ws = self._ws(cells)
         log = []
-        self.cp1._ensure_intern_template(ws, log)
-        self.assertNotIn("L2009", self._written(ws))
-        self.assertTrue(any("人工確認" in line for line in log))
+        self.cp1._ensure_salary_template(ws, log)
+        w = self._written(ws)
+        self.assertEqual(set(w), {"L2006", "L2008"})      # 只做一般平日／週末的實習扣除
+        self.assertTrue(any("整組未更新" in line for line in log))
+
+    def test_project_sheet_without_1996(self):
+        cells = dict(REAL_OLD, L1996="")
+        ws = self._ws(cells)
+        self.cp1._ensure_salary_template(ws, [])
+        w = self._written(ws)
+        self.assertNotIn("L1996", w)
+        self.assertIn("L2014", w)
+
+    def test_manual_minus_2003_is_replaced(self):
+        suffix = self.cp1._INTERN_SUFFIX[2006]
+        self.assertEqual(self.cp1._with_suffix("=SUM(X)-L2003", suffix), "=SUM(X)" + suffix)
+        self.assertEqual(self.cp1._with_suffix("=SUM(X) - L2003 ", suffix), "=SUM(X)" + suffix)
