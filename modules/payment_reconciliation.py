@@ -341,6 +341,13 @@ def _date_sort_key(value):
 
 
 ABNORMAL_KEYWORDS = ["異動", "加時", "減時", "請假", "補做", "遲到", "薪資", "未服務", "加洗", "未洗", "加收", "退款", "颱風", "停班", "停課"]
+# K 欄只標註「跟時數有關」的備註（數字＋小時／分），供人工改 J 欄服務時數。
+# 例：減時2人1小時、客訴2人8分鐘、加時1.5小時；收異動費、週末加價等金額類不標。
+TIME_REMARK_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:個)?\s*(?:小時|分鐘|分)")
+
+
+def _is_time_remark(text: str) -> bool:
+    return bool(TIME_REMARK_RE.search(text or ""))
 EXPANDABLE_TYPES  = ["水洗", "家電", "座椅", "收納", "地毯", "其他"]
 
 SERVICE_KEYWORDS = {
@@ -438,13 +445,14 @@ def process_template(
     sort_count = len(sorted_rows)
     log(f"🔵 排序完成：{sort_count} 筆（E → H日期 → M客戶姓名文字排序；格式跟著原列排序）")
 
-    # 2. 異常標記：只改資料，原格式仍保留；最後再套橘色底。
+    # 2. 時數異動標記（K欄）：AP加收備註＋AY退款備註含「數字＋小時／分」才寫入；
+    #    只改資料，原格式仍保留；最後再套橘色底。
     mark_count = 0
     for idx, row in enumerate(sorted_rows):
         ap       = str(row[41]) if len(row) > 41 and row[41] is not None else ""
         ay       = str(row[50]) if len(row) > 50 and row[50] is not None else ""
         combined = (ap + " " + ay).strip()
-        if any(kw in combined for kw in ABNORMAL_KEYWORDS):
+        if _is_time_remark(combined):
             row[10] = combined
             mark_count += 1
     log(f"🔵 異常標記：{mark_count} 筆")
