@@ -20,4 +20,5 @@ jobs:
         env:
           JENNY_GOOGLE_TOKEN: ${{ secrets.JENNY_GOOGLE_TOKEN }}
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          WRITE: "1"
         run: python scripts/dryrun_cleanup.py
