@@ -49,27 +49,30 @@ for region in ("台北", "台中"):
             except Exception:
                 files[(region, p, kind)] = None
 
-# ── 其他承攬 202611-1 補「薪資總表」 ──
+# ── 其他承攬 各期補「薪資總表」（台北／台中／新竹／桃園）──
 src_other = gc.open_by_key(_find_other_file(ROOT["台北"], "202611-1", "台北"))
 src_sheet = src_other.worksheet("薪資總表")
+print("[薪資總表] 台北範本 E1/F1/E3/F3：", src_sheet.get("E1:F3", value_render_option="FORMULA"))
+added = {}
 for region in ("台北", "台中", "新竹", "桃園"):
-    try:
-        oid = _find_other_file(ROOT[region], "202611-1", region)
-    except Exception as e:
-        print(f"[薪資總表] {region} 202611-1 其他承攬找不到：{e}")
-        continue
-    ss = gc.open_by_key(oid)
-    titles = [w.title for w in ss.worksheets()]
-    if "薪資總表" in titles:
-        print(f"[薪資總表] {region}：已有")
-        continue
-    print(f"[薪資總表] {region}：沒有 → {'從台北複製' if WRITE else '將從台北複製'}")
-    if WRITE:
-        res = src_sheet.copy_to(oid)
-        new = ss.get_worksheet_by_id(res["sheetId"])
-        new.update_title("薪資總表")
-        new.batch_clear([f"H3:{rowcol_to_a1(new.row_count, new.col_count)}"])  # 清掉台北人員個資
-        print(f"    已新增 薪資總表 並清空 H3 以後")
+    missing = []
+    for p in PERIODS:
+        try:
+            oid = files.get((region, p, "其他")) or _find_other_file(ROOT[region], p, region)
+        except Exception:
+            continue
+        files[(region, p, "其他")] = oid
+        ss = gc.open_by_key(oid)
+        if "薪資總表" in [w.title for w in ss.worksheets()]:
+            continue
+        missing.append(p)
+        if WRITE:
+            res = src_sheet.copy_to(oid)
+            new = ss.get_worksheet_by_id(res["sheetId"])
+            new.update_title("薪資總表")
+            new.batch_clear([f"H3:{rowcol_to_a1(new.row_count, new.col_count)}"])  # 清掉台北人員個資
+            added[(region, p)] = True
+    print(f"[薪資總表] {region} 缺少：{'、'.join(missing) or '無'}" + ("（已補上）" if WRITE and missing else ""))
 
 # ── 讀水洗金額（薪資總表）──
 wash = {r: {} for r in ("台北", "台中")}   # wash[region][(name, month, stage)] = amount
@@ -80,12 +83,22 @@ for region in ("台北", "台中"):
         if not oid:
             print(f"[水洗] {region} {p} 其他承攬找不到 → 該階段不填")
             continue
-        try:
-            rows = gc.open_by_key(oid).worksheet("薪資總表").get("A3:F60", value_render_option="UNFORMATTED_VALUE") or []
-        except Exception as e:
-            print(f"[水洗] {region} {p} 薪資總表讀取失敗：{e}")
-            continue
+        ss_o = gc.open_by_key(oid)
         col = 4 if half == "1" else 5
+        try:
+            rows = ss_o.worksheet("薪資總表").get("A3:F60", value_render_option="UNFORMATTED_VALUE") or []
+        except Exception:
+            # 預演時尚未補上：依薪資總表同樣規則計算（水洗薪資單 AD1 ＝ 本期 才取第285列）
+            sh = ss_o.worksheet("水洗薪資表")
+            ad1 = str((ss_o.worksheet("水洗薪資單").get("AD1") or [[""]])[0][0]).strip()
+            r1 = (sh.get("J1:Z1") or [[]])[0]
+            r285 = (sh.get("J285:Z285", value_render_option="UNFORMATTED_VALUE") or [[]])[0] + [""] * 20
+            rows = []
+            for i, n in enumerate(r1):
+                if str(n).strip():
+                    v = r285[i] if ad1 == p else 0
+                    rows.append(["水洗", n, "", "", v if half == "1" else "", v if half == "2" else ""])
+            print(f"    （{region} {p} 尚無薪資總表，依規則估算：AD1={ad1}）")
         for r in rows:
             r = list(r) + [""] * 6
             if str(r[0]).strip() != "水洗" or not str(r[1]).strip() or str(r[1]).strip() == "0":
@@ -123,9 +136,10 @@ tp = jgc.open_by_key(REPORT["台北"])
 qb = tp.worksheet("期別").get("A2:B13") or []
 for i, r in enumerate(qb[:11], 1):
     r = list(r) + ["", ""]
-    p = f"2026{i:02d}-2"
-    fid = files[("台北", p, "清潔")]
-    ok = "一致" if str(r[1]).strip() == (fid or "") else f"不一致（期別表={str(r[1])[:15]}…，程式找到={str(fid)[:15]}…）"
+    p = f"2026{i:02d}-2" if i < 11 else "202611-1"
+    fid = files[("台北", p, "清潔")] or ""
+    got = str(r[1]).strip().rstrip("/")
+    ok = "一致" if got == fid else f"不一致（期別表={got!r}，程式找到 {p}={fid!r}）"
     print(f"[清潔] 台北 {r[0]}：{ok}")
 
 # ── 水洗 ──
