@@ -8,10 +8,10 @@
   3. 承攬費申報檔（地區設定 contract_report_id）：
        期別分頁    第 月份+1 列：A=期別、B=清潔承攬 ID、C=其他承攬 ID
        清潔各月    該月區塊：第1列 ID（引用期別!B）、第2列合計、第6列起每人第一／第二階段
-       水洗各月    同清潔各月版面；以 IMPORTRANGE 公式讀其他承攬「「薪資總表」的副本」（A 欄＝水洗），
-                   副本重產後自動更新（每個新來源檔第一次需在申報檔按「允許存取」）
+       水洗各月    同清潔各月版面；資料取自其他承攬「薪資總表」的副本（A 欄＝水洗）
        新訓退訓實境費用  自年度「專員薪資相關」同名分頁整張覆寫數值
-     清潔各月由 Python 寫入數值。
+     全部由 Python 寫入數值，不使用 IMPORTRANGE（不需要「允許存取」）；
+     每次執行都會從原表重產副本，原表修正後重跑 ⑥ 即可更新。
 清潔各月／水洗各月每月區塊寬度沿用申報檔原本版面（台北 4 欄、台中 3 欄），
 讓「清潔」分頁原本的 VLOOKUP 不用改。
 """
@@ -171,41 +171,6 @@ def write_month_block(ws, month: int, width: int, id_formula: str, labels: List[
     ws.batch_update(data, value_input_option="USER_ENTERED")
 
 
-def wash_formulas(month: int, width: int, period_row: int) -> dict:
-    """水洗各月某月區塊的公式：第1列 ID、第2列合計、第6列 FILTER（A＝水洗、姓名非空）。"""
-    c0 = (month - 1) * width + 1
-    a1 = f"{col_letter(c0)}$1"
-    src = "「薪資總表」的副本"
-
-    def imp(rng):
-        return f'IMPORTRANGE({a1},"{src}!{rng}")'
-
-    return {
-        "id": f"='{PERIOD_SHEET}'!C{period_row}",
-        # 不包 IFERROR：未授權時要顯示 #REF! 才能按「允許存取」；只把 FILTER 找不到（#N/A）轉空白
-        "totals": f"={imp('E2:F2')}",
-        "people": (f'=IFNA(FILTER({{{imp("B3:B80")},{imp("E3:F80")}}},'
-                   f'{imp("A3:A80")}="水洗",{imp("B3:B80")}<>"",{imp("B3:B80")}<>0),"")'),
-    }
-
-
-def write_wash_formula_block(ws, month: int, width: int, labels: List[str], label_a2: str = "薪資表"):
-    c0 = (month - 1) * width + 1
-    c_last = c0 + width - 1
-    _ensure_cols(ws, c_last)
-    first, last = col_letter(c0), col_letter(c_last)
-    f = wash_formulas(month, width, month + 1)
-    ws.batch_clear([f"{first}2:{last}{ws.row_count}"])
-    data = [
-        {"range": f"{first}1:{col_letter(c0 + 2)}1", "values": [[f["id"]] + labels]},
-        {"range": f"{col_letter(c0 + 1)}2", "values": [[f["totals"]]]},
-        {"range": f"{first}{PERSON_START_ROW}", "values": [[f["people"]]]},
-    ]
-    if month == 1 and label_a2:
-        data.append({"range": "A2", "values": [[label_a2]]})
-    ws.batch_update(data, value_input_option="USER_ENTERED")
-
-
 def same_values(a: list, b: list) -> bool:
     """兩張表的值是否相同（忽略尾端空白列／欄）。"""
     def norm(rows):
@@ -287,10 +252,12 @@ def run_contract_report_all(
     # 水洗各月
     if other_vals is not None:
         ws_w = _sheet(report, WASH_MONTHLY, rows=1000, cols=12 * width)
+        w_tot = (list(other_vals[1]) + [""] * 6)[4:6] if len(other_vals) > 1 else ["", ""]
+        w_people = wash_person_rows(other_vals, width)
         cur_w = (ws_w.get(f"{col_letter(c0 + 1)}1:{col_letter(c0 + 2)}1") or [["", ""]])[0] + ["", ""]
-        write_wash_formula_block(ws_w, month, width, month_labels(period, tuple(cur_w[:2])))
-        log(f"  水洗各月：{month}月 已寫入 IMPORTRANGE 公式（副本 {len(wash_person_rows(other_vals, width))} 人；"
-            "新來源檔第一次請在申報檔按「允許存取」）")
+        write_month_block(ws_w, month, width, f"='{PERIOD_SHEET}'!C{month + 1}",
+                          month_labels(period, tuple(cur_w[:2])), [_num(t) for t in w_tot], w_people, "薪資表")
+        log(f"  水洗各月：{month}月 {len(w_people)} 人")
 
     # 新訓退訓實境費用
     salary_id = str(cfg.get("salary_id", "") or "").strip()

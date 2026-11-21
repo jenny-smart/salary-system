@@ -55,23 +55,6 @@ def test_trim_rows_drops_trailing_blank_and_checkbox_rows():
     assert cr.trim_rows(rows) == [["姓名", "金額", "FALSE"], ["王", 800, "TRUE"]]
 
 
-def test_wash_formulas_point_to_copy_and_period_column():
-    f = cr.wash_formulas(2, 4, 3)
-    assert f["id"] == "='期別'!C3"
-    assert 'IMPORTRANGE(E$1,"「薪資總表」的副本!E2:F2")' in f["totals"]
-    assert '="水洗"' in f["people"] and "B3:B80" in f["people"] and "E3:F80" in f["people"]
-    assert "IFERROR" not in f["totals"] + f["people"]  # 保留 #REF! 讓使用者按允許存取
-    assert f["people"].startswith("=IFNA(FILTER(")
-
-
-def test_write_wash_formula_block_layout():
-    ws = mock.MagicMock(row_count=50, col_count=26)
-    cr.write_wash_formula_block(ws, 1, 3, ["202601-1", "202601-2"])
-    ws.batch_clear.assert_called_once_with(["A2:C50"])
-    ranges = [d["range"] for d in ws.batch_update.call_args[0][0]]
-    assert ranges == ["A1:C1", "B2", "A6", "A2"]
-
-
 def test_same_values_ignores_trailing_blanks():
     assert cr.same_values([["a", 1, ""], ["", ""]], [["a", "1"]])
     assert not cr.same_values([["a", 1]], [["a", 2]])
