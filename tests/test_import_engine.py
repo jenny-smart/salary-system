@@ -383,3 +383,63 @@ class FilterNoMatchTest(unittest.TestCase):
             with self.assertRaises(TimeoutError):
                 self.cp2._wait_and_convert(ws, "A2", [], timeout=30)
         ws.batch_clear.assert_not_called()
+
+
+class InternTemplateTest(unittest.TestCase):
+    """前置作業：薪資表 L 欄實習時數範本。"""
+
+    def setUp(self):
+        self.cp1, patcher = _isolated_import("modules.cleaning_process_1")
+        self.addCleanup(patcher.stop)
+
+    def _ws(self, cells):
+        ws = mock.MagicMock()
+        ws.acell.side_effect = lambda label, **k: mock.MagicMock(value=cells.get(label, ""))
+        return ws
+
+    def _written(self, ws):
+        if not ws.batch_update.called:
+            return {}
+        return {d["range"]: d["values"][0][0] for d in ws.batch_update.call_args[0][0]}
+
+    def test_upgrades_old_template(self):
+        ws = self._ws({
+            "L1996": "=SUM(L2003:L2012)-L2015", "L2004": "=0", "L2005": "=0",
+            "L2006": "=IFERROR(SUM(FILTER(L$2:L$1995,1)),0)",
+            "L2008": "=IFERROR(SUM(FILTER(L$2:L$1995,2)),0)\n",
+        })
+        log = []
+        self.cp1._ensure_intern_template(ws, log)
+        w = self._written(ws)
+        self.assertEqual(w["L2004"], self.cp1.INTERN_WEEKDAY_FORMULA)
+        self.assertEqual(w["L2005"], self.cp1.INTERN_WEEKEND_FORMULA)
+        self.assertEqual(w["L1996"], "=SUM(L2003:L2012)-L2004-L2005-L2015")
+        self.assertTrue(w["L2006"].endswith(",0)-L2004"))
+        self.assertTrue(w["L2008"].endswith(",0)-L2005"))
+        self.assertIn("已更新", log[-1])
+
+    def test_already_new_writes_nothing(self):
+        ws = self._ws({
+            "L1996": "=SUM(L2003:L2012)-L2004-L2005-L2015",
+            "L2004": self.cp1.INTERN_WEEKDAY_FORMULA, "L2005": self.cp1.INTERN_WEEKEND_FORMULA,
+            "L2006": "=SUM(X)-L2004", "L2008": "=SUM(Y)-L2005",
+        })
+        self.cp1._ensure_intern_template(ws, [])
+        ws.batch_update.assert_not_called()
+
+    def test_manual_minus_2003_is_replaced(self):
+        self.assertEqual(self.cp1._with_suffix("=SUM(X)-L2003", "-L2004"), "=SUM(X)-L2004")
+        self.assertEqual(self.cp1._with_suffix("=SUM(X) - L2003 ", "-L2004"), "=SUM(X)-L2004")
+
+    def test_unexpected_content_is_left_alone(self):
+        ws = self._ws({
+            "L1996": "=自訂", "L2004": "=99", "L2005": "=0",
+            "L2006": "=SUM(X)", "L2008": "=SUM(Y)",
+        })
+        log = []
+        self.cp1._ensure_intern_template(ws, log)
+        w = self._written(ws)
+        self.assertNotIn("L2004", w)
+        self.assertNotIn("L1996", w)
+        self.assertIn("L2005", w)
+        self.assertTrue(any("人工確認" in line for line in log))

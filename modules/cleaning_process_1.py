@@ -470,6 +470,8 @@ def _prep_step1_salary_rows(
         return f"L{row}:{last_letter}{row}"
 
     # 薪資表同樣以 L 欄公式為範本複製到其餘人員欄（固定值不複製）。
+    # 複製前先確認 L 欄是新版實習時數範本，實習時數自動從平日／週末扣除。
+    _ensure_intern_template(ws_salary, log)
     _copy_formula_cells(ws_salary, _last_name_col(ws_salary), log)
 
     if is_first_half:
@@ -522,6 +524,89 @@ def _prep_step1_salary_rows(
                 _project_range(target_row), values, value_input_option="RAW"
             )
         _log(log, "    下半月：專案薪資表 L2046→L2045、L2040→L2041 貼值完成")
+
+
+# ── 實習時數範本（L 欄）──────────────────────────────────────
+# 實習場另以 04新人實習 每小時 200 給付，訂單時數不可再算一次：
+#   L2004 時數平日實習場 = 04新人實習 該專員「週一～五、非大掃除期間」實習時數
+#   L2005 時數六日實習場 = 同上「週六、日、非大掃除期間」
+#   L2006 平日時數 −L2004、L2008 週末時數 −L2005（取代手動在 2006 加 −2003）
+#   L1996 檢查 = SUM(2003:2012) −2004 −2005 −2015：實習時數全部分配到平日／六日才會是 0
+#   （大掃除期間的實習不會分配 → 1996 不為 0，停下來人工處理）
+_INTERN_SRC = "'04新人實習'!"
+
+
+def _intern_hours_formula(weekday_test: str) -> str:
+    c, e, k = (f"{_INTERN_SRC}${col}$2:${col}$500" for col in ("C", "E", "K"))
+    return (
+        f"=SUMPRODUCT(({c}=L$1)*IFERROR((WEEKDAY({e},2){weekday_test})*"
+        f"(({e}<$B$2006)+({e}>$B$2008))*{k},0))"
+    )
+
+
+INTERN_WEEKDAY_FORMULA = _intern_hours_formula("<=5")
+INTERN_WEEKEND_FORMULA = _intern_hours_formula(">5")
+CHECK_1996_OLD = "=SUM(L2003:L2012)-L2015"
+CHECK_1996_NEW = "=SUM(L2003:L2012)-L2004-L2005-L2015"
+
+
+def _norm_formula(f) -> str:
+    return re.sub(r"\s+", "", str(f or "")).upper()
+
+
+def _with_suffix(formula: str, suffix: str) -> str:
+    """平日／週末時數公式結尾補上扣除項（已有就不重複）；原本手動的 −L2003 一併換掉。"""
+    f = str(formula or "").rstrip()
+    norm = _norm_formula(f)
+    if norm.endswith(_norm_formula(suffix)):
+        return f
+    if norm.endswith("-L2003"):
+        f = re.sub(r"-\s*L2003\s*$", "", f).rstrip()
+    return f + suffix
+
+
+def _ensure_intern_template(ws_salary: gspread.Worksheet, log: List[str]) -> None:
+    """
+    前置作業複製公式前，確認薪資表 L 欄是新版實習時數範本（每期、每區自動套用）。
+    只在儲存格是舊版或已是新版時才寫入；遇到其他自訂內容就不動並提醒，避免蓋掉手動設定。
+    """
+    cells = {r: ws_salary.acell(f"L{r}", value_render_option="FORMULA").value
+             for r in (1996, 2004, 2005, 2006, 2008)}
+    updates, skipped = {}, []
+
+    for row, formula in ((2004, INTERN_WEEKDAY_FORMULA), (2005, INTERN_WEEKEND_FORMULA)):
+        current = _norm_formula(cells[row])
+        if current == _norm_formula(formula):
+            continue
+        if current in ("", "=0", "0"):
+            updates[row] = formula
+        else:
+            skipped.append(f"L{row}")
+
+    current_1996 = _norm_formula(cells[1996])
+    if current_1996 == _norm_formula(CHECK_1996_OLD):
+        updates[1996] = CHECK_1996_NEW
+    elif current_1996 != _norm_formula(CHECK_1996_NEW):
+        skipped.append("L1996")
+
+    for row, suffix in ((2006, "-L2004"), (2008, "-L2005")):
+        if not str(cells[row] or "").lstrip().startswith("="):
+            skipped.append(f"L{row}")
+            continue
+        new = _with_suffix(cells[row], suffix)
+        if new != cells[row]:
+            updates[row] = new
+
+    if skipped:
+        _log(log, f"    ⚠️ 實習時數範本：{', '.join(skipped)} 內容非預期，未自動更新，請人工確認")
+    if updates:
+        ws_salary.batch_update(
+            [{"range": f"L{r}", "values": [[f]]} for r, f in sorted(updates.items())],
+            value_input_option="USER_ENTERED",
+        )
+        _log(log, f"    實習時數範本已更新：{', '.join(f'L{r}' for r in sorted(updates))}")
+    else:
+        _log(log, "    實習時數範本已是最新")
 
 
 def _copy_formula_cells(
