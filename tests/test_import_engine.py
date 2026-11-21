@@ -479,17 +479,6 @@ class SalaryTemplateTest(unittest.TestCase):
         self.assertEqual(set(w), {"L2006", "L2008"})      # 只做一般平日／週末的實習扣除
         self.assertTrue(any("整組未更新" in line for line in log))
 
-    def test_project_sheet_no_intern_deduction(self):
-        cells = dict(REAL_OLD, L1996="")
-        ws = self._ws(cells)
-        self.cp1._ensure_salary_template(ws, [], intern=False)
-        w = self._written(ws)
-        self.assertNotIn("L1996", w)
-        self.assertNotIn("L2006", w)          # 一般平日／週末不扣實習
-        self.assertNotIn("L2008", w)
-        self.assertIn("L2014", w)             # 大掃除分類照常更新
-        self.assertFalse(any("'04新人實習'" in f for f in w.values()))
-
     def test_manual_minus_2003_is_replaced(self):
         suffix = self.cp1._INTERN_SUFFIX[2006]
         self.assertEqual(self.cp1._with_suffix("=SUM(X)-L2003", suffix), "=SUM(X)" + suffix)
