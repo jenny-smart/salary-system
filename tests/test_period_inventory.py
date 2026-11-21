@@ -54,7 +54,7 @@ def test_load_log_rows_reads_period_year_and_current_year():
 
 
 def test_punch_sheet_marks_done_including_gas_runs():
-    fmap = {"🧹 清潔承攬": ["① 前置作業", "② 00調薪", "⑮ 產生PDF"],
+    fmap = {"🧹 清潔承攬": ["① 前置作業", "② 00調薪", "⑪ 產生PDF"],
             "📦 其他承攬": ["① 執行前置作業"]}
     rows = [_row("2026-11-01 09:00:00", "🧹 清潔承攬", "② 00調薪", "台北", "202610-2", "失敗", msg="x")]
     punches = {"台北": {"前置作業": "2026/11/01 08:00:00", "00調薪": "2026/11/01 10:00:00",
@@ -64,7 +64,7 @@ def test_punch_sheet_marks_done_including_gas_runs():
     assert status[("台北", "🧹 清潔承攬", "① 前置作業")].message == "打卡：前置作業"
     assert status[("台北", "🧹 清潔承攬", "② 00調薪")].state == inv.DONE  # 打卡晚於失敗
     assert status[("台北", "📦 其他承攬", "① 執行前置作業")].state == inv.DONE
-    assert status[("台北", "🧹 清潔承攬", "⑮ 產生PDF")].state == inv.NONE  # 沒有打卡的功能不採計
+    assert status[("台北", "🧹 清潔承攬", "⑪ 產生PDF")].state == inv.NONE  # 沒有打卡的功能不採計
     assert status[("台中", "🧹 清潔承攬", "② 00調薪")].state == inv.DONE
 
 
@@ -96,13 +96,13 @@ def test_renumbered_function_still_matches_old_log_name():
 
 
 def test_send_functions_use_mail_sheet_progress_and_update_status_is_excluded():
-    fmap = {"📨 承攬作業": ["① 承攬費通知信", "② 寄出承攬費通知信", "③ 更新寄信狀態", "⑥ 寄出工具包押金通知信"]}
+    fmap = {"📨 承攬作業": ["① 承攬費通知信前置作業", "② 寄出承攬費通知信", "③ 寄出工具包押金通知信", "④ 更新寄信狀態"]}
     rows = [_row("2026-11-01 10:00:00", "📨 承攬作業", "② 寄出承攬費通知信", "台中", "202610-2")]  # 有紀錄但沒寄完
     progress = {"台北": {"fee": (47, 47), "deposit": (1, 2)},
                 "台中": {"fee": (45, 47), "deposit": None},
                 "高雄": {"fee": None, "deposit": None}}
     status = inv.build_inventory(rows, "202610-2", ["台北", "台中", "高雄", "新北"], fmap, None, progress)
-    fee, dep = ("📨 承攬作業", "② 寄出承攬費通知信"), ("📨 承攬作業", "⑥ 寄出工具包押金通知信")
+    fee, dep = ("📨 承攬作業", "② 寄出承攬費通知信"), ("📨 承攬作業", "③ 寄出工具包押金通知信")
     assert status[("台北", *fee)].state == inv.DONE and status[("台北", *fee)].message == "已寄 47/47"
     assert status[("台北", *dep)].state == inv.NONE and status[("台北", *dep)].message == "已寄 1/2"
     assert status[("台中", *fee)].state == inv.NONE and status[("台中", *fee)].message == "已寄 45/47"
@@ -110,7 +110,7 @@ def test_send_functions_use_mail_sheet_progress_and_update_status_is_excluded():
     assert "尚未建立" in status[("高雄", *fee)].message
     assert status[("高雄", *dep)].state == inv.NONE  # ① 還沒跑，無從判斷押金
     assert status[("新北", *fee)].message == "讀不到 mail 試算表"
-    assert ("台北", "📨 承攬作業", "③ 更新寄信狀態") not in status
+    assert ("台北", "📨 承攬作業", "④ 更新寄信狀態") not in status
 
 
 def test_queue_marks_confirmed_send_items_only():
@@ -119,3 +119,11 @@ def test_queue_marks_confirmed_send_items_only():
     queue = inv.build_queue(picked, ["台北"], fmap, period="202610-2", confirmed=True)
     assert [q.get("confirmed") for q in queue] == [None, True]
     assert all("confirmed" not in q for q in inv.build_queue(picked, ["台北"], fmap, period="202610-2"))
+
+
+def test_contract_ops_aliases_for_merged_and_moved_functions():
+    fmap = {"📨 承攬作業": ["⑤ 元大承攬費及工具包押金", "⑥ 清潔承攬／其他承攬費申報"]}
+    punches = {"台北": {"元大承攬費": "2026/11/01 10:00:00", "承攬費申報": "2026/11/02 10:00:00"}}
+    status = inv.build_inventory([], "202610-2", ["台北"], fmap, punches)
+    assert status[("台北", "📨 承攬作業", "⑤ 元大承攬費及工具包押金")].state == inv.DONE
+    assert status[("台北", "📨 承攬作業", "⑥ 清潔承攬／其他承攬費申報")].state == inv.DONE

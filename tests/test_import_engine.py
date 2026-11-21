@@ -190,7 +190,9 @@ def _isolated_import(name):
     auth = types.ModuleType("modules.auth")
     auth.get_gspread_client = lambda: None
     auth.open_spreadsheet = lambda *_: None
+    auth.__getattr__ = lambda attr: (lambda *a, **k: None)   # 其他 auth 函式一律給空殼
     master = types.ModuleType("modules.master_sheet")
+    master.__getattr__ = lambda attr: (lambda *a, **k: None)
     master.record_execution = lambda *a, **k: None
     master.get_recorded_value = lambda *a, **k: None
     project = types.ModuleType("modules.project_salary")
@@ -707,3 +709,26 @@ class SalaryModuleSelectTest(unittest.TestCase):
         src = inspect.getsource(self.cp2._run_salary_module)
         self.assertIn("_engine.run_import(", src)
         self.assertIn("task_key", src)
+
+
+class FirstHalfOrderClearTest(unittest.TestCase):
+    """上半月沒有新訂單時也要清掉前期訂單（避免殘留被當成本期）。"""
+
+    def setUp(self):
+        self.oc, patcher = _isolated_import("modules.other_contract_process")
+        self.addCleanup(patcher.stop)
+
+    def test_first_half_zero_orders_clears(self):
+        ss = mock.MagicMock()
+        with mock.patch.object(self.oc, "_clear_order_from") as clear:
+            n = self.oc._process_order_data(ss, self.oc.SERVICE_CONFIG["水洗"], True, "水洗", "台北",
+                                            "202607-1", [].append, expected_count=0)
+        self.assertEqual(n, 0)
+        self.assertEqual(clear.call_args[0][1], 2)
+
+    def test_second_half_zero_orders_keeps(self):
+        ss = mock.MagicMock()
+        with mock.patch.object(self.oc, "_clear_order_from") as clear:
+            self.oc._process_order_data(ss, self.oc.SERVICE_CONFIG["水洗"], False, "水洗", "台北",
+                                        "202607-2", [].append, expected_count=0)
+        clear.assert_not_called()

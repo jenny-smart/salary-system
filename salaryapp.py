@@ -577,12 +577,10 @@ FUNCTION_MAP = {
         "⑧ 06季獎金",
         "⑨ 結算作業",
         "⑩ 一鍵執行",
-        "⑪ 新人實境實習期別",
-        "⑫ 場次時數",
-        "⑬ 承攬費申報",
+        "⑪ 產生PDF",
+        "⑫ 產生專案PDF",
+        "⑬ 場次時數",
         "⑭ 工具包押金",
-        "⑮ 產生PDF",
-        "⑯ 產生專案PDF",
     ],
     "📦 其他承攬": [
         "① 執行前置作業",
@@ -590,12 +588,12 @@ FUNCTION_MAP = {
         "③ 產出全部PDF",
     ],
     "📨 承攬作業": [
-        "① 承攬費通知信",
+        "① 承攬費通知信前置作業",
         "② 寄出承攬費通知信",
-        "③ 更新寄信狀態",
-        "④ 元大承攬費",
-        "⑤ 元大工具包押金",
-        "⑥ 寄出工具包押金通知信",
+        "③ 寄出工具包押金通知信",
+        "④ 更新寄信狀態",
+        "⑤ 元大承攬費及工具包押金",
+        "⑥ 清潔承攬／其他承攬費申報",
     ],
 }
 
@@ -647,7 +645,7 @@ _deadline_shown = False
 for function_name in FUNCTION_MAP[system]:
     if st.checkbox(function_name, key=f"func_{system}_{function_name}"):
         selected_functions.append(function_name)
-        if system == "📨 承攬作業" and function_name in ("① 承攬費通知信", "② 寄出承攬費通知信") \
+        if system == "📨 承攬作業" and function_name in ("① 承攬費通知信前置作業", "② 寄出承攬費通知信") \
                 and not _deadline_shown:
             _deadline_shown = True
             _tomorrow = (datetime.now(ZoneInfo("Asia/Taipei")) + timedelta(days=1)).date()
@@ -656,15 +654,15 @@ for function_name in FUNCTION_MAP[system]:
                 st.date_input("回覆期限日期", value=_tomorrow, key="fee_reply_date")
             with _dc2:
                 st.time_input("回覆期限時間", value=dt_time(14, 0), key="fee_reply_time", step=1800)
-        if system == "📨 承攬作業" and function_name == "① 承攬費通知信":
+        if system == "📨 承攬作業" and function_name == "① 承攬費通知信前置作業":
             st.caption("執行後會產生本期範本草稿內文與群組公告文字，供複製貼上。")
         if system == "📨 承攬作業" and function_name == "② 寄出承攬費通知信":
             st.caption("用各區寄件 Gmail 寄出本期工作表中 F 欄（發送時間）空白的列；已寄過的不會重寄。"
                        "信件內文同「① 範本草稿內文」，回覆期限取上方設定。")
-        if system == "📨 承攬作業" and function_name == "⑥ 寄出工具包押金通知信":
+        if system == "📨 承攬作業" and function_name == "③ 寄出工具包押金通知信":
             st.caption("寄出「期別工具包押金」工作表中 G 欄（發送時間）空白的列，內容同「<<MEMO>>」押金草稿。")
 if system == "📨 承攬作業" and any(f in selected_functions
-                                   for f in ("② 寄出承攬費通知信", "⑥ 寄出工具包押金通知信")):
+                                   for f in ("② 寄出承攬費通知信", "③ 寄出工具包押金通知信")):
     st.caption("寄出前會逐列核對：主旨、D 欄檔名、連結的實際檔名都要是 B 欄同一人，有任何一列不符就整批不寄。")
     st.text_input("測試收件信箱（填了只寄第一封測試信到這裡，不寄給專員）", key="fee_send_test_to")
     st.text_input("承攬費信件主旨註記（選填，加在主旨最前面，例如：【重寄】）", key="fee_subject_prefix")
@@ -716,7 +714,8 @@ else:
 selected_name = selected_names[0] if len(selected_names) == 1 else None
 selected_region = next((r for r in regions if r["name"] == selected_name), {}) if selected_name else {}
 
-requires_python = len(selected_functions) > 1 or len(selected_names) > 1
+requires_python = (len(selected_functions) > 1 or len(selected_names) > 1
+                   or "⑩ 一鍵執行" in selected_functions)
 engine_options = ["PYTHON"] if requires_python else ["PYTHON", "GAS"]
 # 網頁上按下的按鈕都記一筆到主控表「salary-system執行Log-年度」；各功能執行結果另記
 from modules import unified_log as _unified_log
@@ -766,11 +765,37 @@ start_clicked = st.button(
 )
 
 if start_clicked:
-    from modules.period_inventory import build_queue
-    active_queue = build_queue(
-        [(a, system, f) for a in selected_names for f in selected_functions],
-        region_names, {system: FUNCTION_MAP[system]}, engine=execution_engine, period=period,
+    from modules import period_inventory as _pinv
+    _selected = [(a, system, f) for a in selected_names for f in selected_functions]
+    _one_click_areas = {a for a, sy, f in _selected if sy == _pinv.CLEANING and f == _pinv.ONE_CLICK}
+    if _one_click_areas:
+        try:
+            _oc_rows = _pinv.load_log_rows(period, datetime.now(ZoneInfo("Asia/Taipei")).year)
+            _oc_punches = _pinv.load_punch_times(period, sorted(_one_click_areas))
+            _oc_status = _pinv.build_inventory(
+                _oc_rows, period, sorted(_one_click_areas), FUNCTION_MAP, _oc_punches)
+        except Exception as e:
+            _oc_status = None
+            add_log(f"一鍵執行：讀取本期完成狀態失敗，為避免重複匯入已取消：{e}", "error")
+        if _oc_status is None:
+            _selected = [x for x in _selected if x[0] not in _one_click_areas or x[2] != _pinv.ONE_CLICK]
+        else:
+            _selected, _oc_skipped = _pinv.expand_one_click(_selected, _oc_status)
+            for _a in sorted(_one_click_areas):
+                _todo = [f for a, sy, f in _selected if a == _a and f in _pinv.ONE_CLICK_STEPS]
+                _skip = _oc_skipped.get(_a, [])
+                if _skip:
+                    add_log(f"【{_a}】一鍵執行：本期已完成，略過 {'、'.join(_skip)}")
+                if _todo:
+                    add_log(f"【{_a}】一鍵執行：依序執行 {'、'.join(_todo)}")
+                else:
+                    add_log(f"✅【{_a}】一鍵執行：本期步驟都已完成，不需執行", "success")
+    active_queue = _pinv.build_queue(
+        _selected, region_names, {system: FUNCTION_MAP[system]}, engine=execution_engine, period=period,
     )
+    for _item in active_queue:
+        if _item["area"] in _one_click_areas and _item["function"] in _pinv.ONE_CLICK_STEPS:
+            _item["one_click"] = True
     st.session_state["execution_queue"] = active_queue
     st.session_state.pop("pdf_result", None)
     st.session_state["import_method_run"] = _import_choice
@@ -921,7 +946,7 @@ elif _inventory:
     for r in (r for r, flag in zip(_inv_rows, _flags) if flag and not r["runnable"]):
         st.caption(f"「{r['system']} {r['func']}」{'已完成' if r['done'] else '不能批次執行'}，不會執行。")
     _picked = [(_a, r["system"], r["func"]) for r in _selected_rows for _a in r["todo"]]
-    if any(r["func"] in ("① 承攬費通知信", "② 寄出承攬費通知信") for r in _selected_rows):
+    if any(r["func"] in ("① 承攬費通知信前置作業", "② 寄出承攬費通知信") for r in _selected_rows):
         st.caption("承攬費通知信的回覆期限沿用上方設定（未設定則為明天 14:00）。")
     _needs_confirm = [r["func"] for r in _selected_rows if r["func"] in _inv.CONFIRM_FUNCS]
     _inv_confirmed = True
@@ -1265,6 +1290,15 @@ if run_clicked and _run_engine == "PYTHON":
                             batch.append({"task_key": task_key, "count": counts.get(label, 0)})
                         record_batch(_name, _period, batch)
 
+                        # 本期沒有任何其他承攬訂單時，也要執行其他承攬前置作業：
+                        # 上半月會清掉前期留下的訂單，避免殘留被當成本期計算
+                        _other_labels = ("水洗", "家電", "收納", "座椅", "地毯")
+                        if sum(int(counts.get(k, 0) or 0) for k in _other_labels) == 0:
+                            add_log("本期沒有其他承攬訂單，自動執行其他承攬前置作業（清除前期殘留）")
+                            from modules.other_contract_process import run_other_preprocess
+                            run_other_preprocess(root_id, _name, _period, _period.endswith("-1"), None,
+                                                 lambda m: add_log(m, "error" if "❌" in m else "info"))
+
                     elif "⑥ 金流對帳轉檔" in _func:
                         from modules.payment_reconciliation import convert_payment_file
                         from modules.auth import open_spreadsheet
@@ -1562,18 +1596,15 @@ if run_clicked and _run_engine == "PYTHON":
                             success = _run(run_settlement)
 
                         elif _func == "⑩ 一鍵執行":
-                            add_log("一鍵執行尚未實作", "warning")
+                            # 按下執行時已展開成各步驟，不會單獨執行到這裡
+                            add_log("一鍵執行需從「▶ 執行」啟動", "warning")
                             success = False
 
-                        elif _func == "⑪ 新人實境實習期別":
-                            from modules.cleaning_process_2 import run_newcomer_label
-                            success = _run(run_newcomer_label)
-
-                        elif _func == "⑫ 場次時數":
+                        elif _func == "⑬ 場次時數":
                             from modules.cleaning_process_4 import run_session_hours
                             success = _run(run_session_hours)
 
-                        elif _func == "⑬ 承攬費申報":
+                        elif _func == "⑮ 清潔承攬費申報":  # 已移到「📨 承攬作業 ⑥」
                             from modules.cleaning_process_4 import run_contract_report
                             success = _run(run_contract_report)
 
@@ -1581,10 +1612,10 @@ if run_clicked and _run_engine == "PYTHON":
                             from modules.cleaning_process_4 import run_tool_deposit
                             success = _run(run_tool_deposit)
 
-                        elif _func in ("⑮ 產生PDF", "⑯ 產生專案PDF"):
+                        elif _func in ("⑪ 產生PDF", "⑫ 產生專案PDF"):
                             from modules.cleaning_pdf import run_pdf
                             root_id  = _region.get("root_folder_id", "")
-                            job_type = "CLEANING" if _func == "⑮ 產生PDF" else "PROJECT"
+                            job_type = "CLEANING" if _func == "⑪ 產生PDF" else "PROJECT"
                             live     = _make_live_log()
                             pdf_result = run_pdf(
                                 cleaning_file_id = cleaning_file_id,
@@ -1599,6 +1630,9 @@ if run_clicked and _run_engine == "PYTHON":
                             if isinstance(pdf_result, dict):
                                 _store_pdf_result(pdf_result)
                                 success = int(pdf_result.get("success_count") or len(pdf_result.get("pdfs", {}))) > 0
+                                if job_type == "PROJECT" and pdf_result.get("no_targets"):
+                                    add_log(f"【{_name}】本期無專案人員，略過產生專案PDF", "info")
+                                    success = True
                             else:
                                 # 舊版 run_pdf 回傳 bool，GitHub 尚未更新
                                 success = bool(pdf_result)
@@ -1661,7 +1695,7 @@ if run_clicked and _run_engine == "PYTHON":
 
                 elif _system == "📨 承攬作業":
 
-                    if _plain_func == "承攬費通知信":
+                    if _plain_func == "承攬費通知信前置作業":
                         from modules.service_fee_mail import sync_service_fee_mail
                         
                         def contract_log(message):
@@ -1747,18 +1781,14 @@ if run_clicked and _run_engine == "PYTHON":
                             if _send_result["failed"]:
                                 raise RuntimeError(f"{len(_send_result['failed'])} 封寄送失敗，見工作表 G 欄")
 
-                    elif _plain_func in ("元大承攬費", "元大工具包押金"):
+                    elif _plain_func == "元大承攬費及工具包押金":
                         from modules.cleaning_process_1 import find_cleaning_file
                         from modules.cleaning_process_4 import (
                             run_yuanta_deposit,
                             run_yuanta_fee,
                         )
 
-                        cleaning_file_id = find_cleaning_file(
-                            root_id,
-                            _period,
-                            _name,
-                        )
+                        cleaning_file_id = find_cleaning_file(root_id, _period, _name)
 
                         class LiveLog(list):
                             def append(self, msg):
@@ -1770,23 +1800,29 @@ if run_clicked and _run_engine == "PYTHON":
                                     "info"
                                 )
                                 add_log(msg, level)
-                                
-                        runner = (
-                            run_yuanta_fee
-                            if _plain_func == "元大承攬費"
-                            else run_yuanta_deposit
-                        )
-                        success = runner(
-                            cleaning_file_id=cleaning_file_id,
-                            region=_name,
-                            period=_period,
-                            is_first_half=_is_first_half,
-                            log=LiveLog(),
-                            region_cfg=cfg_for_period(_region, _period),
-                        )
 
-                        if not success:
-                            raise RuntimeError(f"{_plain_func}執行失敗")
+                        _y_kwargs = dict(
+                            cleaning_file_id=cleaning_file_id, region=_name, period=_period,
+                            is_first_half=_is_first_half, region_cfg=cfg_for_period(_region, _period),
+                        )
+                        if not run_yuanta_fee(log=LiveLog(), **_y_kwargs):
+                            raise RuntimeError("元大承攬費執行失敗")
+                        if not _period.endswith("-2"):
+                            add_log("元大工具包押金只做下半月（-2），本期略過", "info")
+                        elif not run_yuanta_deposit(log=LiveLog(), **_y_kwargs):
+                            raise RuntimeError("元大工具包押金執行失敗")
+
+                    elif _plain_func == "清潔承攬／其他承攬費申報":
+                        from modules.contract_report import run_contract_report_all
+
+                        def report_log(message):
+                            add_log(message, "success" if "✅" in message else "error" if "❌" in message
+                                    else "warning" if "⚠️" in message else "info")
+
+                        if not run_contract_report_all(
+                            _name, _period, root_id, cfg_for_period(_region, _period), report_log,
+                        ):
+                            raise RuntimeError("清潔承攬／其他承攬費申報執行失敗")
 
             except Exception as e:
                 import traceback
@@ -1810,6 +1846,21 @@ if run_clicked and _run_engine == "PYTHON":
         queue, dropped = drop_area(queue, _name)
         if dropped:
             add_log(f"【{_name}】已停止後續 {dropped} 項功能", "warning")
+        if current_item.get("one_click"):
+            # 失敗原因取該步驟自己記的 ❌ 訊息（例如「❌ 01專員請款 失敗：…」），比外層的「執行失敗」清楚
+            _reason = next(
+                (_re.sub(r"^\[[\d:]+\]\s*(❌\s*)+", "", str(e)) for e in reversed(list(st.session_state.logs))
+                 if "❌" in str(e) and not any(k in str(e) for k in ("執行失敗", "一鍵執行", "Traceback"))),
+                _step_error or "請看上方錯誤訊息",
+            )
+            add_log(
+                f"❌【{_name}】一鍵執行停在 {_func}：{_reason}。"
+                "修正後再按一次「⑩ 一鍵執行」，會從這一步接續（已完成的步驟自動略過）",
+                "error",
+            )
+    elif current_item.get("one_click") and not any(
+            item.get("one_click") and item.get("area") == _name for item in queue):
+        add_log(f"✅【{_name}】一鍵執行全部完成", "success")
     if queue:
         st.session_state["execution_queue"] = queue
         _next = queue[0]
