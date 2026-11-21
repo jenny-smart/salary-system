@@ -4,7 +4,8 @@
         台北 期別 B 欄為 importrange 自動帶入，只核對不寫。
 - 水洗：其他承攬「薪資總表」B=姓名、E=-1 金額、F=-2 金額；
         第一階段＝當月 -1 檔 E，第二階段＝當月 -2 檔 F；申報檔沒有的姓名新增在最後一列（只填姓名）。
-- 其他承攬 202611-1：台北／台中／新竹／桃園 沒有「薪資總表」時，從台北複製並清空 H 欄以後的個資。
+- 其他承攬（台北／台中 2026 各期）沒有「薪資總表」時，從台北 202611-1 複製並清空 H 欄以後的個資。
+- 申報檔只填空白格；已有數字且不同者不覆蓋，該人該月整組列為待確認。
 不印身分證、地址、帳號。
 """
 import os
@@ -54,7 +55,7 @@ src_other = gc.open_by_key(_find_other_file(ROOT["台北"], "202611-1", "台北"
 src_sheet = src_other.worksheet("薪資總表")
 print("[薪資總表] 台北範本 E1/F1/E3/F3：", src_sheet.get("E1:F3", value_render_option="FORMULA"))
 added = {}
-for region in ("台北", "台中", "新竹", "桃園"):
+for region in ("台北", "台中"):
     missing = []
     for p in PERIODS:
         try:
@@ -143,6 +144,7 @@ for i, r in enumerate(qb[:11], 1):
     print(f"[清潔] 台北 {r[0]}：{ok}")
 
 # ── 水洗 ──
+pending = []
 for region in ("台北", "台中"):
     first, width, start = WASH_LAYOUT[region]
     ss = tp if region == "台北" else tc
@@ -150,8 +152,9 @@ for region in ("台北", "台中"):
     names = [str(x[0]).strip() if x else "" for x in (w.get(f"A{start}:A400") or [])]
     row_of = {n: start + i for i, n in enumerate(names) if n}
     last = start + max([i for i, n in enumerate(names) if n], default=-1)
-    people = sorted({k[0] for k in wash[region]})
-    data, new_rows = [], []
+    nonzero = {k[0] for k, v in wash[region].items() if v}
+    people = sorted(nonzero | (set(row_of) & {k[0] for k in wash[region]}))
+    new_rows = []
     for n in people:
         if n not in row_of:
             last += 1
@@ -163,21 +166,55 @@ for region in ("台北", "台中"):
         top, bot = min(row_of.values()), max(row_of.values())
         grid = w.get(f"A{top}:{rowcol_to_a1(bot, first + width * 11)}", value_render_option="UNFORMATTED_VALUE") or []
         for r_i, row in enumerate(grid):
-            cur[top + r_i] = list(row)
-    for (n, m, half), amt in sorted(wash[region].items(), key=lambda k: (k[0][0], k[0][1], k[0][2])):
-        c = first + width * (m - 1) + (0 if half == "1" else 1)
+            cur[top + r_i] = list(row) + [""] * 200
+    data = []
+    for n in people:
         r = row_of[n]
-        old = (cur.get(r, []) + [""] * 200)[c]
-        new = int(amt) if float(amt).is_integer() else amt
-        if num(old) != num(new) or (old == "" and new != 0):
-            if old == "" and new == 0:
+        for m in range(1, 12):
+            cells, conflict = [], False
+            for half in ("1", "2"):
+                if (n, m, half) not in wash[region]:
+                    continue
+                c = first + width * (m - 1) + (0 if half == "1" else 1)
+                old = cur.get(r, [""] * 200)[c]
+                new = wash[region][(n, m, half)]
+                new = int(new) if float(new).is_integer() else new
+                if num(old) == num(new):
+                    continue
+                if num(old) != 0:
+                    conflict = True
+                elif new != 0:
+                    cells.append((rowcol_to_a1(r, c + 1), old, new, half))
+            # 同月另一階段已有手填數字、本次又要填另一格 → 也視為待確認（避免重複）
+            for half in ("1", "2"):
+                c = first + width * (m - 1) + (0 if half == "1" else 1)
+                old = cur.get(r, [""] * 200)[c]
+                if num(old) and any(h != half for _, _, _, h in cells) and (n, m, half) in wash[region] \
+                        and num(wash[region][(n, m, half)]) != num(old):
+                    conflict = True
+            if conflict:
+                calc = {h: wash[region].get((n, m, h), "") for h in ("1", "2")}
+                have = [cur.get(r, [""] * 200)[first + width * (m - 1) + k] for k in (0, 1)]
+                pending.append(f"{region} {n} {m}月：申報檔 第一={have[0]!r} 第二={have[1]!r}；薪資總表 第一={calc['1']!r} 第二={calc['2']!r}")
                 continue
-            print(f"[水洗] {region} {n} {m}月{'第一' if half == '1' else '第二'}階段 {rowcol_to_a1(r, c + 1)}：{old!r} → {new}")
-            data.append({"range": rowcol_to_a1(r, c + 1), "values": [[new]]})
+            for a1, old, new, half in cells:
+                print(f"[水洗] {region} {n} {m}月{'第一' if half == '1' else '第二'}階段 {a1}：{old!r} → {new}")
+                data.append({"range": a1, "values": [[new]]})
     if WRITE:
         if new_rows:
             w.batch_update(new_rows, value_input_option="RAW")
         if data:
             w.batch_update(data, value_input_option="RAW")
         print(f"    {region} 水洗 已寫入 {len(data)} 格、新增 {len(new_rows)} 人")
+print("\n[待確認：已有手填數字、與薪資總表不同，未覆蓋]")
+for x in pending:
+    print("  " + x)
+
+if WRITE:
+    print("\n[台中 清潔各月 寫入後 importrange 狀態]")
+    tc2 = jgc.open_by_key(REPORT["台中"]).worksheet("清潔各月")
+    vals = (tc2.get("A2:AI2") or [[]])[0] + [""] * 40
+    for m in range(1, 12):
+        c = 3 * (m - 1)
+        print(f"  {m}月 第一/第二：{vals[c + 1]!r} / {vals[c + 2]!r}")
 print("完成")
