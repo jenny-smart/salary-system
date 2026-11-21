@@ -716,7 +716,8 @@ else:
 selected_name = selected_names[0] if len(selected_names) == 1 else None
 selected_region = next((r for r in regions if r["name"] == selected_name), {}) if selected_name else {}
 
-requires_python = len(selected_functions) > 1 or len(selected_names) > 1
+requires_python = (len(selected_functions) > 1 or len(selected_names) > 1
+                   or "⑩ 一鍵執行" in selected_functions)
 engine_options = ["PYTHON"] if requires_python else ["PYTHON", "GAS"]
 # 網頁上按下的按鈕都記一筆到主控表「salary-system執行Log-年度」；各功能執行結果另記
 from modules import unified_log as _unified_log
@@ -766,11 +767,37 @@ start_clicked = st.button(
 )
 
 if start_clicked:
-    from modules.period_inventory import build_queue
-    active_queue = build_queue(
-        [(a, system, f) for a in selected_names for f in selected_functions],
-        region_names, {system: FUNCTION_MAP[system]}, engine=execution_engine, period=period,
+    from modules import period_inventory as _pinv
+    _selected = [(a, system, f) for a in selected_names for f in selected_functions]
+    _one_click_areas = {a for a, sy, f in _selected if sy == _pinv.CLEANING and f == _pinv.ONE_CLICK}
+    if _one_click_areas:
+        try:
+            _oc_rows = _pinv.load_log_rows(period, datetime.now(ZoneInfo("Asia/Taipei")).year)
+            _oc_punches = _pinv.load_punch_times(period, sorted(_one_click_areas))
+            _oc_status = _pinv.build_inventory(
+                _oc_rows, period, sorted(_one_click_areas), FUNCTION_MAP, _oc_punches)
+        except Exception as e:
+            _oc_status = None
+            add_log(f"一鍵執行：讀取本期完成狀態失敗，為避免重複匯入已取消：{e}", "error")
+        if _oc_status is None:
+            _selected = [x for x in _selected if x[0] not in _one_click_areas or x[2] != _pinv.ONE_CLICK]
+        else:
+            _selected, _oc_skipped = _pinv.expand_one_click(_selected, _oc_status)
+            for _a in sorted(_one_click_areas):
+                _todo = [f for a, sy, f in _selected if a == _a and f in _pinv.ONE_CLICK_STEPS]
+                _skip = _oc_skipped.get(_a, [])
+                if _skip:
+                    add_log(f"【{_a}】一鍵執行：本期已完成，略過 {'、'.join(_skip)}")
+                if _todo:
+                    add_log(f"【{_a}】一鍵執行：依序執行 {'、'.join(_todo)}")
+                else:
+                    add_log(f"✅【{_a}】一鍵執行：本期步驟都已完成，不需執行", "success")
+    active_queue = _pinv.build_queue(
+        _selected, region_names, {system: FUNCTION_MAP[system]}, engine=execution_engine, period=period,
     )
+    for _item in active_queue:
+        if _item["area"] in _one_click_areas and _item["function"] in _pinv.ONE_CLICK_STEPS:
+            _item["one_click"] = True
     st.session_state["execution_queue"] = active_queue
     st.session_state.pop("pdf_result", None)
     st.session_state["import_method_run"] = _import_choice
@@ -1562,7 +1589,8 @@ if run_clicked and _run_engine == "PYTHON":
                             success = _run(run_settlement)
 
                         elif _func == "⑩ 一鍵執行":
-                            add_log("一鍵執行尚未實作", "warning")
+                            # 按下執行時已展開成各步驟，不會單獨執行到這裡
+                            add_log("一鍵執行需從「▶ 執行」啟動", "warning")
                             success = False
 
                         elif _func == "⑪ 新人實境實習期別":
@@ -1810,6 +1838,21 @@ if run_clicked and _run_engine == "PYTHON":
         queue, dropped = drop_area(queue, _name)
         if dropped:
             add_log(f"【{_name}】已停止後續 {dropped} 項功能", "warning")
+        if current_item.get("one_click"):
+            # 失敗原因取該步驟自己記的 ❌ 訊息（例如「❌ 01專員請款 失敗：…」），比外層的「執行失敗」清楚
+            _reason = next(
+                (_re.sub(r"^\[[\d:]+\]\s*(❌\s*)+", "", str(e)) for e in reversed(list(st.session_state.logs))
+                 if "❌" in str(e) and not any(k in str(e) for k in ("執行失敗", "一鍵執行", "Traceback"))),
+                _step_error or "請看上方錯誤訊息",
+            )
+            add_log(
+                f"❌【{_name}】一鍵執行停在 {_func}：{_reason}。"
+                "修正後再按一次「⑩ 一鍵執行」，會從這一步接續（已完成的步驟自動略過）",
+                "error",
+            )
+    elif current_item.get("one_click") and not any(
+            item.get("one_click") and item.get("area") == _name for item in queue):
+        add_log(f"✅【{_name}】一鍵執行全部完成", "success")
     if queue:
         st.session_state["execution_queue"] = queue
         _next = queue[0]

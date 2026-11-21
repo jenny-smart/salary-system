@@ -14,8 +14,16 @@ from dataclasses import dataclass
 
 # 不適合批次執行的功能：仍會顯示在盤點表，但不能勾選一併執行
 NOT_BATCHABLE = {
-    "⑩ 一鍵執行": "尚未實作",
+    "⑩ 一鍵執行": "會自動依序執行 ①～⑨",
 }
+
+# 清潔承攬一鍵執行：依序執行下列步驟；本期已完成的步驟自動略過，任一步失敗就停在那一步
+CLEANING = "🧹 清潔承攬"
+ONE_CLICK = "⑩ 一鍵執行"
+ONE_CLICK_STEPS = (
+    "① 前置作業", "② 00調薪", "③ 01專員請款", "④ 02儲值獎金",
+    "⑤ 03新人實境", "⑥ 04新人實習", "⑦ 05組長津貼", "⑨ 結算作業",
+)  # ⑧ 06季獎金尚未實作，不列入
 
 # 不列入盤點的功能（隨時可按，沒有「完成」的概念）
 INVENTORY_EXCLUDE = {"③ 更新寄信狀態"}
@@ -200,6 +208,33 @@ def build_queue(selected: list[tuple[str, str, str]], areas: list[str],
                         item["confirmed"] = True  # 盤點已勾「確認寄出」
                     queue.append(item)
     return queue
+
+
+def expand_one_click(selected: list[tuple[str, str, str]], status: dict
+                     ) -> tuple[list[tuple[str, str, str]], dict[str, list[str]]]:
+    """
+    把 (地區, 清潔承攬, ⑩ 一鍵執行) 展開成 ONE_CLICK_STEPS；status 為 build_inventory 結果，
+    本期已完成（DONE）的步驟略過，避免下半月重跑造成資料重複。
+    回傳 (展開後的 selected, {地區: 略過的步驟})。其他勾選項目原樣保留。
+    """
+    expanded, skipped = [], {}
+    for area, system, func in selected:
+        if not (system == CLEANING and func == ONE_CLICK):
+            expanded.append((area, system, func))
+            continue
+        for step in ONE_CLICK_STEPS:
+            st = status.get((area, system, step))
+            if st is not None and st.state == DONE:
+                skipped.setdefault(area, []).append(step)
+            else:
+                expanded.append((area, system, step))
+    # 去重、保留順序（同時勾了一鍵與單項時）
+    seen, result = set(), []
+    for item in expanded:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result, skipped
 
 
 def drop_area(queue: list[dict], area: str) -> tuple[list[dict], int]:
