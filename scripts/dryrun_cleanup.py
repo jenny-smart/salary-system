@@ -7,9 +7,8 @@ from modules import auth  # noqa: E402
 
 drive = auth.get_jenny_drive_service()
 res = drive.files().list(
-    q=("(name contains '試跑' or name contains '引擎' or name contains 'dryrun' or name contains 'COMPARE' "
-       "or name contains 'PYTHON') and 'me' in owners and createdTime > '2026-11-19T00:00:00' "
-       "and trashed=false"),
+    q=("mimeType='application/vnd.google-apps.folder' and 'me' in owners "
+       "and createdTime > '2026-11-19T00:00:00' and trashed=false"),
     fields="files(id,name,mimeType,createdTime,parents)", pageSize=200,
 ).execute()
 files = res.get("files", [])
