@@ -26,12 +26,12 @@ ONE_CLICK_STEPS = (
 )  # ⑧ 06季獎金尚未實作，不列入
 
 # 不列入盤點的功能（隨時可按，沒有「完成」的概念）
-INVENTORY_EXCLUDE = {"③ 更新寄信狀態"}
+INVENTORY_EXCLUDE = {"④ 更新寄信狀態"}
 
 # 寄信功能：完成與否看各區 mail 試算表的發送時間（load_send_progress），不看執行紀錄
 SEND_FUNCS = {
     ("📨 承攬作業", "② 寄出承攬費通知信"): "fee",
-    ("📨 承攬作業", "⑥ 寄出工具包押金通知信"): "deposit",
+    ("📨 承攬作業", "③ 寄出工具包押金通知信"): "deposit",
 }
 # 需要確認才寄的功能：盤點勾選後要另外勾「確認寄出」
 CONFIRM_FUNCS = {func for _system, func in SEND_FUNCS}
@@ -47,11 +47,12 @@ ALIASES = {
     ("💰 金流對帳", "⑥ 金流對帳轉檔（zip/csv/xlsx → Google Sheet）"): ("期別發票轉檔", "期別預收轉檔"),
     ("💰 金流對帳", "⑦ 搬運退款＋預收"): ("複製預收", "複製已退款全部加收"),
     ("💰 金流對帳", "⑧ 搬運發票＋藍新"): ("複製發票",),
-    ("🧹 清潔承攬", "⑮ 清潔承攬費申報"): ("承攬費申報",),  # 打卡名稱沿用「承攬費申報」
     ("📦 其他承攬", "① 執行前置作業"): tuple(f"{s}前置" for s in _OTHER_SERVICES),
     ("📦 其他承攬", "② 執行全部結算"): tuple(f"{s}結算" for s in _OTHER_SERVICES),
     ("📦 其他承攬", "③ 產出全部PDF"): tuple(f"{s}薪資單" for s in _OTHER_SERVICES),
-    ("📨 承攬作業", "① 承攬費通知信"): ("承攬費通知信", "清潔承攬mail"),
+    ("📨 承攬作業", "① 承攬費通知信前置作業"): ("承攬費通知信", "清潔承攬mail"),
+    ("📨 承攬作業", "⑤ 元大承攬費及工具包押金"): ("元大承攬費",),
+    ("📨 承攬作業", "⑥ 清潔承攬／其他承攬費申報"): ("承攬費申報",),
 }
 # 沒有打卡、只能看 Python 執行紀錄的功能（避免功能名稱剛好等於別的打卡項目）
 NO_PUNCH = {"⑨ 搬運ATM", "⑩ 金流對帳彙總＋檢核", "⑩ 一鍵執行", "⑪ 產生PDF", "⑫ 產生專案PDF"}
@@ -111,7 +112,7 @@ def apply_send_progress(result: dict, progress: dict, areas: list[str]) -> dict:
                 if key == "deposit" and progress[area].get("fee") is not None:
                     result[(area, system, func)] = Status(DONE, "", "本期沒有押金名單")
                 else:
-                    result[(area, system, func)] = Status(NONE, "", "尚未建立本期名單（先執行 ① 承攬費通知信）")
+                    result[(area, system, func)] = Status(NONE, "", "尚未建立本期名單（先執行 ① 承攬費通知信前置作業）")
                 continue
             sent, total = sheet
             if total and sent == total:

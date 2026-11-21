@@ -909,7 +909,9 @@ def run_yuanta_deposit(
             ) or []
         )
         if not deposit_rows:
-            raise ValueError("沒有工具包押金資料，請先執行「⑭ 工具包押金」")
+            _log(log, "  本期沒有工具包押金，略過元大工具包押金")
+            _log(log, f"✅ 元大工具包押金 下半月 完成（無資料）｜{_now_ts()}")
+            return True
 
         deposit_date = _next_month_tenth(period)
         deposit_export_rows = [
