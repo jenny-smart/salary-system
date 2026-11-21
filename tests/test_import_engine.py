@@ -386,7 +386,7 @@ class FilterNoMatchTest(unittest.TestCase):
 
 
 class InternTemplateTest(unittest.TestCase):
-    """前置作業：薪資表 L 欄實習時數範本。"""
+    """前置作業：薪資表 L 欄時數公式扣除實習時數。"""
 
     def setUp(self):
         self.cp1, patcher = _isolated_import("modules.cleaning_process_1")
@@ -402,61 +402,49 @@ class InternTemplateTest(unittest.TestCase):
             return {}
         return {d["range"]: d["values"][0][0] for d in ws.batch_update.call_args[0][0]}
 
-    def test_upgrades_old_template(self):
-        ws = self._ws({
-            "L1996": "=SUM(L2003:L2012)-L2015", "L2004": "=0", "L2005": "=0",
-            "L2006": "=IFERROR(SUM(FILTER(L$2:L$1995,1)),0)",
-            "L2008": "=IFERROR(SUM(FILTER(L$2:L$1995,2)),0)\n",
-            "L2009": "=IFERROR(SUM(FILTER(L$2:L$1995,3)),0)",
-            "L2011": "=IFERROR(SUM(FILTER(L$2:L$1995,4)),0)",
-            "L2012": "=IFERROR(SUM(FILTER(L$2:L$1995,5)),0)",
-        })
+    OLD = {
+        "L2006": "=IFERROR(SUM(FILTER(L$2:L$1995,1)),0)",
+        "L2008": "=IFERROR(SUM(FILTER(L$2:L$1995,2)),0)\n",
+        "L2009": "=IFERROR(SUM(FILTER(L$2:L$1995,3)),0)",
+        "L2011": "=IFERROR(SUM(FILTER(L$2:L$1995,4)),0)",
+        "L2012": "=IFERROR(SUM(FILTER(L$2:L$1995,5)),0)",
+    }
+
+    def test_adds_deductions_and_leaves_pricing_rows_alone(self):
+        ws = self._ws(self.OLD)
         log = []
         self.cp1._ensure_intern_template(ws, log)
         w = self._written(ws)
-        self.assertEqual(w["L2004"], self.cp1.INTERN_WEEKDAY_FORMULA)
-        self.assertEqual(w["L2005"], self.cp1.INTERN_WEEKEND_FORMULA)
-        self.assertEqual(w["L1996"], "=L2003+SUM(L2006:L2012)-L2015")
-        self.assertTrue(w["L2006"].endswith(",0)-L2004"))
-        self.assertTrue(w["L2008"].endswith(",0)-L2005"))
-        # 大掃除1平日、1週末、2：直接扣同日期條件的實習時數
-        self.assertIn("'04新人實習'!$E$2:$E$500<=$B$2007", w["L2009"])
-        self.assertIn("'04新人實習'!$E$2:$E$500,2)<=5", w["L2009"])
-        self.assertIn("'04新人實習'!$E$2:$E$500<$B$2007", w["L2011"])
-        self.assertIn("'04新人實習'!$E$2:$E$500>=$B$2007", w["L2012"])
-        self.assertNotIn("L2010", w)
+        self.assertEqual(set(w), {"L2006", "L2008", "L2009", "L2011", "L2012"})
+        # 2004／2005 會乘以 200 計價、1996 檢查維持原公式 → 都不可以寫入
+        ws.acell.assert_any_call("L2006", value_render_option="FORMULA")
+        self.assertNotIn("L2004", w)
+        self.assertNotIn("L2005", w)
+        self.assertNotIn("L1996", w)
+        e = "'04新人實習'!$E$2:$E$500"
+        self.assertIn(f"WEEKDAY({e},2)<=5)*(({e}<$B$2006)+({e}>$B$2008))", w["L2006"])
+        self.assertIn(f"WEEKDAY({e},2)>5)*(({e}<$B$2006)+({e}>$B$2008))", w["L2008"])
+        self.assertIn(f"({e}<=$B$2007)*(WEEKDAY({e},2)<=5)", w["L2009"])
+        self.assertIn(f"({e}<$B$2007)*(WEEKDAY({e},2)>5)", w["L2011"])
+        self.assertIn(f"({e}>=$B$2007)*({e}<=$B$2008)", w["L2012"])
+        self.assertTrue(w["L2006"].startswith("=IFERROR(SUM(FILTER(L$2:L$1995,1)),0)-SUMPRODUCT("))
         self.assertIn("已更新", log[-1])
 
-    def test_already_new_writes_nothing(self):
+    def test_already_applied_writes_nothing(self):
         d = self.cp1._INTERN_DEDUCT
-        ws = self._ws({
-            "L1996": "=L2003+SUM(L2006:L2012)-L2015",
-            "L2004": self.cp1.INTERN_WEEKDAY_FORMULA, "L2005": self.cp1.INTERN_WEEKEND_FORMULA,
-            "L2006": "=SUM(X)-L2004", "L2008": "=SUM(Y)-L2005",
-            "L2009": "=SUM(A)" + d[2009], "L2011": "=SUM(B)" + d[2011], "L2012": "=SUM(C)" + d[2012],
-        })
+        ws = self._ws({f"L{r}": "=SUM(X)" + d[r] for r in d})
         self.cp1._ensure_intern_template(ws, [])
         ws.batch_update.assert_not_called()
 
-    def test_previous_new_check_is_upgraded(self):
-        ws = self._ws({"L1996": "=SUM(L2003:L2012)-L2004-L2005-L2015", "L2004": "=0", "L2005": "=0",
-                       "L2006": "=A", "L2008": "=B", "L2009": "=C", "L2011": "=D", "L2012": "=E"})
-        self.cp1._ensure_intern_template(ws, [])
-        self.assertEqual(self._written(ws)["L1996"], "=L2003+SUM(L2006:L2012)-L2015")
-
     def test_manual_minus_2003_is_replaced(self):
-        self.assertEqual(self.cp1._with_suffix("=SUM(X)-L2003", "-L2004"), "=SUM(X)-L2004")
-        self.assertEqual(self.cp1._with_suffix("=SUM(X) - L2003 ", "-L2004"), "=SUM(X)-L2004")
+        suffix = self.cp1._INTERN_DEDUCT[2006]
+        self.assertEqual(self.cp1._with_suffix("=SUM(X)-L2003", suffix), "=SUM(X)" + suffix)
+        self.assertEqual(self.cp1._with_suffix("=SUM(X) - L2003 ", suffix), "=SUM(X)" + suffix)
 
-    def test_unexpected_content_is_left_alone(self):
-        ws = self._ws({
-            "L1996": "=自訂", "L2004": "=99", "L2005": "=0",
-            "L2006": "=SUM(X)", "L2008": "=SUM(Y)", "L2009": "=1", "L2011": "=2", "L2012": "=3",
-        })
+    def test_non_formula_is_left_alone(self):
+        cells = dict(self.OLD, L2009="5")
+        ws = self._ws(cells)
         log = []
         self.cp1._ensure_intern_template(ws, log)
-        w = self._written(ws)
-        self.assertNotIn("L2004", w)
-        self.assertNotIn("L1996", w)
-        self.assertIn("L2005", w)
+        self.assertNotIn("L2009", self._written(ws))
         self.assertTrue(any("人工確認" in line for line in log))

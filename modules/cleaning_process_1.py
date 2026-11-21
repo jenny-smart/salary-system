@@ -527,15 +527,16 @@ def _prep_step1_salary_rows(
 
 
 # ── 實習時數範本（L 欄）──────────────────────────────────────
-# 實習場另以 04新人實習 每小時 200 給付，訂單時數不可再算一次。原本需手動在實習生 2006 加「-2003」，
-# 改為依 04新人實習「實習日期」落在哪個時數類別，就從那一列扣除（條件與該列公式的日期條件相同）：
-#   L2004 時數平日實習場 = 非大掃除期間、週一～五     → L2006 平日時數 −L2004
-#   L2005 時數六日實習場 = 非大掃除期間、週六日       → L2008 週末時數 −L2005
-#   L2009 大掃除1平日   −（B2006 ≤ 日期 ≤ B2007、週一～五）
-#   L2011 大掃除1週末   −（B2006 ≤ 日期 <  B2007、週六日）
-#   L2012 大掃除2時數   −（B2007 ≤ 日期 ≤ B2008）
-#   （實習不排晚間，晚間各列不扣）
-#   L1996 檢查 = L2003 + SUM(L2006:L2012) − L2015：實習時數全部扣在某一類才會是 0
+# 實習場另以 04新人實習 每小時 200 給付（L2003×L2017），訂單時數不可再算一次。
+# 原本需手動在實習生 2006 加「-2003」；改為依 04新人實習「實習日期」落在哪個時數類別，
+# 直接在該列公式結尾扣除（日期條件與該列公式相同；實習不排晚間，晚間各列不扣）：
+#   L2006 平日時數     −（非大掃除期間、週一～五）
+#   L2008 週末時數     −（非大掃除期間、週六日）
+#   L2009 大掃除1平日  −（B2006 ≤ 日期 ≤ B2007、週一～五）
+#   L2011 大掃除1週末  −（B2006 ≤ 日期 <  B2007、週六日）
+#   L2012 大掃除2時數  −（B2007 ≤ 日期 ≤ B2008）
+# 注意：L2004、L2005（時數平日／六日實習場）會在 L2027 小計中乘以 200 計價，不可拿來放扣除時數；
+# L1996 檢查維持 SUM(L2003:L2012)−L2015，實習時數全部扣在某一類才會是 0。
 _INTERN_SRC = "'04新人實習'!"
 _INTERN_MARK = "'04新人實習'"
 _IC, _IE, _IK = (f"{_INTERN_SRC}${c}$2:${c}$500" for c in ("C", "E", "K"))
@@ -548,17 +549,13 @@ def _intern_sum(condition: str) -> str:
 
 
 _NOT_CLEANUP = "(({e}<$B$2006)+({e}>$B$2008))"
-INTERN_WEEKDAY_FORMULA = "=" + _intern_sum(f"(WEEKDAY({{e}},2)<=5)*{_NOT_CLEANUP}")
-INTERN_WEEKEND_FORMULA = "=" + _intern_sum(f"(WEEKDAY({{e}},2)>5)*{_NOT_CLEANUP}")
 _INTERN_DEDUCT = {
-    2006: "-L2004",
-    2008: "-L2005",
+    2006: "-" + _intern_sum(f"(WEEKDAY({{e}},2)<=5)*{_NOT_CLEANUP}"),
+    2008: "-" + _intern_sum(f"(WEEKDAY({{e}},2)>5)*{_NOT_CLEANUP}"),
     2009: "-" + _intern_sum("({e}>=$B$2006)*({e}<=$B$2007)*(WEEKDAY({e},2)<=5)"),
     2011: "-" + _intern_sum("({e}>=$B$2006)*({e}<$B$2007)*(WEEKDAY({e},2)>5)"),
     2012: "-" + _intern_sum("({e}>=$B$2007)*({e}<=$B$2008)"),
 }
-CHECK_1996_OLD = ("=SUM(L2003:L2012)-L2015", "=SUM(L2003:L2012)-L2004-L2005-L2015")
-CHECK_1996_NEW = "=L2003+SUM(L2006:L2012)-L2015"
 
 
 def _norm_formula(f) -> str:
@@ -566,12 +563,10 @@ def _norm_formula(f) -> str:
 
 
 def _with_suffix(formula: str, suffix: str) -> str:
-    """時數公式結尾補上扣除項（已扣過就不重複）；原本手動的 −L2003 一併換掉。"""
+    """時數公式結尾補上實習扣除（已扣過就不重複）；原本手動的 −L2003 一併換掉。"""
     f = str(formula or "").rstrip()
     norm = _norm_formula(f)
-    if norm.endswith(_norm_formula(suffix)) or (
-        suffix.startswith("-SUMPRODUCT") and _INTERN_MARK.upper() in norm
-    ):
+    if _INTERN_MARK.upper() in norm:
         return f
     if norm.endswith("-L2003"):
         f = re.sub(r"-\s*L2003\s*$", "", f).rstrip()
@@ -580,28 +575,11 @@ def _with_suffix(formula: str, suffix: str) -> str:
 
 def _ensure_intern_template(ws_salary: gspread.Worksheet, log: List[str]) -> None:
     """
-    前置作業複製公式前，確認薪資表 L 欄是新版實習時數範本（每期、每區自動套用）。
-    只在儲存格是舊版或已是新版時才寫入；遇到其他自訂內容就不動並提醒，避免蓋掉手動設定。
+    前置作業複製公式前，確認薪資表 L 欄時數公式已扣除實習時數（每期、每區自動套用）。
+    只在儲存格是公式時才補上扣除；非公式就不動並提醒。
     """
-    rows = (1996, 2004, 2005, *_INTERN_DEDUCT)
-    cells = {r: ws_salary.acell(f"L{r}", value_render_option="FORMULA").value for r in rows}
+    cells = {r: ws_salary.acell(f"L{r}", value_render_option="FORMULA").value for r in _INTERN_DEDUCT}
     updates, skipped = {}, []
-
-    for row, formula in ((2004, INTERN_WEEKDAY_FORMULA), (2005, INTERN_WEEKEND_FORMULA)):
-        current = _norm_formula(cells[row])
-        if current == _norm_formula(formula):
-            continue
-        if current in ("", "=0", "0"):
-            updates[row] = formula
-        else:
-            skipped.append(f"L{row}")
-
-    current_1996 = _norm_formula(cells[1996])
-    if current_1996 in {_norm_formula(f) for f in CHECK_1996_OLD}:
-        updates[1996] = CHECK_1996_NEW
-    elif current_1996 != _norm_formula(CHECK_1996_NEW):
-        skipped.append("L1996")
-
     for row, suffix in _INTERN_DEDUCT.items():
         if not str(cells[row] or "").lstrip().startswith("="):
             skipped.append(f"L{row}")
@@ -611,7 +589,7 @@ def _ensure_intern_template(ws_salary: gspread.Worksheet, log: List[str]) -> Non
             updates[row] = new
 
     if skipped:
-        _log(log, f"    ⚠️ 實習時數範本：{', '.join(skipped)} 內容非預期，未自動更新，請人工確認")
+        _log(log, f"    ⚠️ 實習時數範本：{', '.join(skipped)} 不是公式，未自動更新，請人工確認")
     if updates:
         ws_salary.batch_update(
             [{"range": f"L{r}", "values": [[f]]} for r, f in sorted(updates.items())],
