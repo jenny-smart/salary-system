@@ -581,7 +581,7 @@ FUNCTION_MAP = {
         "⑫ 產生專案PDF",
         "⑬ 場次時數",
         "⑭ 工具包押金",
-        "⑮ 承攬費申報",
+        "⑮ 清潔承攬費申報",
     ],
     "📦 其他承攬": [
         "① 執行前置作業",
@@ -1596,7 +1596,7 @@ if run_clicked and _run_engine == "PYTHON":
                             from modules.cleaning_process_4 import run_session_hours
                             success = _run(run_session_hours)
 
-                        elif _func == "⑮ 承攬費申報":
+                        elif _func == "⑮ 清潔承攬費申報":
                             from modules.cleaning_process_4 import run_contract_report
                             success = _run(run_contract_report)
 

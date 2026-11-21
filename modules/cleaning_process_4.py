@@ -228,11 +228,11 @@ def run_contract_report(
     例：B2=YYYY01-2、B3=YYYY02-2、B4=YYYY03-2 ……以此類推。
     """
     label = "上半月" if is_first_half else "下半月"
-    _log(log, f"▶ 承攬費申報 {label} 開始")
+    _log(log, f"▶ 清潔承攬費申報 {label} 開始")
 
     if is_first_half:
         _log(log, "  上半月不需寫入承攬費申報，略過")
-        _log(log, f"✅ 承攬費申報 {label} 完成｜{_now_ts()}")
+        _log(log, f"✅ 清潔承攬費申報 {label} 完成｜{_now_ts()}")
         return True
 
     cfg = region_cfg or {}
@@ -264,12 +264,12 @@ def run_contract_report(
         _log(log, f"  清潔承攬 ID 已寫入 {contract_report_sheet}!B{row}")
 
         record_execution(region, period, "承攬費申報", None)
-        _log(log, f"✅ 承攬費申報 {label} 完成｜{_now_ts()}")
+        _log(log, f"✅ 清潔承攬費申報 {label} 完成｜{_now_ts()}")
         return True
 
     except Exception as e:
         detail = str(e).strip() or repr(e)
-        _log(log, f"❌ 承攬費申報失敗：{detail}")
+        _log(log, f"❌ 清潔承攬費申報失敗：{detail}")
         return False
 
 
