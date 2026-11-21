@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
-from typing import Iterable, List, Sequence
+from typing import Callable, Iterable, List, Sequence
 
 import pytz
 
@@ -105,6 +105,17 @@ def _sheets_equal(cell, target) -> bool:
     return str(cell).casefold() == str(target).casefold()
 
 
+_ERROR_TOKENS = (
+    "#REF!", "#N/A", "#VALUE!", "#ERROR!", "#NAME?", "#NUM!", "#DIV/0!", "LOADING",
+)
+
+
+def is_sheet_error(value) -> bool:
+    """與原本 _wait_and_convert 相同的錯誤判定。"""
+    text = str(value or "").strip().upper()
+    return any(token in text for token in _ERROR_TOKENS)
+
+
 def pad_rows(rows: Iterable[Sequence], width: int) -> List[list]:
     out = []
     for row in rows:
@@ -151,16 +162,18 @@ def compare_blocks(expected: Sequence[Sequence], actual: Sequence[Sequence], wid
     return diffs
 
 
-def summarize_diffs(diffs: Sequence[tuple], start_row: int, limit: int = 5) -> str:
-    def col(n):
-        s = ""
-        while n > 0:
-            n, r = divmod(n - 1, 26)
-            s = chr(65 + r) + s
-        return s
+def col_letter(n: int) -> str:
+    """欄號（1-based）→ 欄字母，如 19 → 'S'。"""
+    s = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
 
+
+def summarize_diffs(diffs: Sequence[tuple], start_row: int, limit: int = 5, start_col: int = 1) -> str:
     parts = [
-        f"{col(c)}{start_row + r - 1}: IMPORTRANGE={e!r} / Python={a!r}"
+        f"{col_letter(start_col + c - 1)}{start_row + r - 1}: IMPORTRANGE={e!r} / Python={a!r}"
         for r, c, e, a in list(diffs)[:limit]
     ]
     if len(diffs) > limit:
@@ -168,35 +181,113 @@ def summarize_diffs(diffs: Sequence[tuple], start_row: int, limit: int = 5) -> s
     return "；".join(parts)
 
 
+def block_range(start_row: int, n_rows: int, width: int, start_col: int = 1) -> str:
+    return (
+        f"{col_letter(start_col)}{start_row}:"
+        f"{col_letter(start_col + width - 1)}{start_row + n_rows - 1}"
+    )
+
+
 # ──────────────────────────────────────────────────────────────
 # 寫入靜態值（PYTHON 引擎）
 # ──────────────────────────────────────────────────────────────
 
-def write_static_block(ws, start_row: int, rows: List[list], width: int, log: List[str]) -> int:
-    """把 rows 以 RAW 寫入 A{start_row} 起，寫完讀回驗證一致且無公式。回傳列數。"""
+def write_static_block(
+    ws, start_row: int, rows: List[list], width: int, log: List[str], start_col: int = 1,
+) -> int:
+    """把 rows 以 RAW 寫入（預設 A 欄起），寫完讀回驗證一致且無公式。回傳列數。"""
     if not rows:
         return 0
-
-    def col(n):
-        s = ""
-        while n > 0:
-            n, r = divmod(n - 1, 26)
-            s = chr(65 + r) + s
-        return s
-
-    end_row = start_row + len(rows) - 1
-    rng = f"A{start_row}:{col(width)}{end_row}"
+    rows = pad_rows(rows, width)
+    rng = block_range(start_row, len(rows), width, start_col)
     ws.update(rng, rows, value_input_option="RAW")
 
     written = ws.get(rng, value_render_option="UNFORMATTED_VALUE") or []
     diffs = compare_blocks(rows, written, width)
     if diffs:
-        raise RuntimeError(f"Python 寫入後讀回不一致：{summarize_diffs(diffs, start_row)}")
+        raise RuntimeError(
+            f"Python 寫入後讀回不一致：{summarize_diffs(diffs, start_row, start_col=start_col)}"
+        )
     formulas = ws.get(rng, value_render_option="FORMULA") or []
     if any(str(v or "").lstrip().startswith("=") for r in formulas for v in r):
         raise RuntimeError("Python 寫入後仍有公式，已停止後續流程")
     log.append(f"    ✅ Python 寫入 {rng} 並驗證完成（{len(rows)} 列）")
     return len(rows)
+
+
+# ──────────────────────────────────────────────────────────────
+# 共用切換流程
+# ──────────────────────────────────────────────────────────────
+
+def run_import(
+    task_key: str, region: str, period: str, log: List[str], *,
+    ws, start_row: int, width: int, start_col: int = 1,
+    importrange: Callable[[], int],
+    python_rows: Callable[[], List[list]],
+    python_write: Callable[[List[list]], int] | None = None,
+) -> int:
+    """
+    依「匯入引擎設定」執行匯入，回傳本次匯入列數。
+      importrange()   原本做法（寫公式→等載入→轉靜態值），回傳列數
+      python_rows()   Python 讀來源並算出要寫入的區塊（不寫入）
+      python_write()  PYTHON 模式的寫入；預設寫到 start_row／start_col 並驗證
+    """
+    engine = get_engine(task_key, log)
+    log.append(f"    匯入引擎：{engine}")
+
+    if engine == ENGINE_PYTHON:
+        try:
+            rows = python_rows()
+        except Exception as e:
+            log.append(f"    ⚠️ Python 讀取來源失敗，改用 IMPORTRANGE：{e}")
+            num_rows = importrange()
+            append_engine_log(
+                region, period, task_key, engine, "退回IMPORTRANGE",
+                importrange_count=num_rows, note=f"Python 讀取失敗：{e}", log=log,
+            )
+            return num_rows
+        if python_write is not None:
+            num_rows = python_write(rows)
+        else:
+            num_rows = write_static_block(ws, start_row, rows, width, log, start_col)
+        append_engine_log(
+            region, period, task_key, engine, "完成", python_count=num_rows,
+            note=f"寫入 {col_letter(start_col)}{start_row} 起", log=log,
+        )
+        return num_rows
+
+    num_rows = importrange()
+
+    if engine == ENGINE_COMPARE:
+        # 稽核：以 IMPORTRANGE 結果為準，另以 Python 算一次逐格比對；比對失敗不影響流程。
+        try:
+            py_rows = python_rows()
+            n = max(num_rows, len(py_rows), 1)
+            actual = ws.get(
+                block_range(start_row, n, width, start_col),
+                value_render_option="UNFORMATTED_VALUE",
+            ) or []
+            actual = actual[:num_rows]
+            diffs = compare_blocks(actual, py_rows, width)
+            result = "一致" if not diffs else "不一致"
+            log.append(
+                f"    比對結果：{result}（IMPORTRANGE {num_rows} 列／Python {len(py_rows)} 列，"
+                f"差異 {len(diffs)} 格）"
+            )
+            append_engine_log(
+                region, period, task_key, engine, result,
+                importrange_count=num_rows, python_count=len(py_rows),
+                diff_count=len(diffs),
+                diff_summary=summarize_diffs(diffs, start_row, start_col=start_col),
+                log=log,
+            )
+        except Exception as e:
+            log.append(f"    ⚠️ 比對失敗（不影響匯入結果）：{e}")
+            append_engine_log(
+                region, period, task_key, engine, "比對失敗",
+                importrange_count=num_rows, note=str(e), log=log,
+            )
+    return num_rows
 
 
 # ──────────────────────────────────────────────────────────────

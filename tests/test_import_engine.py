@@ -179,3 +179,123 @@ class AllowanceEngineTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _isolated_import(name):
+    """其他測試會把 modules.auth 換成殘缺的 stub；這裡用自己的 stub 隔離匯入。"""
+    import importlib
+    import sys
+    import types
+
+    auth = types.ModuleType("modules.auth")
+    auth.get_gspread_client = lambda: None
+    auth.open_spreadsheet = lambda *_: None
+    master = types.ModuleType("modules.master_sheet")
+    master.record_execution = lambda *a, **k: None
+    master.get_recorded_value = lambda *a, **k: None
+    project = types.ModuleType("modules.project_salary")
+    project.project_people = lambda *a, **k: None
+    stubs = {"modules.auth": auth, "modules.master_sheet": master, "modules.project_salary": project}
+    patcher = mock.patch.dict(sys.modules, stubs)
+    patcher.start()
+    sys.modules.pop(name, None)
+    module = importlib.import_module(name)
+    return module, patcher
+
+
+def _salary_row(name, kr, aa):
+    """調薪資料 B3:AF 一列：B=name、K:R=kr(8)、AA:AF=aa(6)。"""
+    row = [""] * 31
+    row[0] = name
+    row[9:17] = kr
+    row[25:31] = aa
+    return row
+
+
+class AdjustBlockTest(unittest.TestCase):
+    def setUp(self):
+        self.cp1, patcher = _isolated_import("modules.cleaning_process_1")
+        self.addCleanup(patcher.stop)
+
+    def test_aligned_rows(self):
+        roster = [["王小美", "A1", "台北", 1, 2], ["李大華", "A2", "台北", 3, 4]]
+        salary = [
+            _salary_row("王小美", list(range(8)), list(range(6))),
+            _salary_row("李大華", list(range(10, 18)), list(range(20, 26))),
+        ]
+        block = self.cp1._adj_build_block(roster, salary)
+        self.assertEqual(len(block), 2)
+        self.assertEqual(len(block[0]), 20)
+        self.assertEqual(block[0][:5], ["王小美", "A1", "台北", 1, 2])
+        self.assertEqual(block[0][5], "")
+        self.assertEqual(block[1][6:14], list(range(10, 18)))
+        self.assertEqual(block[1][14:20], list(range(20, 26)))
+
+    def test_only_contiguous_roster_rows_kept(self):
+        roster = [["王小美"], [""], ["李大華"]]
+        salary = [_salary_row("王小美", [1] * 8, [2] * 6)]
+        self.assertEqual(len(self.cp1._adj_build_block(roster, salary)), 1)
+
+    def test_same_row_filter_compacts_like_sheets(self):
+        # 第 2 列名字不同列對齊 → 被 FILTER 濾掉；後面空白列（空=空）會補上來，結果錯位。
+        roster = [["王小美"], ["李大華"]]
+        salary = [_salary_row("王小美", [1] * 8, [1] * 6), _salary_row("陳一", [9] * 8, [9] * 6)]
+        block = self.cp1._adj_build_block(roster, salary)
+        self.assertEqual(block[1][6:14], [""] * 8)
+
+    def test_not_enough_matches_raises(self):
+        roster = [[f"人{i}"] for i in range(298)]
+        salary = [_salary_row("別人", [1] * 8, [1] * 6)] * 298
+        with self.assertRaises(RuntimeError):
+            self.cp1._adj_build_block(roster, salary)
+
+    def test_empty_roster_raises(self):
+        with self.assertRaises(ValueError):
+            self.cp1._adj_build_block([], [])
+
+
+class VoucherSelectTest(unittest.TestCase):
+    def setUp(self):
+        self.cp2, patcher = _isolated_import("modules.cleaning_process_2")
+        self.addCleanup(patcher.stop)
+
+    def test_selects_rows_and_masked_columns(self):
+        row = [""] * 54
+        row[0] = "儲值金"
+        for c, v in zip((2, 3, 4, 5, 13, 54), ("B", "C", "D", "E", "M", "BB")):
+            row[c - 1] = v
+        other = list(row)
+        other[0] = "清潔"
+        out = self.cp2._voucher_select([row, other, ["儲值金"]])
+        self.assertEqual(out[0], ["B", "C", "D", "E", "M", "BB"])
+        self.assertEqual(out[1], [""] * 6)
+        self.assertEqual(len(out), 2)
+
+
+class RunImportTest(unittest.TestCase):
+    """共用流程：start_col 與自訂 python_write。"""
+
+    def test_compare_reads_offset_columns(self):
+        ws = mock.MagicMock()
+        ws.get.return_value = [["a", "b"]]
+        logged = []
+        with mock.patch.object(engine, "get_engine", return_value=engine.ENGINE_COMPARE), \
+             mock.patch.object(engine, "append_engine_log", side_effect=lambda *a, **k: logged.append((a, k))):
+            n = engine.run_import(
+                "00調薪", "台北", "202611-1", [], ws=ws, start_row=3, width=2, start_col=19,
+                importrange=lambda: 1, python_rows=lambda: [["a", "b"]],
+            )
+        self.assertEqual(n, 1)
+        self.assertEqual(ws.get.call_args[0][0], "S3:T3")
+        self.assertEqual(logged[0][0][4], "一致")
+
+    def test_python_uses_custom_writer(self):
+        writer = mock.MagicMock(return_value=2)
+        with mock.patch.object(engine, "get_engine", return_value=engine.ENGINE_PYTHON), \
+             mock.patch.object(engine, "append_engine_log"):
+            n = engine.run_import(
+                "00調薪", "台北", "202611-1", [], ws=None, start_row=3, width=2,
+                importrange=lambda: 0, python_rows=lambda: [[1], [2]], python_write=writer,
+            )
+        self.assertEqual(n, 2)
+        writer.assert_called_once_with([[1], [2]])

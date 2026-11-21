@@ -442,56 +442,12 @@ def _import_allowance_rows(
     region: str, period: str, log,
 ) -> int:
     """依「匯入引擎設定」選擇 IMPORTRANGE／COMPARE／PYTHON，回傳本次匯入列數。"""
-    engine = _engine.get_engine(ALLOWANCE_TASK, log)
-    _log(log, f"    匯入引擎：{engine}")
-
-    if engine == _engine.ENGINE_PYTHON:
-        try:
-            rows = _allowance_python_rows(gc, allowance_id, schedule)
-        except Exception as e:
-            _log(log, f"    ⚠️ Python 讀取來源失敗，改用 IMPORTRANGE：{e}")
-            num_rows = _allowance_importrange(ws, allowance_id, schedule, target_row, log)
-            _engine.append_engine_log(
-                region, period, ALLOWANCE_TASK, engine, "退回IMPORTRANGE",
-                importrange_count=num_rows, note=f"Python 讀取失敗：{e}", log=log,
-            )
-            return num_rows
-        num_rows = _engine.write_static_block(ws, target_row, rows, ALLOWANCE_WIDTH, log)
-        _engine.append_engine_log(
-            region, period, ALLOWANCE_TASK, engine, "完成",
-            python_count=num_rows, note=f"寫入 A{target_row} 起", log=log,
-        )
-        return num_rows
-
-    num_rows = _allowance_importrange(ws, allowance_id, schedule, target_row, log)
-
-    if engine == _engine.ENGINE_COMPARE:
-        # 稽核：以 IMPORTRANGE 結果為準，另外用 Python 算一次逐格比對；比對失敗不影響流程。
-        try:
-            py_rows = _allowance_python_rows(gc, allowance_id, schedule)
-            end_row = target_row + max(num_rows, len(py_rows)) - 1
-            actual = ws.get(
-                f"A{target_row}:{_col_letter(ALLOWANCE_WIDTH)}{end_row}",
-                value_render_option="UNFORMATTED_VALUE",
-            ) or []
-            actual = actual[:num_rows]
-            diffs = _engine.compare_blocks(actual, py_rows, ALLOWANCE_WIDTH)
-            result = "一致" if not diffs else "不一致"
-            _log(log, f"    比對結果：{result}（IMPORTRANGE {num_rows} 列／Python {len(py_rows)} 列，差異 {len(diffs)} 格）")
-            _engine.append_engine_log(
-                region, period, ALLOWANCE_TASK, engine, result,
-                importrange_count=num_rows, python_count=len(py_rows),
-                diff_count=len(diffs),
-                diff_summary=_engine.summarize_diffs(diffs, target_row),
-                log=log,
-            )
-        except Exception as e:
-            _log(log, f"    ⚠️ 比對失敗（不影響匯入結果）：{e}")
-            _engine.append_engine_log(
-                region, period, ALLOWANCE_TASK, engine, "比對失敗",
-                importrange_count=num_rows, note=str(e), log=log,
-            )
-    return num_rows
+    return _engine.run_import(
+        ALLOWANCE_TASK, region, period, log,
+        ws=ws, start_row=target_row, width=ALLOWANCE_WIDTH,
+        importrange=lambda: _allowance_importrange(ws, allowance_id, schedule, target_row, log),
+        python_rows=lambda: _allowance_python_rows(gc, allowance_id, schedule),
+    )
 
 
 def run_allowance(
@@ -548,6 +504,40 @@ def run_allowance(
 # 02 儲值獎金
 # ──────────────────────────────────────────────────────────────
 
+VOUCHER_TASK = "02儲值獎金"
+VOUCHER_SOURCE_SHEET = "範本"
+VOUCHER_SOURCE_RANGE = "A2:BB3000"
+VOUCHER_KEEP_COLS = (2, 3, 4, 5, 13, 54)   # B,C,D,E,M,BB（1-based）→ 寫入 A:F
+VOUCHER_WIDTH = len(VOUCHER_KEEP_COLS)
+
+
+def _voucher_select(raw: List[list]) -> List[list]:
+    """等同 FILTER(FILTER(範本!A2:BB3000, A="儲值金"), {B,C,D,E,M,BB 遮罩})。"""
+    matched = _engine.filter_rows(raw, 0, "儲值金", 54)
+    return [[row[c - 1] for c in VOUCHER_KEEP_COLS] for row in matched]
+
+
+def _voucher_python_rows(gc, payment_id: str) -> List[list]:
+    src = gc.open_by_key(payment_id).worksheet(VOUCHER_SOURCE_SHEET)
+    raw = src.get(VOUCHER_SOURCE_RANGE, value_render_option="UNFORMATTED_VALUE") or []
+    return _voucher_select(raw)
+
+
+def _voucher_importrange(ws, payment_id: str, target_row: int, log) -> int:
+    """原本做法：遮罩只取 B,C,D,E,M,BB 欄的 IMPORTRANGE → 等載入 → 轉靜態值。"""
+    keep = set(VOUCHER_KEEP_COLS)
+    mask = "{" + ",".join("1" if col in keep else "0" for col in range(1, 55)) + "}"
+    formula = (
+        f'=FILTER('
+        f'FILTER(IMPORTRANGE("{payment_id}","範本!A2:BB3000"),'
+        f'IMPORTRANGE("{payment_id}","範本!A2:A3000")="儲值金"),'
+        f'{mask})'
+    )
+    ws.update_cell(target_row, 1, formula)
+    _log(log, f"    IMPORTRANGE 已寫入 A{target_row}")
+    return _wait_and_convert(ws, f"A{target_row}", log, extra_wait=8)
+
+
 def run_voucher(
     cleaning_file_id: str,
     region: str,
@@ -584,20 +574,12 @@ def run_voucher(
         target_row = _first_empty_row_col_a(ws_voucher)
         _log(log, f"    下半月接續列：{target_row}")
 
-        # 遮罩：只取 B(2),C(3),D(4),E(5),M(13),BB(54) 欄
-        # 格式：=FILTER(FILTER(IMPORTRANGE(...), 篩選條件), {遮罩})
-        keep = {2, 3, 4, 5, 13, 54}
-        mask = "{" + ",".join("1" if col in keep else "0" for col in range(1, 55)) + "}"
-        formula = (
-            f'=FILTER('
-            f'FILTER(IMPORTRANGE("{payment_id}","範本!A2:BB3000"),'
-            f'IMPORTRANGE("{payment_id}","範本!A2:A3000")="儲值金"),'
-            f'{mask})'
+        num_rows = _engine.run_import(
+            VOUCHER_TASK, region, period, log,
+            ws=ws_voucher, start_row=target_row, width=VOUCHER_WIDTH,
+            importrange=lambda: _voucher_importrange(ws_voucher, payment_id, target_row, log),
+            python_rows=lambda: _voucher_python_rows(gc, payment_id),
         )
-        ws_voucher.update_cell(target_row, 1, formula)
-        _log(log, f"    IMPORTRANGE 已寫入 A{target_row}")
-
-        num_rows = _wait_and_convert(ws_voucher, f"A{target_row}", log, extra_wait=8)
         if num_rows == 0:
             _log(log, "    ⚠️ 本期無儲值金資料")
             ts = _punch("02儲值獎金", region, period, "0/0")
