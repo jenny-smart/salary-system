@@ -445,7 +445,12 @@ def _process_order_data(
     except (TypeError, ValueError):
         expected_count = 0
     if expected_count <= 0:
-        log(f"  {svc} 本期分類貼入列數為 0，略過")
+        if is_first_half:
+            # 上半月沒有新訂單時仍要清掉前期留下的訂單，否則會被當成本期計算
+            _clear_order_from(order_ws, 2)
+            log(f"  {svc} 本期分類貼入列數為 0，已清空前期訂單")
+        else:
+            log(f"  {svc} 本期分類貼入列數為 0，略過")
         return 0
 
     last_income_row = _last_nonempty_row_b(income_ws)
