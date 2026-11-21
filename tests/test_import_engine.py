@@ -427,7 +427,7 @@ class SalaryTemplateTest(unittest.TestCase):
 
     def _new_cells(self):
         cp = self.cp1
-        cells = {f"L{r}": f for r, (f, _) in cp._CLEANUP_ROWS.items()}
+        cells = {f"L{r}": f + d for r, (f, d, _) in cp._CLEANUP_ROWS.items()}
         cells["L1996"] = cp._CHECK_1996[0]
         cells["L2006"] = REAL_OLD["L2006"] + cp._INTERN_SUFFIX[2006]
         cells["L2008"] = REAL_OLD["L2008"] + cp._INTERN_SUFFIX[2008]
@@ -479,13 +479,16 @@ class SalaryTemplateTest(unittest.TestCase):
         self.assertEqual(set(w), {"L2006", "L2008"})      # 只做一般平日／週末的實習扣除
         self.assertTrue(any("整組未更新" in line for line in log))
 
-    def test_project_sheet_without_1996(self):
+    def test_project_sheet_no_intern_deduction(self):
         cells = dict(REAL_OLD, L1996="")
         ws = self._ws(cells)
-        self.cp1._ensure_salary_template(ws, [])
+        self.cp1._ensure_salary_template(ws, [], intern=False)
         w = self._written(ws)
         self.assertNotIn("L1996", w)
-        self.assertIn("L2014", w)
+        self.assertNotIn("L2006", w)          # 一般平日／週末不扣實習
+        self.assertNotIn("L2008", w)
+        self.assertIn("L2014", w)             # 大掃除分類照常更新
+        self.assertFalse(any("'04新人實習'" in f for f in w.values()))
 
     def test_manual_minus_2003_is_replaced(self):
         suffix = self.cp1._INTERN_SUFFIX[2006]

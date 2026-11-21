@@ -505,7 +505,7 @@ def _prep_step1_salary_rows(
 
     # 第 1 列有人員時，把 L2:2048 的「公式」複製到其餘人員欄（L 欄為範本，固定值不複製）。
     # 先複製，後續 2041／2045 的清空或貼值仍照原規則處理；L2:1995 不清空。
-    _ensure_salary_template(ws_project_salary, log)
+    _ensure_salary_template(ws_project_salary, log, intern=False)
     _copy_formula_cells(ws_project_salary, last_project_col, log)
 
     if is_first_half:
@@ -585,25 +585,25 @@ def _rate(col: int) -> str:
 _SUBTOTAL_OLD = ("=L2002*L2016+L2003*L2017+L2004*L2016+L2005*L2017+L2006*L2018+L2007*L2019"
                  "+L2008*L2020+L2009*L2021+L2010*L2022+L2011*L2023+L2012*L2024")
 
-# 大掃除各列：{列: (新公式, 可接受的舊版公式)}
+# 大掃除各列：{列: (新公式, 實習扣除（無則空字串）, 可接受的舊版公式)}
 _CLEANUP_ROWS = {
-    2009: (_hours(f"{_P1}*{_WD}*{_NOT_EVE}") + "-" + _intern_sum(f"{_E_P1}*{_E_WD}"),
+    2009: (_hours(f"{_P1}*{_WD}*{_NOT_EVE}"), "-" + _intern_sum(f"{_E_P1}*{_E_WD}"),
            (f"=IFERROR(SUM(FILTER(L$2:L$1995,({_B}>=$B$2006)*({_B}<=$B$2007)*{_WD})),0)",)),
-    2010: (_hours(f"{_P1}*{_EVE}"),
+    2010: (_hours(f"{_P1}*{_EVE}"), "",
            (f"=IFERROR(SUM(FILTER(L$2:L$1995,({_B}>=$B$2006)*({_B}<=$B$2007)*{_EVE})),0)",)),
-    2011: (_hours(f"{_P1}*{_WE}*{_NOT_EVE}") + "-" + _intern_sum(f"{_E_P1}*{_E_WE}"),
+    2011: (_hours(f"{_P1}*{_WE}*{_NOT_EVE}"), "-" + _intern_sum(f"{_E_P1}*{_E_WE}"),
            (f"=IFERROR(SUM(FILTER(L$2:L$1995,({_B}>=$B$2006)*({_B}<$B$2007)*{_WE})),0)",)),
-    2012: (_hours(f"{_P2}*{_WD}*{_NOT_EVE}") + "-" + _intern_sum(f"{_E_P2}*{_E_WD}"),
+    2012: (_hours(f"{_P2}*{_WD}*{_NOT_EVE}"), "-" + _intern_sum(f"{_E_P2}*{_E_WD}"),
            (f"=IFERROR(SUM(FILTER(L$2:L$1995,{_P2})),0)",)),
-    2013: (_hours(f"{_P2}*{_EVE}"), ("",)),
-    2014: (_hours(f"{_P2}*{_WE}*{_NOT_EVE}") + "-" + _intern_sum(f"{_E_P2}*{_E_WE}"), ("",)),
-    2021: (_rate(10), ("=VLOOKUP(L$1,'00調薪'!$A:$M,10,false)",)),   # 大掃除1平日 ← J
-    2022: (_rate(12), ("=VLOOKUP(L$1,'00調薪'!$A:$M,11,false)",)),   # 大掃除1晚間 ← L
-    2023: (_rate(11), ("=VLOOKUP(L$1,'00調薪'!$A:$M,12,false)",)),   # 大掃除1週末 ← K
-    2024: (_rate(13), ("=VLOOKUP(L$1,'00調薪'!$A:$M,13,false)",)),   # 大掃除2平日 ← M
-    2025: (_rate(15), ("=VLOOKUP(L$1,'00調薪'!$A:$M,14,false)",)),   # 大掃除2晚間 ← O
-    2026: (_rate(14), ("=VLOOKUP(L$1,'00調薪'!$A:$M,15,false)",)),   # 大掃除2週末 ← N
-    2027: (_SUBTOTAL_OLD + "+L2013*L2025+L2014*L2026", (_SUBTOTAL_OLD,)),
+    2013: (_hours(f"{_P2}*{_EVE}"), "", ("",)),
+    2014: (_hours(f"{_P2}*{_WE}*{_NOT_EVE}"), "-" + _intern_sum(f"{_E_P2}*{_E_WE}"), ("",)),
+    2021: (_rate(10), "", ("=VLOOKUP(L$1,'00調薪'!$A:$M,10,false)",)),   # 大掃除1平日 ← J
+    2022: (_rate(12), "", ("=VLOOKUP(L$1,'00調薪'!$A:$M,11,false)",)),   # 大掃除1晚間 ← L
+    2023: (_rate(11), "", ("=VLOOKUP(L$1,'00調薪'!$A:$M,12,false)",)),   # 大掃除1週末 ← K
+    2024: (_rate(13), "", ("=VLOOKUP(L$1,'00調薪'!$A:$M,13,false)",)),   # 大掃除2平日 ← M
+    2025: (_rate(15), "", ("=VLOOKUP(L$1,'00調薪'!$A:$M,14,false)",)),   # 大掃除2晚間 ← O
+    2026: (_rate(14), "", ("=VLOOKUP(L$1,'00調薪'!$A:$M,15,false)",)),   # 大掃除2週末 ← N
+    2027: (_SUBTOTAL_OLD + "+L2013*L2025+L2014*L2026", "", (_SUBTOTAL_OLD,)),
 }
 # 1996 檢查（只有薪資表有；專案薪資表此格空白就略過）
 _CHECK_1996 = ("=SUM(L2003:L2014)-L2015", ("=SUM(L2003:L2012)-L2015",))
@@ -624,15 +624,18 @@ def _with_suffix(formula: str, suffix: str) -> str:
     return f + suffix
 
 
-def _ensure_salary_template(ws: gspread.Worksheet, log: List[str]) -> None:
-    """前置作業複製公式前，把 L 欄範本更新為實習扣除＋大掃除分類（見上方說明）。"""
+def _ensure_salary_template(ws: gspread.Worksheet, log: List[str], intern: bool = True) -> None:
+    """
+    前置作業複製公式前，把 L 欄範本更新為實習扣除＋大掃除分類（見上方說明）。
+    intern=False（專案薪資表）：實習場是清潔訂單、不在專案薪資表，只更新大掃除分類與費率，不扣實習時數。
+    """
     rows = (1996, *_INTERN_SUFFIX, *_CLEANUP_ROWS)
     got = ws.batch_get([f"L{r}" for r in rows], value_render_option="FORMULA")
     cells = {r: (v[0][0] if v and v[0] else "") for r, v in zip(rows, got)}
     updates, notes = {}, []
 
-    # 一般平日／週末的實習扣除
-    for row, suffix in _INTERN_SUFFIX.items():
+    # 一般平日／週末的實習扣除（專案薪資表不扣）
+    for row, suffix in (_INTERN_SUFFIX.items() if intern else ()):
         if not str(cells[row] or "").lstrip().startswith("="):
             notes.append(f"L{row} 不是公式")
             continue
@@ -641,7 +644,10 @@ def _ensure_salary_template(ws: gspread.Worksheet, log: List[str]) -> None:
             updates[row] = new
 
     # 大掃除各列＋1996：全部是已知舊版或新版才更新
-    targets = dict(_CLEANUP_ROWS)
+    targets = {
+        row: (hours + (deduct if intern else ""), olds)
+        for row, (hours, deduct, olds) in _CLEANUP_ROWS.items()
+    }
     if str(cells[1996] or "").strip():
         targets[1996] = _CHECK_1996
     pending, unexpected = {}, []
