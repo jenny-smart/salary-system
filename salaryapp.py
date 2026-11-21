@@ -1290,6 +1290,15 @@ if run_clicked and _run_engine == "PYTHON":
                             batch.append({"task_key": task_key, "count": counts.get(label, 0)})
                         record_batch(_name, _period, batch)
 
+                        # 本期沒有任何其他承攬訂單時，也要執行其他承攬前置作業：
+                        # 上半月會清掉前期留下的訂單，避免殘留被當成本期計算
+                        _other_labels = ("水洗", "家電", "收納", "座椅", "地毯")
+                        if sum(int(counts.get(k, 0) or 0) for k in _other_labels) == 0:
+                            add_log("本期沒有其他承攬訂單，自動執行其他承攬前置作業（清除前期殘留）")
+                            from modules.other_contract_process import run_other_preprocess
+                            run_other_preprocess(root_id, _name, _period, _period.endswith("-1"), None,
+                                                 lambda m: add_log(m, "error" if "❌" in m else "info"))
+
                     elif "⑥ 金流對帳轉檔" in _func:
                         from modules.payment_reconciliation import convert_payment_file
                         from modules.auth import open_spreadsheet
