@@ -1,27 +1,47 @@
-"""唯讀：台北申報檔清潔各月／清潔分頁公式、清潔承攬檔副本分頁名稱（不印個資欄）。"""
+"""套用新版承攬費申報（台北／台中 202601-2～202610-2）；先備份申報檔、補台中 contract_report_id。"""
 import os
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.getcwd())
 from modules import auth  # noqa: E402
+from modules.contract_report import run_contract_report_all  # noqa: E402
+from modules.year_root import cfg_for_period  # noqa: E402
 
-jgc = auth.get_jenny_gspread_client()
+MASTER = "1GdW3FSZ0s3TGeYiNx3JtYvED_RRfJjiFYwLFeYHZ1hA"
+TC_REPORT = "1eAt1gczhwHPOpVX2uFQumJ6xnvTWnij8N1w0IBY5qkk"
 gc = auth.get_gspread_client()
-tp = jgc.open_by_key("1PYUvL9bz3a-8f1r2WA0qEfy6O5rMKWEOytGJ-lRm9fg")
-w = tp.worksheet("清潔各月")
-for r, row in enumerate(w.get("A4:H7", value_render_option="FORMULA") or [], 4):
-    print(f"清潔各月 R{r}:", [str(v)[:160] for v in row])
-c = tp.worksheet("清潔")
-print("清潔 R1-3 D:N:", c.get("D1:N3", value_render_option="FORMULA"))
-print("清潔 R4 D:N:", [str(v)[:120] for v in (c.get("D4:N4", value_render_option="FORMULA") or [[]])[0]])
-print("期別 C1:E3:", tp.worksheet("期別").get("C1:E3", value_render_option="FORMULA"))
-print("申報檔分頁大小：", [(x.title, x.row_count, x.col_count) for x in tp.worksheets()])
-for label, fid in (("台北 202610-2 清潔", "1Ng8MIA-ECo1eH-_PmiJBciJetgsSLENQscLD_w37ENw"),
-                   ("台中 202610-2 清潔", "19ZD_cT-0sfGn-kaK-Sy2r_BSmmwBK_QTWlMH3ZLGlPY")):
-    ss = gc.open_by_key(fid)
-    names = [x.title for x in ss.worksheets()]
-    print(label, "含副本/值分頁：", [n for n in names if "場次時數薪資總表" in n])
-    t = ss.worksheet("場次時數薪資總表")
-    print("   場次時數薪資總表 A1:F4 公式：", [[str(v)[:60] for v in r] for r in (t.get("A1:F4", value_render_option="FORMULA") or [])])
-s = jgc.open_by_key("1AvoUGlFCxaKsPOPavgBmqHoyn-_t4c0I82bIth7SvRQ").worksheet("新訓退訓實境費用")
-print("新訓退訓實境費用 大小", s.row_count, s.col_count, "已用列數", len(s.col_values(1)))
+reg = gc.open_by_key(MASTER).worksheet("地區設定")
+rows = reg.get_all_values()
+hdr = rows[0]
+cfgs = {}
+for i, r in enumerate(rows[1:], 2):
+    d = dict(zip(hdr, r + [""] * len(hdr)))
+    if d["name"] == "台中" and not d.get("contract_report_id"):
+        col = hdr.index("contract_report_id") + 1
+        reg.update_cell(i, col, TC_REPORT)
+        d["contract_report_id"] = TC_REPORT
+        print(f"地區設定：台中 contract_report_id 已填入（第{i}列）")
+    cfgs[d["name"]] = d
+
+jdrive = auth.get_jenny_drive_service()
+stamp = datetime.now().strftime("%Y%m%d-%H%M")
+for region in ("台北", "台中"):
+    rid = cfgs[region]["contract_report_id"]
+    meta = jdrive.files().get(fileId=rid, fields="name,parents", supportsAllDrives=True).execute()
+    cp = jdrive.files().copy(fileId=rid, supportsAllDrives=True, body={
+        "name": f"[備份{stamp}]{meta['name']}", "parents": meta.get("parents", [])}).execute()
+    print(f"[備份] {region} → {cp['id']}")
+
+ok = True
+for region in ("台北", "台中"):
+    for m in range(1, 11):
+        period = f"2026{m:02d}-2"
+        cfg = cfg_for_period(cfgs[region], period)
+        try:
+            if not run_contract_report_all(region, period, cfg["root_folder_id"], cfg, print):
+                ok = False
+        except Exception as e:
+            ok = False
+            print(f"❌ {region} {period} 失敗：{e}")
+print("全部完成" if ok else "有失敗項目")

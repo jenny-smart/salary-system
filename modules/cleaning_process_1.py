@@ -402,6 +402,9 @@ def run_preparation(
 
         # ── 步驟1：薪資表特定列處理 ──────────────────────────
         _log(log, "  步驟1：薪資表特定列處理")
+        # 大掃除日期：依網頁設定寫入 薪資表／專案薪資表 B2006:B2008
+        from modules import cleanup_dates
+        cleanup_dates.apply_from_settings(ss, log)
         _prep_step1_salary_rows(
             ws_salary, is_first_half, log, ws_project_salary=ws_project_salary
         )
@@ -505,7 +508,6 @@ def _prep_step1_salary_rows(
 
     # 第 1 列有人員時，把 L2:2048 的「公式」複製到其餘人員欄（L 欄為範本，固定值不複製）。
     # 先複製，後續 2041／2045 的清空或貼值仍照原規則處理；L2:1995 不清空。
-    _ensure_salary_template(ws_project_salary, log, intern=False)
     _copy_formula_cells(ws_project_salary, last_project_col, log)
 
     if is_first_half:
@@ -528,7 +530,7 @@ def _prep_step1_salary_rows(
 
 
 # ── 薪資表範本（L 欄）：實習扣除、大掃除分類 ───────────────────────────
-# 前置作業複製公式前，自動把 L 欄範本更新成以下規則（薪資表、專案薪資表皆適用）。
+# 前置作業複製公式前，自動把薪資表 L 欄範本更新成以下規則（專案薪資表不處理，由人工維護）。
 #
 # 一、實習時數：實習場另以 04新人實習 每小時 200 給付（L2003×L2017），訂單時數不可再算一次。
 #     依 04新人實習「實習日期」從同條件的時數列扣除（實習不排晚間，晚間各列不扣）：
@@ -624,10 +626,10 @@ def _with_suffix(formula: str, suffix: str) -> str:
     return f + suffix
 
 
-def _ensure_salary_template(ws: gspread.Worksheet, log: List[str], intern: bool = True) -> None:
+def _ensure_salary_template(ws: gspread.Worksheet, log: List[str]) -> None:
     """
-    前置作業複製公式前，把 L 欄範本更新為實習扣除＋大掃除分類（見上方說明）。
-    intern=False（專案薪資表）：實習場是清潔訂單、不在專案薪資表，只更新大掃除分類與費率，不扣實習時數。
+    前置作業複製公式前，把薪資表 L 欄範本更新為實習扣除＋大掃除分類（見上方說明）。
+    只處理薪資表；專案薪資表各區寫法不同（例如桃園以 C2006～C2008 自訂專案費率），由人工維護。
     """
     rows = (1996, *_INTERN_SUFFIX, *_CLEANUP_ROWS)
     got = ws.batch_get([f"L{r}" for r in rows], value_render_option="FORMULA")
@@ -635,7 +637,7 @@ def _ensure_salary_template(ws: gspread.Worksheet, log: List[str], intern: bool 
     updates, notes = {}, []
 
     # 一般平日／週末的實習扣除（專案薪資表不扣）
-    for row, suffix in (_INTERN_SUFFIX.items() if intern else ()):
+    for row, suffix in _INTERN_SUFFIX.items():
         if not str(cells[row] or "").lstrip().startswith("="):
             notes.append(f"L{row} 不是公式")
             continue
@@ -645,7 +647,7 @@ def _ensure_salary_template(ws: gspread.Worksheet, log: List[str], intern: bool 
 
     # 大掃除各列＋1996：全部是已知舊版或新版才更新
     targets = {
-        row: (hours + (deduct if intern else ""), olds)
+        row: (hours + deduct, olds)
         for row, (hours, deduct, olds) in _CLEANUP_ROWS.items()
     }
     if str(cells[1996] or "").strip():

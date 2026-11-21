@@ -941,6 +941,34 @@ def _label_source_period(
     return len(updates)
 
 
+SALARY_MODULE_WIDTH = 12   # 新人實境／新人實習 A:L
+
+
+def _is_datevalue(val) -> bool:
+    """對齊公式 ISNUMBER(E)+ISNUMBER(IFERROR(DATEVALUE(E)))>0：數字，或可解析的文字日期。"""
+    if isinstance(val, bool):
+        return False
+    if isinstance(val, (int, float)):
+        return True
+    return isinstance(val, str) and _has_date(val)
+
+
+def _salary_module_select(raw, schedule: str, names=None) -> List[list]:
+    """
+    Python 版 03／04／05 篩選（等同原 FILTER 公式）：
+        A = schedule
+        names 有給（05）：另需 E 欄為日期 且 TRIM(C) 在薪資表第 1 列
+    """
+    rows = _engine.filter_rows(raw, 0, schedule, SALARY_MODULE_WIDTH)
+    if names is None:
+        return rows
+    folded = {str(n).strip().casefold() for n in names}
+    return [
+        r for r in rows
+        if _is_datevalue(r[4]) and str(r[2] or "").strip().casefold() in folded
+    ]
+
+
 def run_newcomer(
     cleaning_file_id: str, region: str, period: str,
     is_first_half: bool, log: List[str],
@@ -1085,10 +1113,23 @@ def _run_salary_module(
             + ",".join(conditions) +
             ')'
         )
-        ws.update_cell(target_row, 1, formula)
-        _log(log, f"    IMPORTRANGE 已寫入 A{target_row}")
 
-        num_rows = _wait_and_convert(ws, f"A{target_row}", log)
+        def _importrange() -> int:
+            ws.update_cell(target_row, 1, formula)
+            _log(log, f"    IMPORTRANGE 已寫入 A{target_row}")
+            return _wait_and_convert(ws, f"A{target_row}", log)
+
+        def _python_rows() -> List[list]:
+            src = gc.open_by_key(src_id).worksheet(src_sheet)
+            raw = src.get(src_range, value_render_option="UNFORMATTED_VALUE") or []
+            names = _salary_names(ss) if match_salary_names else None
+            return _salary_module_select(raw, schedule, names)
+
+        num_rows = _engine.run_import(
+            task_key, region, period, log,
+            ws=ws, start_row=target_row, width=SALARY_MODULE_WIDTH,
+            importrange=_importrange, python_rows=_python_rows,
+        )
         if num_rows == 0:
             _log(log, f"    ⚠️ {task_key} 無資料，結束")
             ts = _punch(task_key, region, period, "0/0")

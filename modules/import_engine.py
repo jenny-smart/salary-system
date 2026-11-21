@@ -6,6 +6,11 @@
     逐步把「寫 IMPORTRANGE → 等載入 → 轉靜態值」改成「Python 直接讀來源 → 篩選 → 寫靜態值」，
     但隨時可以切回 IMPORTRANGE，且每次執行都有紀錄可以稽核。
 
+匯入方式在網頁「執行設定」選擇（預設 IMPORTRANGE，選 PYTHON 時本次執行的 00／01／02 都用 Python）；
+選 PYTHON 時，每次寫入都記到主控試算表（LemonSalarySystem）「Python匯入-{期別}」分頁，
+並在執行日誌顯示該分頁與寫入位置的連結供確認。
+排程等沒有經過網頁的執行，沿用「匯入引擎設定」分頁（不存在就是 IMPORTRANGE，不會自動建立）。
+
 三種引擎（主控試算表「匯入引擎設定」分頁，A=作業、B=引擎、C=備註）：
     IMPORTRANGE  原本做法（預設；分頁不存在、找不到作業、讀取失敗、值不認得都用這個）
     COMPARE      照原本 IMPORTRANGE 執行（結果以它為準），另外用 Python 算一次並逐格比對，
@@ -40,8 +45,21 @@ LOG_HEADER = [
     "IMPORTRANGE筆數", "Python筆數", "差異格數", "差異摘要", "備註",
 ]
 
+REPORT_SHEET_PREFIX = "Python匯入-"
+REPORT_HEADER = [
+    "執行時間", "地區", "作業", "匯入方式", "結果", "IMPORTRANGE列數", "Python列數",
+    "差異格數", "差異摘要", "寫入位置", "連結",
+]
+
 _CACHE_TTL_SECONDS = 60
 _cache: dict = {"at": 0.0, "map": None}
+_override: dict = {"engine": None}
+
+
+def set_engine_override(engine: str | None) -> None:
+    """網頁選的匯入方式；設定後優先於「匯入引擎設定」分頁。None 表示不覆寫。"""
+    value = str(engine or "").strip().upper()
+    _override["engine"] = value if value in ENGINES else None
 
 
 # ──────────────────────────────────────────────────────────────
@@ -72,15 +90,17 @@ def _load_settings() -> dict:
     try:
         ws = ss.worksheet(SETTINGS_SHEET)
     except Exception:
-        ws = ss.add_worksheet(title=SETTINGS_SHEET, rows=50, cols=len(SETTINGS_HEADER))
-        ws.update("A1", [SETTINGS_HEADER, ["01專員請款", DEFAULT_ENGINE, "IMPORTRANGE／COMPARE／PYTHON"]])
-    mapping = parse_engine_settings(ws.get_all_values())
+        mapping = {}
+    else:
+        mapping = parse_engine_settings(ws.get_all_values())
     _cache.update(at=now, map=mapping)
     return mapping
 
 
 def get_engine(task_key: str, log: List[str] | None = None) -> str:
-    """取得作業的匯入引擎；任何錯誤都回傳預設 IMPORTRANGE。"""
+    """取得作業的匯入引擎：網頁選擇 > 「匯入引擎設定」分頁 > IMPORTRANGE；任何錯誤都回傳 IMPORTRANGE。"""
+    if _override["engine"]:
+        return _override["engine"]
     try:
         engine = _load_settings().get(task_key, DEFAULT_ENGINE)
     except Exception as e:
@@ -245,6 +265,11 @@ def run_import(
                 region, period, task_key, engine, "退回IMPORTRANGE",
                 importrange_count=num_rows, note=f"Python 讀取失敗：{e}", log=log,
             )
+            append_report(
+                region, period, task_key, engine, "❌ Python失敗，已改用IMPORTRANGE",
+                ws, start_row, start_col, importrange_count=num_rows,
+                diff_summary=f"Python 讀取失敗：{e}", log=log,
+            )
             return num_rows
         if python_write is not None:
             num_rows = python_write(rows)
@@ -253,6 +278,10 @@ def run_import(
         append_engine_log(
             region, period, task_key, engine, "完成", python_count=num_rows,
             note=f"寫入 {col_letter(start_col)}{start_row} 起", log=log,
+        )
+        append_report(
+            region, period, task_key, engine, "✅ Python寫入完成（讀回一致）",
+            ws, start_row, start_col, python_count=num_rows, log=log,
         )
         return num_rows
 
@@ -281,11 +310,23 @@ def run_import(
                 diff_summary=summarize_diffs(diffs, start_row, start_col=start_col),
                 log=log,
             )
+            append_report(
+                region, period, task_key, engine,
+                "✅ 一致，可切換 PYTHON" if not diffs else "❌ 不一致，先不要切換",
+                ws, start_row, start_col, importrange_count=num_rows,
+                python_count=len(py_rows), diff_count=len(diffs),
+                diff_summary=summarize_diffs(diffs, start_row, start_col=start_col), log=log,
+            )
         except Exception as e:
             log.append(f"    ⚠️ 比對失敗（不影響匯入結果）：{e}")
             append_engine_log(
                 region, period, task_key, engine, "比對失敗",
                 importrange_count=num_rows, note=str(e), log=log,
+            )
+            append_report(
+                region, period, task_key, engine, "❌ Python比對失敗，先不要切換",
+                ws, start_row, start_col, importrange_count=num_rows,
+                diff_summary=str(e), log=log,
             )
     return num_rows
 
@@ -315,3 +356,48 @@ def append_engine_log(
     except Exception as e:
         if log is not None:
             log.append(f"    ⚠️ 「{LOG_SHEET}」寫入失敗：{e}")
+
+
+def sheet_url(spreadsheet_id: str, gid=None, cell: str = "") -> str:
+    url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
+    if gid is not None:
+        url += f"#gid={gid}" + (f"&range={cell}" if cell else "")
+    return url
+
+
+def append_report(
+    region: str, period: str, task_key: str, engine: str, result: str,
+    ws, start_row: int, start_col: int,
+    importrange_count="", python_count="", diff_count="", diff_summary="",
+    log: List[str] | None = None,
+) -> str:
+    """
+    試跑比對／PYTHON 每次匯入都記到主控試算表「Python匯入-{期別}」分頁（不存在自動新增），
+    並在日誌顯示結果、寫入位置連結與紀錄分頁連結。失敗只記日誌，不中斷流程。
+    """
+    label = "試跑比對" if engine == ENGINE_COMPARE else engine
+    if log is not None:
+        log.append(f"    {result}（{label}）")
+    try:
+        from modules.auth import open_spreadsheet
+        from modules.master_sheet import MASTER_SHEET_ID, _get_or_create_log_sheet
+
+        cell = f"{col_letter(start_col)}{start_row}"
+        target_url = sheet_url(ws.spreadsheet.id, ws.id, cell)
+        ss = open_spreadsheet(MASTER_SHEET_ID)
+        report = _get_or_create_log_sheet(ss, f"{REPORT_SHEET_PREFIX}{period}", REPORT_HEADER)
+        report.append_row([
+            datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %H:%M:%S"),
+            region, task_key, label, result, importrange_count, python_count,
+            diff_count, diff_summary, f"{ws.title}!{cell} 起",
+            f'=HYPERLINK("{target_url}","開啟{ws.title}")',
+        ], value_input_option="USER_ENTERED")
+        report_url = sheet_url(MASTER_SHEET_ID, report.id)
+        if log is not None:
+            log.append(f"    🔗 寫入位置：{target_url}")
+            log.append(f"    🔗 本期匯入紀錄：{report_url}")
+        return report_url
+    except Exception as e:
+        if log is not None:
+            log.append(f"    ⚠️ 「{REPORT_SHEET_PREFIX}{period}」寫入失敗（不影響匯入結果）：{e}")
+        return ""
