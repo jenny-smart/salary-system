@@ -181,12 +181,32 @@ def _clear_first_half(ws: gspread.Worksheet, log: List[str]) -> None:
     _log(log, "    上半月：已清空 A2:AC")
 
 
+def _cell_error_detail(ws, cell: str) -> tuple[str, str]:
+    """讀取儲存格錯誤的類型與原因訊息（畫面上只看得到 #N/A，API 才看得到原因）。"""
+    meta = ws.spreadsheet.fetch_sheet_metadata(params={
+        "includeGridData": "true",
+        "ranges": f"'{ws.title}'!{cell}",
+        "fields": "sheets.data.rowData.values.effectiveValue.errorValue",
+    })
+    try:
+        err = meta["sheets"][0]["data"][0]["rowData"][0]["values"][0]["effectiveValue"]["errorValue"]
+    except (KeyError, IndexError, TypeError):
+        return "", ""
+    return str(err.get("type", "")), str(err.get("message", ""))
+
+
+def _is_filter_no_match(err_type: str, message: str) -> bool:
+    """FILTER 篩不到任何資料：#N/A 且原因訊息提到 FILTER（英文或中文介面訊息都含 FILTER）。"""
+    return err_type == "N_A" and "FILTER" in message.upper()
+
+
 def _wait_and_convert(
     ws: gspread.Worksheet,
     check_cell: str,
     log: List[str],
     extra_wait: int = 3,
     timeout: int = 90,
+    empty_ok: bool = True,
 ) -> int:
     """
     等待 FILTER / IMPORTRANGE 真正載入完成後才轉為靜態值。
@@ -198,6 +218,9 @@ def _wait_and_convert(
     3. 新匯入區 A:AC 內只要仍有試算表錯誤，就不允許轉靜態值。
     4. 匯入列數連續兩次檢查一致後，才視為 spill 已穩定。
     5. timeout 時直接失敗，不轉值，避免把 #REF! 固定成靜態文字。
+    6. check_cell 為 #N/A 時讀取錯誤原因；若是「FILTER 篩不到資料」且連續兩次確認，
+       視為本期無資料：清掉公式，empty_ok=True 回傳 0，empty_ok=False 直接報錯停止。
+       其他 #N/A（例如還在載入、VLOOKUP 找不到）照原本繼續等待。
     """
 
     error_tokens = (
@@ -218,20 +241,44 @@ def _wait_and_convert(
     stable_count = 0
     previous_rows = None
     last_row = 0
+    no_match_count = 0
 
     while time.time() < deadline:
         first = ws.acell(check_cell).value
         if not first or not str(first).strip():
             _log(log, f"    等待 IMPORTRANGE：{check_cell} 尚未有資料")
             stable_count = 0
+            no_match_count = 0
             time.sleep(2)
             continue
 
         if _is_error(first):
-            _log(log, f"    等待 IMPORTRANGE：{check_cell}={first}")
             stable_count = 0
+            err_type, err_msg = "", ""
+            if "#N/A" in str(first).upper():
+                try:
+                    err_type, err_msg = _cell_error_detail(ws, check_cell)
+                except Exception as e:
+                    _log(log, f"    ⚠️ 讀取錯誤原因失敗，繼續等待：{e}")
+            if _is_filter_no_match(err_type, err_msg):
+                no_match_count += 1
+                if no_match_count >= 2:
+                    ws.batch_clear([check_cell])
+                    if not empty_ok:
+                        raise ValueError(
+                            f"來源篩不到本期資料（{check_cell}：{err_msg}），"
+                            "請確認期別與來源試算表；已清除公式"
+                        )
+                    _log(log, f"    來源篩不到本期資料（{err_msg}），視為無資料；已清除公式")
+                    return 0
+                _log(log, f"    {check_cell}=#N/A：FILTER 篩不到資料，再確認一次")
+            else:
+                no_match_count = 0
+                detail = f"（{err_msg}）" if err_msg else ""
+                _log(log, f"    等待 IMPORTRANGE：{check_cell}={first}{detail}")
             time.sleep(2)
             continue
+        no_match_count = 0
 
         # 從本次匯入起始列開始，找 A 欄連續非空白資料。
         a_vals = ws.get(f"A{start_row}:A") or []
@@ -434,7 +481,8 @@ def _allowance_importrange(ws, allowance_id: str, schedule: str, target_row: int
     )
     ws.update_cell(target_row, 1, formula)
     _log(log, f"    IMPORTRANGE 已寫入 A{target_row}")
-    return _wait_and_convert(ws, f"A{target_row}", log)
+    # 01專員請款整期沒有請款多半是期別或來源設定錯誤 → 不允許空白，直接停止
+    return _wait_and_convert(ws, f"A{target_row}", log, empty_ok=False)
 
 
 def _import_allowance_rows(

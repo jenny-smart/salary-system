@@ -334,3 +334,52 @@ class AdjustFormulaTest(unittest.TestCase):
             '=ARRAYFORMULA(IF(S3:S300="",,VLOOKUP(S3:S300,'
             'IMPORTRANGE("SID","202611調薪資料!B3:AF300"),{26,27,28,29,30,31},FALSE)))',
         )
+
+
+class FilterNoMatchTest(unittest.TestCase):
+    """IMPORTRANGE 時「FILTER 篩不到資料」要能跟「還在載入」分開。"""
+
+    def setUp(self):
+        self.cp2, patcher = _isolated_import("modules.cleaning_process_2")
+        self.addCleanup(patcher.stop)
+        sleep = mock.patch.object(self.cp2.time, "sleep")
+        sleep.start()
+        self.addCleanup(sleep.stop)
+
+    def _ws(self, err_type, message):
+        ws = mock.MagicMock()
+        ws.title = "02儲值獎金"
+        ws.acell.return_value.value = "#N/A"
+        ws.spreadsheet.fetch_sheet_metadata.return_value = {"sheets": [{"data": [{"rowData": [
+            {"values": [{"effectiveValue": {"errorValue": {"type": err_type, "message": message}}}]}
+        ]}]}]}
+        return ws
+
+    def test_detects_filter_message_en_and_zh(self):
+        self.assertTrue(self.cp2._is_filter_no_match("N_A", "No matches are found in FILTER evaluation."))
+        self.assertTrue(self.cp2._is_filter_no_match("N_A", "在 FILTER 運算中找不到相符項目。"))
+        self.assertFalse(self.cp2._is_filter_no_match("N_A", "Did not find value '王小美' in VLOOKUP evaluation."))
+        self.assertFalse(self.cp2._is_filter_no_match("REF", "FILTER"))
+
+    def test_no_match_returns_zero_and_clears_formula(self):
+        ws = self._ws("N_A", "No matches are found in FILTER evaluation.")
+        log = []
+        self.assertEqual(self.cp2._wait_and_convert(ws, "A2", log), 0)
+        ws.batch_clear.assert_called_once_with(["A2"])
+        self.assertEqual(ws.spreadsheet.fetch_sheet_metadata.call_count, 2)   # 連續確認兩次
+        self.assertIn("視為無資料", log[-1])
+
+    def test_no_match_raises_when_empty_not_ok(self):
+        ws = self._ws("N_A", "No matches are found in FILTER evaluation.")
+        with self.assertRaises(ValueError) as ctx:
+            self.cp2._wait_and_convert(ws, "A2", [], empty_ok=False)
+        self.assertIn("篩不到本期資料", str(ctx.exception))
+        ws.batch_clear.assert_called_once_with(["A2"])
+
+    def test_other_na_keeps_waiting_until_timeout(self):
+        ws = self._ws("N_A", "Loading data...")
+        clock = iter(range(0, 1000, 10))
+        with mock.patch.object(self.cp2.time, "time", side_effect=lambda: next(clock)):
+            with self.assertRaises(TimeoutError):
+                self.cp2._wait_and_convert(ws, "A2", [], timeout=30)
+        ws.batch_clear.assert_not_called()
