@@ -236,18 +236,29 @@ class AdjustBlockTest(unittest.TestCase):
         salary = [_salary_row("王小美", [1] * 8, [2] * 6)]
         self.assertEqual(len(self.cp1._adj_build_block(roster, salary)), 1)
 
-    def test_same_row_filter_compacts_like_sheets(self):
-        # 第 2 列名字不同列對齊 → 被 FILTER 濾掉；後面空白列（空=空）會補上來，結果錯位。
+    def test_matches_by_name_even_when_order_differs(self):
+        # 調薪資料順序與名冊不同：原公式會放錯列，姓名對應則正確。
         roster = [["王小美"], ["李大華"]]
-        salary = [_salary_row("王小美", [1] * 8, [1] * 6), _salary_row("陳一", [9] * 8, [9] * 6)]
+        salary = [
+            _salary_row("李大華", [2] * 8, [20] * 6),
+            _salary_row("王小美", [1] * 8, [10] * 6),
+        ]
         block = self.cp1._adj_build_block(roster, salary)
-        self.assertEqual(block[1][6:14], [""] * 8)
+        self.assertEqual(block[0][6:14], [1] * 8)
+        self.assertEqual(block[0][14:20], [10] * 6)
+        self.assertEqual(block[1][6:14], [2] * 8)
 
-    def test_not_enough_matches_raises(self):
-        roster = [[f"人{i}"] for i in range(298)]
-        salary = [_salary_row("別人", [1] * 8, [1] * 6)] * 298
-        with self.assertRaises(RuntimeError):
+    def test_duplicate_name_uses_first_row_like_vlookup(self):
+        roster = [["王小美"]]
+        salary = [_salary_row("王小美", [1] * 8, [1] * 6), _salary_row("王小美", [9] * 8, [9] * 6)]
+        self.assertEqual(self.cp1._adj_build_block(roster, salary)[0][6], 1)
+
+    def test_missing_name_raises_with_names(self):
+        roster = [["王小美"], ["新人甲"]]
+        salary = [_salary_row("王小美", [1] * 8, [1] * 6)]
+        with self.assertRaises(RuntimeError) as ctx:
             self.cp1._adj_build_block(roster, salary)
+        self.assertIn("新人甲", str(ctx.exception))
 
     def test_empty_roster_raises(self):
         with self.assertRaises(ValueError):

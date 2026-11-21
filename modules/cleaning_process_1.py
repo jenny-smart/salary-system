@@ -839,14 +839,16 @@ _ADJ_SALARY_ROWS = 298         # 調薪資料!B3:R300、AA3:AF300；比對 S3:S3
 
 def _adj_build_block(roster_raw: List[list], salary_raw: List[list]) -> List[list]:
     """
-    Python 版 S3:AL，逐步重現原本三個公式的結果：
+    Python 版 S3:AL：
 
-      S3   =IMPORTRANGE(名冊!B2:F300)
-      Y3   =ARRAYFORMULA(IF(S3:S300="",,FILTER(調薪資料!K3:R300, 調薪資料!B3:B300=S3:S300)))
-      AG3  =ARRAYFORMULA(IF(S3:S300="",,FILTER(調薪資料!AA3:AF300, 調薪資料!B3:B300=S3:S300)))
+      S:W   = 名冊!B2:F300（S 欄從 S3 起連續有姓名的列）
+      Y:AF  = 調薪資料 K:R    ┐ 依 S 欄姓名，到調薪資料 B 欄找「同名」的列
+      AG:AL = 調薪資料 AA:AF  ┘（同名多列時取第一列，與 VLOOKUP 相同）
 
-    注意 B3:B300=S3:S300 是「同一列對同一列」比對（不是查表），FILTER 會把符合的列往上補齊；
-    轉值只保留 S 欄從 S3 起連續有值的列。若符合列數不足，原公式會出現 #N/A 而拒絕轉值，這裡同樣報錯。
+    與原 IMPORTRANGE 公式的差異：原公式用 調薪資料!B3:B300=S3:S300「同一列對同一列」比對，
+    名冊與調薪資料人員順序不同時，資料會放錯列且不會報錯。這裡改用姓名對應；
+    順序一致時兩者結果相同，順序不一致時 COMPARE 會顯示「不一致」指出錯位的格子。
+    名冊上的姓名在調薪資料找不到時直接停止並列出姓名。
     roster_raw：名冊!B2:F300（UNFORMATTED）；salary_raw：調薪資料!B3:AF300（UNFORMATTED）。
     """
     roster = _engine.pad_rows(roster_raw, 5)
@@ -863,20 +865,23 @@ def _adj_build_block(roster_raw: List[list], salary_raw: List[list]) -> List[lis
     if num_rows == 0:
         raise ValueError("00調薪 名冊 S 欄無有效資料")
 
-    matched = [
-        salary[i] for i in range(_ADJ_SALARY_ROWS)
-        if _engine._sheets_equal(salary[i][0], names[i])
-    ]
-    if len(matched) < num_rows:
+    by_name = {}
+    for row in salary:
+        key = str(row[0]).casefold()          # 與 Sheets 比對相同：不分大小寫、不去空白
+        if str(row[0]).strip() and key not in by_name:
+            by_name[key] = row
+
+    missing = [names[r] for r in range(num_rows) if str(names[r]).casefold() not in by_name]
+    if missing:
         raise RuntimeError(
-            f"00調薪 調薪資料與名冊同列比對只符合 {len(matched)} 列，少於名冊 {num_rows} 人"
-            "（原公式會出現 #N/A 而無法轉值）"
+            "00調薪 名冊上的專員在調薪資料找不到：" + "、".join(map(str, missing[:10]))
+            + (f" 等共 {len(missing)} 人" if len(missing) > 10 else "")
         )
 
-    block = [
-        roster[r] + [""] + matched[r][9:17] + matched[r][25:31]
-        for r in range(num_rows)
-    ]
+    block = []
+    for r in range(num_rows):
+        src = by_name[str(names[r]).casefold()]
+        block.append(roster[r] + [""] + src[9:17] + src[25:31])
     if any(_engine.is_sheet_error(v) for row in block for v in row):
         raise RuntimeError("00調薪 來源資料含試算表錯誤值，已停止")
     return block
