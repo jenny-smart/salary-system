@@ -738,13 +738,17 @@ execution_engine = st.selectbox(
 _IMPORT_FUNCS = ("② 00調薪", "③ 01專員請款", "④ 02儲值獎金", "⑩ 一鍵執行")
 if (system == "🧹 清潔承攬" and execution_engine == "PYTHON"
         and any(f in selected_functions for f in _IMPORT_FUNCS)):
-    _import_choice = st.radio(
+    _import_label = st.radio(
         "📥 00調薪／01專員請款／02儲值獎金 匯入方式",
-        ["IMPORTRANGE", "PYTHON"],
+        ["IMPORTRANGE", "試跑比對", "PYTHON"],
         index=0, horizontal=True, key="import_method",
-        help="預設 IMPORTRANGE（原本做法）。選 PYTHON 會直接讀來源寫入，"
-             "完成後在執行日誌顯示結果連結，並記到 LemonSalarySystem「Python匯入-期別」分頁。",
+        help="IMPORTRANGE：原本做法（預設）。"
+             "試跑比對：照原本 IMPORTRANGE 寫入（結果以它為準），另用 Python 算一次逐格比對，"
+             "告訴你能不能切換 PYTHON。"
+             "PYTHON：直接用 Python 寫入。"
+             "試跑比對與 PYTHON 的結果都記到 LemonSalarySystem「Python匯入-期別」分頁，並在日誌顯示連結。",
     )
+    _import_choice = {"試跑比對": "COMPARE"}.get(_import_label, _import_label)
 else:
     _import_choice = "IMPORTRANGE"
 

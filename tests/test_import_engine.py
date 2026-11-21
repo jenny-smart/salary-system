@@ -607,8 +607,10 @@ class ImportMethodOverrideTest(unittest.TestCase):
         self.assertEqual(n, 1)
         self.assertEqual(created, ["Python匯入-202611-2"])
         row = report.append_row.call_args[0][0]
-        self.assertEqual(row[1:5], ["台北", "01專員請款", 1, "一致"])
-        self.assertIn("REGION/edit#gid=7&range=A5", row[6])
+        self.assertEqual(row[1:4], ["台北", "01專員請款", "PYTHON"])
+        self.assertIn("Python寫入完成", row[4])
+        self.assertEqual(row[6], 1)
+        self.assertIn("REGION/edit#gid=7&range=A5", row[10])
         self.assertTrue(any("REGION/edit#gid=7&range=A5" in m for m in log))
         self.assertTrue(any("MASTER/edit#gid=99" in m for m in log))
 
@@ -622,3 +624,49 @@ class ImportMethodOverrideTest(unittest.TestCase):
             )
         self.assertEqual(n, 1)
         self.assertTrue(any("不影響匯入結果" in m for m in log))
+
+
+class ReportOutcomeTest(unittest.TestCase):
+    """試跑比對要明確告訴能不能切換；PYTHON 失敗退回 IMPORTRANGE 也要記到紀錄分頁。"""
+
+    def tearDown(self):
+        engine.set_engine_override(None)
+
+    def _run(self, mode, ws_rows, py_rows):
+        ws = mock.MagicMock()
+        ws.get.return_value = ws_rows
+        reports = []
+        engine.set_engine_override(mode)
+        with mock.patch.object(engine, "append_engine_log"), \
+             mock.patch.object(engine, "append_report",
+                               side_effect=lambda *a, **k: reports.append((a, k))):
+            engine.run_import(
+                "01專員請款", "台北", "202611-2", [], ws=ws, start_row=2, width=2,
+                importrange=lambda: len(ws_rows), python_rows=py_rows,
+            )
+        return reports
+
+    def test_compare_same_says_ok_to_switch(self):
+        (a, k), = self._run("COMPARE", [["a", 1]], lambda: [["a", 1]])
+        self.assertEqual(a[3], engine.ENGINE_COMPARE)
+        self.assertIn("可切換", a[4])
+        self.assertEqual(k["diff_count"], 0)
+
+    def test_compare_diff_says_do_not_switch(self):
+        (a, k), = self._run("COMPARE", [["a", 1]], lambda: [["a", 2]])
+        self.assertIn("不要切換", a[4])
+        self.assertEqual(k["diff_count"], 1)
+
+    def test_compare_python_error_says_do_not_switch(self):
+        def boom():
+            raise RuntimeError("沒權限")
+        (a, k), = self._run("COMPARE", [["a", 1]], boom)
+        self.assertIn("不要切換", a[4])
+        self.assertIn("沒權限", k["diff_summary"])
+
+    def test_python_fallback_is_reported(self):
+        def boom():
+            raise RuntimeError("沒權限")
+        (a, k), = self._run("PYTHON", [["a", 1]], boom)
+        self.assertIn("已改用IMPORTRANGE", a[4])
+        self.assertIn("沒權限", k["diff_summary"])
