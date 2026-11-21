@@ -37,6 +37,52 @@ if WRITE:
             "name": f"[備份{stamp}]{meta['name']}", "parents": meta.get("parents", [])}).execute()
         print(f"[備份] {region} → {cp['id']}")
 
+
+# ── 修正補上的「薪資總表」E1/F1（舊檔沒有「水洗訂單」或 AD1 寫法不同），並重跑 ⑥ ──
+import re as _re  # noqa: E402
+from modules.contract_report import run_contract_report_all  # noqa: E402
+from modules.other_contract_process import _find_other_file  # noqa: E402
+from modules.year_root import cfg_for_period  # noqa: E402
+
+gc = auth.get_gspread_client()
+reg_rows = gc.open_by_key("1GdW3FSZ0s3TGeYiNx3JtYvED_RRfJjiFYwLFeYHZ1hA").worksheet("地區設定").get_all_values()
+cfgs = {r[0]: dict(zip(reg_rows[0], r + [""] * 20)) for r in reg_rows[1:]}
+
+
+def norm(v):
+    return _re.sub(r"[^0-9-]", "", str(v or ""))
+
+
+for region in REPORT:
+    for m in range(1, 11):
+        period = f"2026{m:02d}-2"
+        cfg = cfg_for_period(cfgs[region], period)
+        changed = False
+        for half in ("1", "2"):
+            p = f"2026{m:02d}-{half}"
+            try:
+                oss = jgc.open_by_key(_find_other_file(cfg["root_folder_id"], p, region))
+            except Exception:
+                continue
+            titles = [t.title for t in oss.worksheets()]
+            if "薪資總表" not in titles:
+                continue
+            ws = oss.worksheet("薪資總表")
+            e1f1 = (ws.get("E1:F1") or [["", ""]])[0] + ["", ""]
+            ad1 = str((oss.worksheet("水洗薪資單").get("AD1") or [[""]])[0][0]).strip()
+            want = []
+            for k, h in enumerate(("1", "2")):
+                target = f"2026{m:02d}-{h}"
+                want.append(ad1 if norm(ad1) == target else target)
+            bad = any("#" in str(x) for x in e1f1) or "水洗訂單" not in titles
+            if bad or (norm(ad1) in (f"2026{m:02d}-1", f"2026{m:02d}-2") and ad1 not in e1f1):
+                print(f"[薪資總表] {region} {p} E1/F1 {e1f1[:2]} → {want}（AD1={ad1}）")
+                if WRITE:
+                    ws.update(values=[want], range_name="E1:F1", value_input_option="RAW")
+                changed = True
+        if changed and WRITE:
+            run_contract_report_all(region, period, cfg["root_folder_id"], cfg, print)
+
 for region, rid in REPORT.items():
     ss = jgc.open_by_key(rid)
     wm = ss.worksheet("水洗各月")
@@ -60,7 +106,8 @@ for region, rid in REPORT.items():
     names = [str(r[0]).strip() if r else "" for r in (w.get(f"A{START}:A300") or [])]
     row_of = {n: START + i for i, n in enumerate(names) if n}
     last = START + max([i for i, n in enumerate(names) if n], default=-1)
-    has_amount = sorted({n for (n, _), v in monthly.items() if any(num(x) for x in v)})
+    has_amount = sorted({n for (n, _), v in monthly.items() if any(num(x) for x in v)}
+                        | ({"陳信全"} if region == "台中" else set()))
     data = []
     for n in has_amount:
         if n not in row_of:
