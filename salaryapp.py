@@ -507,6 +507,10 @@ def add_log(message: str, level: str = "info"):
         _render_log(st.session_state.log_placeholder)
 
 
+import re as _re
+_LOG_URL_RE = _re.compile(r"https://docs\.google\.com/spreadsheets/[^\s<>\"]+")
+
+
 def _render_log(placeholder):
     entries = list(st.session_state.logs)
     html = (
@@ -524,6 +528,10 @@ def _render_log(placeholder):
             css += " error"
         elif "⚠️" in entry:
             css += " warning"
+        entry = _LOG_URL_RE.sub(
+            lambda m: f'<a href="{m.group(0)}" target="_blank" style="color:#7fd3ff;">開啟連結</a>',
+            str(entry),
+        )
         html += f'<div class="{css}">{entry}</div>'
     html += '</div></div>'
     placeholder.markdown(html, unsafe_allow_html=True)
@@ -727,6 +735,19 @@ execution_engine = st.selectbox(
     help="尚未完成 Python 驗證的功能可切回 GAS；複選功能或地區時僅能使用 PYTHON。",
 )
 
+_IMPORT_FUNCS = ("② 00調薪", "③ 01專員請款", "④ 02儲值獎金", "⑩ 一鍵執行")
+if (system == "🧹 清潔承攬" and execution_engine == "PYTHON"
+        and any(f in selected_functions for f in _IMPORT_FUNCS)):
+    _import_choice = st.radio(
+        "📥 00調薪／01專員請款／02儲值獎金 匯入方式",
+        ["IMPORTRANGE", "PYTHON"],
+        index=0, horizontal=True, key="import_method",
+        help="預設 IMPORTRANGE（原本做法）。選 PYTHON 會直接讀來源寫入，"
+             "完成後在執行日誌顯示結果連結，並記到 LemonSalarySystem「Python匯入-期別」分頁。",
+    )
+else:
+    _import_choice = "IMPORTRANGE"
+
 start_clicked = st.button(
     "▶ 執行"
     + (f"（{len(selected_names)} 區 × {len(selected_functions)} 項）"
@@ -747,6 +768,7 @@ if start_clicked:
     )
     st.session_state["execution_queue"] = active_queue
     st.session_state.pop("pdf_result", None)
+    st.session_state["import_method_run"] = _import_choice
     current_item = active_queue[0] if active_queue else {}
     selected_function = current_item.get("function", "")
     if len(active_queue) > 1:
@@ -1071,6 +1093,8 @@ if run_clicked and _run_engine == "GAS":
 
 if run_clicked and _run_engine == "PYTHON":
     _remember_engine("PYTHON")
+    from modules import import_engine as _import_engine
+    _import_engine.set_engine_override(st.session_state.get("import_method_run", "IMPORTRANGE"))
     _period = _run_period
     _system = _run_system
     _func   = selected_function
