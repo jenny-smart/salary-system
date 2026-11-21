@@ -383,3 +383,169 @@ class FilterNoMatchTest(unittest.TestCase):
             with self.assertRaises(TimeoutError):
                 self.cp2._wait_and_convert(ws, "A2", [], timeout=30)
         ws.batch_clear.assert_not_called()
+
+
+# 202611-1 台北 薪資表 L 欄實際的舊版公式（含換行）
+REAL_OLD = {
+    "L1996": "=SUM(L2003:L2012)-L2015",
+    "L2006": '=IFERROR(\n  SUM(FILTER(L$2:L$1995,\n    (($B$2:$B$1995<$B$2006)+($B$2:$B$1995>$B$2008))*\n    ($C$2:$C$1995<>"六")*\n    ($C$2:$C$1995<>"日")*\n    ($D$2:$D$1995<>"19:00-21:00")*\n    ($D$2:$D$1995<>"19:00-22:00")*\n    ($D$2:$D$1995<>"19:00-23:00")\n  )),\n0)',
+    "L2008": '=IFERROR(\n  SUM(FILTER(L$2:L$1995,\n    (($B$2:$B$1995<$B$2006)+($B$2:$B$1995>$B$2008))*\n    (($C$2:$C$1995="六")+($C$2:$C$1995="日"))*\n    ($D$2:$D$1995<>"19:00-21:00")*\n    ($D$2:$D$1995<>"19:00-22:00")*\n    ($D$2:$D$1995<>"19:00-23:00")\n  )),\n0)\n',
+    "L2009": '=IFERROR(\n  SUM(FILTER(L$2:L$1995,\n    ($B$2:$B$1995>=$B$2006)*($B$2:$B$1995<=$B$2007)*\n    ($C$2:$C$1995<>"六")*($C$2:$C$1995<>"日")\n  )),\n0)\n',
+    "L2010": '=IFERROR(\n  SUM(FILTER(L$2:L$1995,\n    ($B$2:$B$1995>=$B$2006)*($B$2:$B$1995<=$B$2007)*\n    (\n      ($D$2:$D$1995="19:00-21:00")+($D$2:$D$1995="19:00-22:00")+($D$2:$D$1995="19:00-23:00")\n    )\n  )),\n0)\n',
+    "L2011": '=IFERROR(\n  SUM(FILTER(L$2:L$1995,\n    ($B$2:$B$1995>=$B$2006)*($B$2:$B$1995<$B$2007)*\n    (\n      ($C$2:$C$1995="六")+($C$2:$C$1995="日")\n    )\n  )),\n0)\n',
+    "L2012": '=IFERROR(\n  SUM(FILTER(L$2:L$1995,\n    ($B$2:$B$1995>=$B$2007)*($B$2:$B$1995<=$B$2008)\n  )),\n0)\n',
+    "L2013": "", "L2014": "",
+    "L2021": "=VLOOKUP(L$1,'00調薪'!$A:$M,10,false)",
+    "L2022": "=VLOOKUP(L$1,'00調薪'!$A:$M,11,false)",
+    "L2023": "=VLOOKUP(L$1,'00調薪'!$A:$M,12,false)",
+    "L2024": "=VLOOKUP(L$1,'00調薪'!$A:$M,13,false)",
+    "L2025": "=VLOOKUP(L$1,'00調薪'!$A:$M,14,false)",
+    "L2026": "=VLOOKUP(L$1,'00調薪'!$A:$M,15,false)",
+    "L2027": "=L2002*L2016+L2003*L2017+L2004*L2016+L2005*L2017+L2006*L2018+L2007*L2019+L2008*L2020+L2009*L2021+L2010*L2022+L2011*L2023+L2012*L2024",
+}
+
+
+class SalaryTemplateTest(unittest.TestCase):
+    """前置作業：薪資表 L 欄範本（實習扣除、大掃除分類）。"""
+
+    def setUp(self):
+        self.cp1, patcher = _isolated_import("modules.cleaning_process_1")
+        self.addCleanup(patcher.stop)
+
+    def _ws(self, cells):
+        ws = mock.MagicMock()
+        ws.title = "薪資表"
+        ws.batch_get.side_effect = lambda ranges, **k: [
+            [[cells[r]]] if cells.get(r) else [] for r in ranges
+        ]
+        return ws
+
+    def _written(self, ws):
+        if not ws.batch_update.called:
+            return {}
+        return {d["range"]: d["values"][0][0] for d in ws.batch_update.call_args[0][0]}
+
+    def _new_cells(self):
+        cp = self.cp1
+        cells = {f"L{r}": f + d for r, (f, d, _) in cp._CLEANUP_ROWS.items()}
+        cells["L1996"] = cp._CHECK_1996[0]
+        cells["L2006"] = REAL_OLD["L2006"] + cp._INTERN_SUFFIX[2006]
+        cells["L2008"] = REAL_OLD["L2008"] + cp._INTERN_SUFFIX[2008]
+        return cells
+
+    def test_upgrades_real_old_template(self):
+        ws = self._ws(REAL_OLD)
+        log = []
+        self.cp1._ensure_salary_template(ws, log)
+        w = self._written(ws)
+        self.assertEqual(set(w), {f"L{r}" for r in (1996, 2006, 2008, *range(2009, 2015), *range(2021, 2028))})
+        self.assertNotIn("L2004", w)
+        self.assertNotIn("L2005", w)
+        b, e = "$B$2:$B$1995", "'04新人實習'!$E$2:$E$500"
+        # 大掃除1 結束改為 < B2007（B2007 當天只屬於大掃除2）
+        self.assertIn(f"({b}<$B$2007)", w["L2009"])
+        self.assertIn(f"({b}<$B$2007)", w["L2010"])
+        # 大掃除2 分平日／晚間／週末
+        self.assertIn('($C$2:$C$1995<>"六")', w["L2012"])
+        self.assertIn('($D$2:$D$1995="19:00-21:00")', w["L2013"])
+        self.assertIn('(($C$2:$C$1995="六")+($C$2:$C$1995="日"))', w["L2014"])
+        # 實習扣除
+        for r in ("L2009", "L2011", "L2012", "L2014"):
+            self.assertIn("'04新人實習'", w[r])
+        self.assertNotIn("'04新人實習'", w["L2010"])
+        self.assertNotIn("'04新人實習'", w["L2013"])
+        self.assertIn(f"({e}<$B$2007)*(WEEKDAY({e},2)<=5)", w["L2009"])
+        self.assertIn(f"({e}<=$B$2008)*(WEEKDAY({e},2)>5)", w["L2014"])
+        # 費率：00調薪 J:O，大掃除1 晚間／週末對調修正、大掃除2 #REF! 修正
+        self.assertEqual(w["L2022"], "=VLOOKUP(L$1,'00調薪'!$A:$O,12,false)")
+        self.assertEqual(w["L2023"], "=VLOOKUP(L$1,'00調薪'!$A:$O,11,false)")
+        self.assertEqual(w["L2025"], "=VLOOKUP(L$1,'00調薪'!$A:$O,15,false)")
+        self.assertEqual(w["L2026"], "=VLOOKUP(L$1,'00調薪'!$A:$O,14,false)")
+        self.assertTrue(w["L2027"].endswith("+L2012*L2024+L2013*L2025+L2014*L2026"))
+        self.assertEqual(w["L1996"], "=SUM(L2003:L2014)-L2015")
+        self.assertIn("已更新", log[-1])
+
+    def test_already_new_writes_nothing(self):
+        ws = self._ws(self._new_cells())
+        self.cp1._ensure_salary_template(ws, [])
+        ws.batch_update.assert_not_called()
+
+    def test_unexpected_cleanup_row_skips_whole_cleanup_group(self):
+        cells = dict(REAL_OLD, L2012="=自訂公式")
+        ws = self._ws(cells)
+        log = []
+        self.cp1._ensure_salary_template(ws, log)
+        w = self._written(ws)
+        self.assertEqual(set(w), {"L2006", "L2008"})      # 只做一般平日／週末的實習扣除
+        self.assertTrue(any("整組未更新" in line for line in log))
+
+    def test_manual_minus_2003_is_replaced(self):
+        suffix = self.cp1._INTERN_SUFFIX[2006]
+        self.assertEqual(self.cp1._with_suffix("=SUM(X)-L2003", suffix), "=SUM(X)" + suffix)
+        self.assertEqual(self.cp1._with_suffix("=SUM(X) - L2003 ", suffix), "=SUM(X)" + suffix)
+
+
+class CleanupDatesTest(unittest.TestCase):
+    """大掃除日期：網頁設定 → 前置作業寫入 B2006:B2008；11、12 月提醒。"""
+
+    def setUp(self):
+        from datetime import date
+        from modules import cleanup_dates as cd
+        self.cd, self.date = cd, date
+        self.dates = cd.CleanupDates(date(2026, 12, 15), date(2027, 1, 21), date(2027, 2, 4))
+
+    def test_parse_and_validate(self):
+        cd, d = self.cd, self.date
+        self.assertEqual(cd.parse_row(["2026/12/15", "2027/1/21", "2027-02-04"]), self.dates)
+        self.assertIsNone(cd.parse_row(["2026/12/15", "", "2027/2/4"]))
+        self.assertEqual(self.dates.errors(), [])
+        self.assertTrue(cd.CleanupDates(d(2027, 1, 21), d(2026, 12, 15), d(2027, 2, 4)).errors())
+        self.assertTrue(cd.CleanupDates(d(2026, 12, 15), d(2027, 1, 21), d(2027, 1, 20)).errors())
+
+    def test_reminder_only_in_nov_dec_when_not_set_for_this_season(self):
+        cd, d = self.cd, self.date
+        last_season = cd.CleanupDates(d(2025, 12, 25), d(2026, 2, 1), d(2026, 2, 16))
+        self.assertTrue(cd.needs_reminder(d(2026, 11, 1), None))
+        self.assertTrue(cd.needs_reminder(d(2026, 11, 21), last_season))
+        self.assertFalse(cd.needs_reminder(d(2026, 11, 21), self.dates))
+        self.assertFalse(cd.needs_reminder(d(2026, 10, 31), None))
+        self.assertTrue(cd.needs_reminder(d(2026, 12, 20), last_season))
+
+    def _ss(self, titles):
+        ss = mock.MagicMock()
+        sheets = {t: mock.MagicMock(title=t) for t in titles}
+        ss.worksheets.return_value = list(sheets.values())
+        ss.worksheet.side_effect = lambda name: sheets[name]
+        return ss, sheets
+
+    def test_writes_both_sheets(self):
+        ss, sheets = self._ss(["薪資表", "專案薪資表", "清潔訂單"])
+        log = []
+        self.cd.apply_to_cleaning_file(ss, self.dates, log)
+        for name in ("薪資表", "專案薪資表"):
+            sheets[name].update.assert_called_once_with(
+                values=[["2026/12/15"], ["2027/1/21"], ["2027/2/4"]],
+                range_name="B2006:B2008", value_input_option="USER_ENTERED",
+            )
+        sheets["清潔訂單"].update.assert_not_called()
+        self.assertIn("已寫入", log[-1])
+
+    def test_missing_settings_keeps_file_dates(self):
+        ss, sheets = self._ss(["薪資表"])
+        log = []
+        self.cd.apply_to_cleaning_file(ss, None, log)
+        sheets["薪資表"].update.assert_not_called()
+        self.assertIn("維持原日期", log[-1])
+
+    def test_settings_read_failure_does_not_break_preparation(self):
+        ss, sheets = self._ss(["薪資表"])
+        log = []
+        import sys
+        import types
+        master = types.ModuleType("modules.master_sheet")
+        master.MASTER_SHEET_ID = "SHEET"
+        with mock.patch.dict(sys.modules, {"modules.master_sheet": master}), \
+             mock.patch.object(self.cd, "load", side_effect=RuntimeError("quota")):
+            self.cd.apply_from_settings(ss, log)
+        sheets["薪資表"].update.assert_not_called()
+        self.assertIn("quota", log[-1])
