@@ -3,13 +3,15 @@
 「即時試算-{地區}」「即時試算明細-{地區}」（每次整份覆寫，不動期別檔）。
 
 來源（ID 取自 LemonSalarySystem「地區設定」）：
-  訂單：salary_id「訂單資料」（tool-system 每日覆寫，本月＋次月；只取服務日期 ≤ 今天）
+  訂單：allowance_id「專員訂單」（tool-system 每日產生，上個月1日～當天）；沒有這個分頁時
+        退回 salary_id「訂單資料」（本月＋次月，月初會缺上個月）。結算到執行日的前一天，
+        期別也依前一天判斷（例如 11/16 執行 → 202611-1 的 11/1～11/15）。
         之後可改讀 allowance_id「專員訂單」。
   單價：salary_id「{YYYYMM}調薪資料」B 姓名、L 調整後平日、M 調整後週末、AA:AF 大掃除。
   實習／實境：salary_id「新人實習」「新人實境」：A 期別＝本期，或 A 空白（尚未付款，不論日期）。
   加減時：allowance_id「專員收現」有訂單編號＋實際時數的列（v2.8.0）。
   大掃除日期：LemonSalarySystem「大掃除日期」。
-執行：python -m modules.live_estimate_runner --region 台北 [--date 2026-11-22] [--dry-run]
+執行：python -m modules.live_estimate_runner --region 台北 [--date 執行日 2026-11-22] [--dry-run]
 """
 from __future__ import annotations
 
@@ -96,6 +98,33 @@ def read_orders(ss, today: date, start: date) -> List[dict]:
     return out
 
 
+def read_staff_orders(ss, today: date, start: date) -> Optional[List[dict]]:
+    """內勤工作表單「專員訂單」（tool-system 每日產生：上個月1日～當天）。沒有這個分頁回傳 None。"""
+    try:
+        rows = ss.worksheet("專員訂單").get_all_values()
+    except Exception:
+        return None
+    if not rows:
+        return None
+    h = rows[0]
+    col = lambda k: h.index(k) if k in h else -1
+    idx = {k: col(k) for k in ("訂單編號", "服務日期", "服務時間", "服務時數", "客戶姓名",
+                               "服務專員", "購買項目", "取消狀態")}
+    get = lambda r, k: (r[idx[k]] if 0 <= idx[k] < len(r) else "").strip()
+    out = []
+    for r in rows[1:]:
+        item = get(r, "購買項目")
+        if any(lbl in item for lbl in OTHER_LABELS) or "清潔" not in item:
+            continue
+        d = parse_date(get(r, "服務日期"))
+        if d is None or d < start or d > today:
+            continue
+        out.append(dict(order_no=get(r, "訂單編號"), date=d, slot=get(r, "服務時間"),
+                        hours=get(r, "服務時數"), customer=get(r, "客戶姓名"),
+                        staff=get(r, "服務專員"), cancelled=bool(get(r, "取消狀態"))))
+    return out
+
+
 def read_rates(ss, yyyymm: str) -> Dict[str, Rates]:
     ws = ss.worksheet(f"{yyyymm}調薪資料")
     names, lm, af = ws.batch_get(["B3:B", "L3:M", "AA3:AF"])
@@ -174,19 +203,25 @@ def read_cleanup(gc) -> CleanupDates:
 def run(region: str, today: Optional[date] = None, dry_run: bool = False, log=print) -> dict:
     from modules.auth import get_jenny_gspread_client
     gc = get_jenny_gspread_client()
-    today = today or datetime.now(TZ).date()
+    run_day = today or datetime.now(TZ).date()
+    # 每天結算到前一天（當天的單可能還沒做完或還會改）
+    today = run_day - timedelta(days=1)
     period, start, end = period_of(today)
     ids = read_region_ids(gc, region)
     salary = gc.open_by_key(ids["salary_id"])
     allowance = gc.open_by_key(ids["allowance_id"])
 
-    orders = read_orders(salary, today, start)
+    # 優先用「專員訂單」（上個月1日起，月初也有上個月的單）；還沒有這個分頁才退回「訂單資料」
+    orders = read_staff_orders(allowance, today, start)
+    source = "專員訂單"
+    if orders is None:
+        orders, source = read_orders(salary, today, start), "訂單資料"
     rates = read_rates(salary, f"{today:%Y%m}")
     interns, bad_i = read_trainee_rows(salary, "新人實習", period, today)
     trainees, bad_t = read_trainee_rows(salary, "新人實境", period, today)
     adjustments = read_adjustments(allowance, orders)
     cleanup = read_cleanup(gc)
-    log(f"{region} {period}（{start:%m/%d}～{today:%m/%d}）：訂單 {len(orders)}、"
+    log(f"{region} {period}（{start:%m/%d}～{today:%m/%d}）：訂單 {len(orders)}（{source}）、"
         f"單價 {len(rates)} 人、實習 {len(interns)}、實境 {len(trainees)}、加減時 {len(adjustments)}")
     if bad_i or bad_t:
         log(f"⚠️ 實習／實境日期無法判讀：{bad_i}／{bad_t} 列")
