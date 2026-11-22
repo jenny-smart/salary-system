@@ -6,7 +6,7 @@
   訂單：salary_id「訂單資料」（tool-system 每日覆寫，本月＋次月；只取服務日期 ≤ 今天）
         之後可改讀 allowance_id「專員訂單」。
   單價：salary_id「{YYYYMM}調薪資料」B 姓名、L 調整後平日、M 調整後週末、AA:AF 大掃除。
-  實習／實境：salary_id「新人實習」「新人實境」：A 期別＝本期，或 A 空白（尚未歸期）。
+  實習／實境：salary_id「新人實習」「新人實境」：A 期別＝本期，或 A 空白（尚未付款，不論日期）。
   加減時：allowance_id「專員收現」有訂單編號＋實際時數的列（v2.8.0）。
   大掃除日期：LemonSalarySystem「大掃除日期」。
 執行：python -m modules.live_estimate_runner --region 台北 [--date 2026-11-22] [--dry-run]
@@ -119,14 +119,15 @@ def read_trainee_rows(ss, sheet: str, period: str, ref: date) -> Tuple[List[dict
         mark, name, hours = r[0].strip(), r[2].strip(), r[10]
         if not name:
             continue
+        # A 欄：本期期別＝本期要付；空白＝尚未付款；其他期別或「…已匯款」＝已付
         if mark and mark != period:
             continue
         d = infer_date(r[4], ref)
         if d is None:
             skipped += 1
             continue
-        if not mark and (d > ref or (ref - d).days > 60):
-            continue   # 尚未歸期的列只算今天以前、60 天內的（實境常晚一期才登記）
+        if not mark and d > ref:
+            continue   # 尚未付款（A 空白）的列全部納入，只排除還沒到的日期
         out.append(dict(name=name, date=d, hours=hours))
     return out, skipped
 

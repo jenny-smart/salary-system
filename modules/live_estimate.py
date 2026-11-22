@@ -158,8 +158,6 @@ def build_estimates(
     def est(name: str) -> Estimate:
         if name not in result:
             result[name] = Estimate(name=name, rates=rates.get(name))
-            if name not in rates:
-                result[name].warnings.append("00調薪 找不到單價")
         return result[name]
 
     def in_range(d: Optional[date]) -> bool:
@@ -182,6 +180,8 @@ def build_estimates(
                 if h != hours:
                     note = f"原{hours:g}→實際{h:g}小時"
             e = est(name)
+            if name not in rates and "調薪資料找不到單價" not in e.warnings:
+                e.warnings.append("調薪資料找不到單價")
             e.hours[cat] += h
             e.sessions.append(Session(d, o.get("slot", ""), o.get("customer", ""), h, cat,
                                       o.get("staff", ""), order_no, note))
@@ -194,6 +194,8 @@ def build_estimates(
         h = parse_number(row.get("hours"))
         e = est(row["name"])
         e.intern_hours += h
+        if not in_range(d):
+            continue   # 實習日不在本期訂單範圍（例如上期未付補發）：只計 200，不扣訂單時數
         # 實習不排晚間：從同日條件的平日／週末扣除
         cat = classify(d, "", cleanup)
         e.hours[cat] -= h

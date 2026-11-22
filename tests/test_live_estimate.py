@@ -86,6 +86,17 @@ def test_trainee_rows_current_period_or_unmarked():
         ["202611-2", "", "甲", "", "11/18", "", "", "", "", "", "2"],
         ["", "", "乙", "", "11/20", "", "", "", "", "", "3"],
         ["", "", "丙", "", "11/28", "", "", "", "", "", "3"],
+        ["", "", "丁", "", "2026/9/23", "", "", "", "", "", "2"],
+        ["2026/11/20已匯款", "", "戊", "", "2026/11/18", "", "", "", "", "", "2"],
+        ["", "", "己", "", "", "", "", "", "", "", "2"],
     ]
     got, bad = read_trainee_rows(_SS(rows), "新人實習", "202611-2", date(2026, 11, 22))
-    assert [r["name"] for r in got] == ["甲", "乙"] and bad == 0
+    assert [r["name"] for r in got] == ["甲", "乙", "丁"] and bad == 1
+
+
+def test_intern_outside_range_paid_without_deduction():
+    orders = [dict(date="2026/11/18", slot="09:00-12:00", staff="A", hours="3")]
+    est = build_estimates(orders, {"A": Rates(280, 320)},
+                          interns=[dict(name="A", date="2026/11/10", hours=3)],
+                          start=date(2026, 11, 16), end=date(2026, 11, 22))
+    assert est["A"].hours["平日"] == 3 and est["A"].amount() == 3 * 280 + 3 * 200
