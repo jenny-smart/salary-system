@@ -48,3 +48,44 @@ def test_cancelled_and_out_of_range_skipped():
     ]
     est = build_estimates(orders, {"A": Rates(300, 340)}, start=date(2026, 11, 1), end=date(2026, 11, 15))
     assert est["A"].hours["平日"] == 2
+
+
+from modules.live_estimate_runner import infer_date, period_of, read_trainee_rows
+
+
+def test_period_of():
+    assert period_of(date(2026, 11, 22)) == ("202611-2", date(2026, 11, 16), date(2026, 11, 30))
+    assert period_of(date(2026, 2, 3)) == ("202602-1", date(2026, 2, 1), date(2026, 2, 15))
+
+
+def test_infer_date_without_year():
+    assert infer_date("11/14", date(2026, 11, 22)) == date(2026, 11, 14)
+    assert infer_date("12/30", date(2027, 1, 5)) == date(2026, 12, 30)
+    assert infer_date("2026/11/2", date(2026, 11, 22)) == date(2026, 11, 2)
+
+
+class _WS:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def get(self, _):
+        return self.rows
+
+
+class _SS:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def worksheet(self, _):
+        return _WS(self.rows)
+
+
+def test_trainee_rows_current_period_or_unmarked():
+    rows = [
+        ["202611-1", "", "舊人", "", "11/12", "", "", "", "", "", "3"],
+        ["202611-2", "", "甲", "", "11/18", "", "", "", "", "", "2"],
+        ["", "", "乙", "", "11/20", "", "", "", "", "", "3"],
+        ["", "", "丙", "", "11/28", "", "", "", "", "", "3"],
+    ]
+    got, bad = read_trainee_rows(_SS(rows), "新人實習", "202611-2", date(2026, 11, 22))
+    assert [r["name"] for r in got] == ["甲", "乙"] and bad == 0

@@ -1,0 +1,42 @@
+name: 即時試算
+
+# 讀各區訂單／調薪資料／新人實習實境／專員收現，寫 LemonSalarySystem「即時試算-{地區}」。
+# 不讀寫期別檔。試跑：push 到 dryrun/live-estimate 分支。
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "地區，多區用逗號分隔"
+        required: false
+        default: "台北"
+      date:
+        description: "試算日期 YYYY-MM-DD（留空＝今天）"
+        required: false
+        default: ""
+  push:
+    branches:
+      - "dryrun/live-estimate"
+
+jobs:
+  live-estimate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run live estimate
+        env:
+          JENNY_GOOGLE_TOKEN: ${{ secrets.JENNY_GOOGLE_TOKEN }}
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          REGION: ${{ inputs.region || '台北' }}
+          RUN_DATE: ${{ inputs.date }}
+        run: |
+          ARGS=(--region "$REGION")
+          if [[ -n "${RUN_DATE:-}" ]]; then ARGS+=(--date "$RUN_DATE"); fi
+          python -m modules.live_estimate_runner "${ARGS[@]}"
