@@ -194,7 +194,9 @@ def run(region: str, today: Optional[date] = None, dry_run: bool = False, log=pr
     est = build_estimates(orders, rates, interns, trainees, cleanup, start, today, adjustments)
     stamp = datetime.now(TZ).strftime("%Y/%m/%d %H:%M")
 
+    rate_cols = ("平日", "週末", "大掃除1平日", "大掃除1週末", "大掃除2平日", "大掃除2週末")
     summary = [["期別", "專員", "場次", "實境時數", "實習時數", *[f"{c}時數" for c in CATEGORIES],
+                *[f"{c}時薪" for c in rate_cols],
                 "估算承攬費", "資料截至", "更新時間", "提醒"]]
     detail = [["期別", "專員", "服務日期", "星期", "服務時間", "客戶", "時數", "類別",
                "訂單編號", "服務專員", "備註"]]
@@ -208,7 +210,9 @@ def run(region: str, today: Optional[date] = None, dry_run: bool = False, log=pr
         sessions = sorted(e.sessions, key=lambda s: (s.date, s.slot))
         # 場次同薪資表 2001：訂單場次扣掉實習筆數
         summary.append([period, name, max(len(sessions) - intern_count.get(name, 0), 0), e.trainee_hours, e.intern_hours,
-                        *[e.hours[c] for c in CATEGORIES], round(e.amount()),
+                        *[e.hours[c] for c in CATEGORIES],
+                        *[(e.rates.for_category(c) if e.rates else "") for c in rate_cols],
+                        round(e.amount()),
                         f"{today:%Y/%m/%d}", stamp, "；".join(e.warnings)])
         for s in sessions:
             note = s.note
