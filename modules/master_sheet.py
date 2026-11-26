@@ -14,6 +14,8 @@ ID：1GdW3FSZ0s3TGeYiNx3JtYvED_RRfJjiFYwLFeYHZ1hA
   - 區塊標題（清潔承攬）只作標記用，不打卡
 """
 
+import re
+
 import pytz
 from datetime import datetime
 from modules.auth import open_spreadsheet
@@ -187,12 +189,49 @@ def _get_all_a_col(sheet) -> list:
     return [v.strip() if v else "" for v in sheet.col_values(1)]
 
 
-def _find_period_col(sheet, period: str) -> int:
-    """依第 1 列期別名稱找 ID/筆數欄，不依固定欄號。"""
-    for col, value in enumerate(sheet.row_values(1), start=1):
+PERIOD_RE = re.compile(r"^(\d{4})(\d{2})-([12])$")
+
+
+def _period_key(period: str):
+    m = PERIOD_RE.match(str(period or "").strip())
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
+
+def _next_period(period: str) -> str:
+    year, month, half = _period_key(period)
+    if half == 1:
+        return f"{year}{month:02d}-2"
+    year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return f"{year}{month:02d}-1"
+
+
+def _find_period_col(sheet, period: str, create: bool = False) -> int:
+    """依第 1 列期別名稱找 ID/筆數欄，不依固定欄號。
+    create=True（打卡寫入）時，找不到且比最後一個期別晚，就在最後面依序補上期別欄
+    （例如 2029 年起：202901-1、202901-2…；第 1 列期別、第 2 列 ID/筆數／完成時間）。"""
+    header = sheet.row_values(1)
+    for col, value in enumerate(header, start=1):
         if str(value).strip() == period.strip():
             return col
-    raise ValueError(f"找不到期別欄位：{period}")
+    target = _period_key(period)
+    existing = [(col, str(v).strip()) for col, v in enumerate(header, start=1) if _period_key(v)]
+    if not create or not target or not existing or target <= _period_key(existing[-1][1]):
+        raise ValueError(f"找不到期別欄位：{period}")
+    last_col, last = existing[-1]
+    adds = []
+    while last != period:
+        last = _next_period(last)
+        adds.append(last)
+    start = last_col + 2
+    need = start + 2 * len(adds) - 1
+    if getattr(sheet, "col_count", need) < need:
+        sheet.add_cols(need - sheet.col_count)
+    row1, row2 = [], []
+    for p in adds:
+        row1 += [p, ""]
+        row2 += ["ID/筆數", "完成時間"]
+    sheet.update(f"{col_to_letter(start)}1", [row1, row2])
+    return need - 1
 
 
 # ═══════════════════════════════════════
@@ -269,7 +308,7 @@ def record_execution(
             st.warning(f"⚠️ 打卡找不到作業：{task_key}")
             return False
 
-        col       = _find_period_col(sheet, period)
+        col       = _find_period_col(sheet, period, create=True)
         count_col = col_to_letter(col)
         time_col  = col_to_letter(col + 1)
         time_str  = datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %H:%M:%S")
@@ -311,7 +350,7 @@ def record_batch(region_name: str, period: str, records: list) -> None:
                     return i + 1
             return None
 
-        col       = _find_period_col(sheet, period)
+        col       = _find_period_col(sheet, period, create=True)
         updates   = []
         not_found = []
         for record in records:
@@ -347,7 +386,10 @@ def get_recorded_value(region_name: str, period: str, task_key: str):
     row   = _find_row(sheet, task_key)
     if row is None:
         return None
-    col       = _find_period_col(sheet, period)
+    try:
+        col = _find_period_col(sheet, period)
+    except ValueError:  # 期別欄還沒建立＝還沒打卡
+        return None
     count_col = col_to_letter(col)
     val       = sheet.acell(f"{count_col}{row}").value
     return val if val else None
@@ -357,7 +399,10 @@ def get_recorded_values(region_name: str, period: str, task_keys: list[str]) -> 
     """一次讀取多個打卡值，避免逐項呼叫造成 Sheets API 429。"""
     ss = open_spreadsheet(MASTER_SHEET_ID)
     sheet = ss.worksheet(region_name)
-    count_col = col_to_letter(_find_period_col(sheet, period))
+    try:
+        count_col = col_to_letter(_find_period_col(sheet, period))
+    except ValueError:  # 期別欄還沒建立＝都還沒打卡
+        return {}
     a_values, count_values = sheet.batch_get(["A:A", f"{count_col}:{count_col}"])
     names = [str(row[0]).strip() if row else "" for row in a_values]
     values = [row[0] if row else None for row in count_values]
