@@ -692,21 +692,15 @@ st.markdown('<div class="field-label">🗺️ 執行地區（可複選，依地�
 region_names = [r["name"] for r in regions]
 selected_names: list[str] = []
 if region_names:
-    if "region_init" not in st.session_state:
-        st.session_state["region_init"] = True
-        st.session_state[f"region_pick_{region_names[0]}"] = True
-
-    def _toggle_all_regions():
-        value = st.session_state.get("region_pick_all", False)
-        for _n in region_names:
-            st.session_state[f"region_pick_{_n}"] = value
-
-    st.checkbox("全選地區", key="region_pick_all", on_change=_toggle_all_regions)
-    _region_cols = st.columns(min(len(region_names), 4))
-    for _idx, _n in enumerate(region_names):
-        with _region_cols[_idx % len(_region_cols)]:
-            if st.checkbox(_n, key=f"region_pick_{_n}"):
-                selected_names.append(_n)
+    # 標籤式複選（同 Tools App【整合執行】清潔異動已備妥）；預設第一個地區
+    _picked_regions = [n for n in st.session_state.get("region_multi_pick", [region_names[0]])
+                       if n in region_names]
+    st.session_state["region_multi_pick"] = _picked_regions
+    _picked_regions = st.multiselect(
+        "地區", region_names, key="region_multi_pick",
+        label_visibility="collapsed", placeholder="請選擇地區",
+    )
+    selected_names = [n for n in region_names if n in _picked_regions]
 else:
     st.caption("尚未設定任何地區")
 
