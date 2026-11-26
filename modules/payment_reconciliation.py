@@ -1,6 +1,14 @@
 """
 modules/payment_reconciliation.py
-金流對帳模組  v2026-08c-oauth
+金流對帳模組  v2026-11-27
+
+更新紀錄：
+- 2026-11-27：③ 期別訂單搬運後新增「待調整訂單」檢查，符合條件的列標綠底並列在執行紀錄：
+  1. AJ 加收狀態＝待加收，或 AQ 待退狀態＝待退款
+  2. U 付款方式為信用卡／ATM，V 發票號碼空白
+  3. AJ＝已加收，AM 加收發票日期空白
+  4. AQ 為已退款／已部分退款，AU 折讓單號空白
+  ④ 加工後會重新套用綠底；同列若是 K 欄時數異動（橘底），只把 B 訂單編號標綠，保留橘底。
 
 流程：
 上半月 / 下半月：
@@ -248,7 +256,98 @@ def copy_orders_to_template(
         log(f"⚠️ 資料已完成搬運；僅格式搬移失敗：{e}")
         log(f"⚠️ 詳細：{traceback.format_exc()[:300]}")
 
-    return {"count": count, "start_row": start_row}
+    # 待調整訂單檢查：在原格式搬完後才標綠底，避免被覆蓋。
+    finance_check_count = mark_finance_check_rows(template_sheet, start_row, data, log_fn=log)
+
+    return {"count": count, "start_row": start_row, "finance_check_count": finance_check_count}
+
+
+
+# ═══════════════════════════════════════════════════════════════
+# ③-1 待調整訂單檢查（待加收／待退款／發票欄位）
+# ═══════════════════════════════════════════════════════════════
+
+COL_PAY_METHOD      = 20  # U 付款方式(含vip時數)
+COL_INVOICE_NO      = 21  # V 發票號碼
+COL_CHARGE_STATUS   = 35  # AJ 加收狀態
+COL_CHARGE_INV_DATE = 38  # AM 加收發票日期
+COL_REFUND_STATUS   = 42  # AQ 待退狀態
+COL_ALLOWANCE_NO    = 46  # AU 折讓單號
+
+# 綠底：跟拆解新增列的淺綠色（0.85, 0.96, 0.85）區分，用較深的綠。
+FINANCE_CHECK_BG = {"red": 0.56, "green": 0.85, "blue": 0.55}
+
+
+def _cell(row, idx) -> str:
+    return str(row[idx]).strip() if len(row) > idx and row[idx] is not None else ""
+
+
+def _finance_check_reasons(row) -> list[str]:
+    """回傳這筆訂單需要確認是否調整的原因；空 list 代表不用處理。"""
+    reasons = []
+    charge = _cell(row, COL_CHARGE_STATUS)
+    refund = _cell(row, COL_REFUND_STATUS)
+    pay    = _cell(row, COL_PAY_METHOD)
+
+    if charge == "待加收":
+        reasons.append("待加收")
+    if refund == "待退款":
+        reasons.append("待退款")
+    if (pay == "信用卡" or "ATM" in pay) and not _cell(row, COL_INVOICE_NO):
+        reasons.append(f"{pay}但V發票號碼空白")
+    if charge == "已加收" and not _cell(row, COL_CHARGE_INV_DATE):
+        reasons.append("已加收但AM加收發票日期空白")
+    if refund in ("已退款", "已部分退款") and not _cell(row, COL_ALLOWANCE_NO):
+        reasons.append(f"{refund}但AU折讓單號空白")
+    return reasons
+
+
+def _row_bg_request(sheet_id: int, row_num: int, color: dict,
+                    start_col: int = 0, end_col: int = 62) -> dict:
+    return {
+        "repeatCell": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": row_num - 1, "endRowIndex": row_num,
+                "startColumnIndex": start_col, "endColumnIndex": end_col,
+            },
+            "cell": {"userEnteredFormat": {"backgroundColor": color}},
+            "fields": "userEnteredFormat.backgroundColor",
+        }
+    }
+
+
+def mark_finance_check_rows(sheet, start_row: int, rows: list, log_fn=None) -> int:
+    """
+    檢查剛貼入的訂單（start_row 起），把待調整的列標綠底，並在紀錄列出原因。
+    回傳標記筆數。
+    """
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    flagged = []
+    for i, row in enumerate(rows):
+        reasons = _finance_check_reasons(row)
+        if reasons:
+            flagged.append((start_row + i, _cell(row, 1), reasons))
+
+    if not flagged:
+        log("🟢 待調整訂單檢查：無")
+        return 0
+
+    log(f"🟢 待調整訂單檢查：{len(flagged)} 筆（已標綠底，請確認待加收／待退款／發票是否要調整）")
+    for row_num, order_no, reasons in flagged:
+        log(f"  第{row_num}列 {order_no or '(無訂單編號)'}：{'、'.join(reasons)}")
+
+    try:
+        sheet.spreadsheet.batch_update({"requests": [
+            _row_bg_request(sheet.id, row_num, FINANCE_CHECK_BG)
+            for row_num, _, _ in flagged
+        ]})
+    except Exception as e:
+        log(f"⚠️ 待調整訂單標綠底失敗：{e}")
+    return len(flagged)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -563,10 +662,25 @@ def process_template(
         except Exception as e:
             log(f"⚠️ 淺綠色標記失敗：{e}")
 
+    # 綠底（待調整訂單）：④ 排序後列位置改變，依加工後資料重新套用。
+    # 拆解新增的子單不檢查（V:AD 本來就不繼承）；橘底列只標 B 訂單編號，保留橘底。
+    finance_count = 0
+    new_row_set = set(new_row_indices or [])
+    for new_idx, row in enumerate(expanded_new):
+        if new_idx in new_row_set or not _finance_check_reasons(row):
+            continue
+        row_num = 2 + len(old_rows) + new_idx
+        if _cell(row, 10):
+            format_requests.append(_row_bg_request(sheet.id, row_num, FINANCE_CHECK_BG, 1, 2))
+        else:
+            format_requests.append(_row_bg_request(sheet.id, row_num, FINANCE_CHECK_BG))
+        finance_count += 1
+
     if format_requests:
         try:
             ss_rec.batch_update({"requests": format_requests})
-            log(f"🔵 格式標記完成：橘色 {mark_count} 列，淺綠色 {len(new_row_indices)} 列")
+            log(f"🔵 格式標記完成：橘色 {mark_count} 列，淺綠色 {len(new_row_indices)} 列，"
+                f"綠色（待調整訂單）{finance_count} 列")
         except Exception as e:
             log(f"⚠️ 格式標記失敗：{e}")
 
