@@ -1194,6 +1194,9 @@ if run_clicked and _run_engine == "PYTHON":
                         count     = result["count"]
                         start_row = result["start_row"]
                         add_log(f"搬運完成：{count} 筆，起始列：{start_row}", "success")
+                        if result.get("finance_check_count"):
+                            add_log(f"待調整訂單 {result['finance_check_count']} 筆已標綠底，"
+                                    f"請確認待加收／待退款／發票欄位是否要調整", "warning")
                         key = f"start_row_{_period}_{_name}"
                         st.session_state[key] = start_row
                         record_batch(_name, _period, [
