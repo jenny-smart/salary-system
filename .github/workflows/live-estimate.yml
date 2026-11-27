@@ -1,8 +1,11 @@
 name: 即時試算
 
 # 讀各區訂單／調薪資料／新人實習實境／專員收現，寫 LemonSalarySystem「即時試算-{地區}」。
-# 不讀寫期別檔。試跑：push 到 dryrun/live-estimate 分支。
+# 不讀寫期別檔。每天 01:40 自動跑台北；手動可在 Actions 選地區、日期。
 on:
+  schedule:
+    # 每天 01:40（台灣時間），接在 tool-system 01:20 產生「專員訂單」之後
+    - cron: "40 17 * * *"
   workflow_dispatch:
     inputs:
       region:
